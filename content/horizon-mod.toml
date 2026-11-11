@@ -1,0 +1,12 @@
+# Port-owned content mod for the Oritech 1.2.13 slice: the Basic Generator and
+# the Pulverizer. Assets and data are carried from the ATM10 jar
+# (oritech-neoforge-1.21.1-1.2.13.jar, CC0-1.0), with the authored files listed
+# in CONTENT.md. Licence: CC0-1.0 (Rearth/Oritech).
+id = "oritech"
+name = "Oritech"
+version = "0.1.0"
+description = "Basic Generator and Pulverizer (slice 1)"
+authors = ["Rearth"]
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

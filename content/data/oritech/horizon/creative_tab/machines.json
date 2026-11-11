@@ -1,0 +1,8 @@
+{
+  "icon": "oritech:basic_generator_block",
+  "items": [
+    "oritech:basic_generator_block",
+    "oritech:pulverizer_block"
+  ],
+  "title": "itemgroup.oritech.machines"
+}

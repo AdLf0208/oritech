@@ -1,0 +1,49 @@
+id = "oritech"
+kind = "native-mod"
+name = "oritech"
+summary = "A Horizon port of oritech."
+description = """
+A port of [oritech](Rearth/Oritech) for Horizon.
+
+**Implemented so far**
+
+- | Behaviour | Upstream file | This port |
+- |---|---|---|
+- | generator buffer | `OritechConfig.BasicMachineConfig(50_000, 0, 32*8, 32)` | API 142 buffer: capacity 50,000 FE, insert 0, extract 256 FE/call |
+- | generator production | `UpgradableGeneratorBlockEntity.produceEnergy` | **32 FE** a burning tick |
+- | generator fuel | `FuelRegistry.get(item)` | the engine's `minecraft:cooking_fuel` (`Providers::burn_time`), so modded fuels work |
+- | generator burn | `progress = burnTime`, one per tick | same; a coal is 1,600 burning ticks |
+- | buffer-full rule | `canFitEnergy` (room for a whole tick) | same: at 49,984 FE the burn pauses and keeps its remaining progress |
+- | generator output | `outputEnergy` to the six neighbours | queued, then `native_move_energy` at `level_tick_post` (256 FE/call) |
+
+**Not yet ported**
+
+- The energy buffer's key is the API's `energy` (int), not upstream's
+- `oritech.machine_energy` (long).** API 142 reads and writes the int `energy`;
+- every value here fits, and the buffer is a real `Capabilities.Energy.BLOCK`
+- to other mods.
+- Progress is saved with the recipe id** (`oritech.machine_recipe`).
+- Upstream does not save `currentRecipe`, so its first tick after a reload
+- resets `progress`; here a reload continues the operation. The visible rule
+- (a different input restarts the count) is upstream's.
+
+Original copyright and licence notices are kept in this repository. Pinned to
+Horizon 1d63e0a and horizon-mixins 5a64af93. Help with the remaining slices is
+welcome.
+"""
+authors = ["AdLf0208"]
+owners = ["AdLf0208"]
+owner_ids = [107615167]
+license = "CC0-1.0"
+source = "https://github.com/AdLf0208/oritech"
+icon = "icons/oritech.png"
+categories = ["utility"]
+tags = ["port", "horizon"]
+
+[[versions]]
+version = "0.1.0"
+published = "2026-11-10"
+game = "26.3"
+file = "oritech.hnmod"
+sha256 = "60c382616c8c0c91476303148a341f0814517087f8cdf37a9c82fb4b5bffa93c"
+changelog = "First release"

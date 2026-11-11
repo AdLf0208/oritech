@@ -1,0 +1,21 @@
+[package]
+# Ported from: Oritech 1.2.13 (Rearth/Oritech, CC0-1.0), Minecraft Java 1.21.1
+# NeoForge. The jar's own `META-INF/neoforge.mods.toml` declares
+# `license = "CC0-1.0"` (the source map's CC-BY-4.0 is stale; the jar wins).
+# Local-only until the maintainer approves publishing (ARCHITECTURE.md §8).
+name = "horizon-oritech"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "CC0-1.0"
+description = "Oritech for Horizon: the Basic Generator and the Pulverizer"
+
+[lib]
+# This exact source is also injected as a same-crate module by horizon-mixins.
+path = "mixins/oritech/runtime.rs"
+
+[dependencies]
+serde_json = "1"
+
+[workspace]
+resolver = "2"
