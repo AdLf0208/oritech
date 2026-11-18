@@ -1,0 +1,214 @@
+//! Oritech for Horizon — slice 1, the Basic Generator and the Pulverizer.
+//!
+//! One flat SDK package (mod API 0.2): the carried machines, their models,
+//! textures, lang, loot tables, recipes, tags and creative tab are this
+//! package's `assets/` and `data/`, and the behaviour is the one
+//! `impl mod_api::Hooks` plus its two block-entity Parts. The rules themselves
+//! live in [`runtime`], byte-identical to the retired `.hnmod` bundle's
+//! `runtime.rs`; [`support`] is the glue that reads the game, calls them and
+//! writes the result back.
+//!
+//! What the retired bundle expressed as eleven injected helpers and two support
+//! modules is here three shapes: each machine's block entity is a **Part**
+//! attached to the type declared for its block, its container and its energy
+//! buffer are **declarations** on the block key, and the rest are typed `Hooks`
+//! methods. Its `embedded-content` helper has no successor: one `.hmod` carries
+//! the content and the code, which is what that helper existed to work around.
+pub mod runtime;
+
+mod support;
+
+use mod_api::{
+    self, BlockEntityEvent, BlockEntityPart, BlockEntityTickEvent, BlockEntityTickReply,
+    BlockEntityTicksEvent, BlockPart, Command, CommandArgumentValue, Compound, Flow, Hooks, Host,
+    HostSide, LevelSide, LevelTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RightClickBlockEvent, RunModCommandEvent, ServerHost, Text, WorldLifecycleEvent,
+};
+
+#[derive(Default)]
+struct Mod;
+
+#[mod_api::horizon_mod]
+impl Hooks for Mod {
+    /// Declare the two machines: one block entity each, the generator's fuel
+    /// slot and output-only buffer, the pulverizer's input, two outputs and
+    /// input-only buffer.
+    ///
+    /// A declaration is keyed by the block, so a foreign block's container or
+    /// buffer cannot be touched: the retired `block_entity_container` /
+    /// `block_entity_energy` hooks wrote into one shared output and had to leave
+    /// another mod's entry alone.
+    fn register(&self, registrar: &mut dyn Registrar, context: &RegistrationContext) {
+        for block in [support::GENERATOR, support::PULVERIZER] {
+            let key = registrar.block_key(block);
+            if let Some(container) = support::container(block) {
+                registrar.block_container(&key, container);
+            }
+            if let Some(battery) = support::battery(block) {
+                registrar.block_energy(&key, battery);
+            }
+        }
+        let generator = registrar
+            .block_entity_type(support::GENERATOR_TYPE)
+            .blocks(&[support::GENERATOR])
+            .build();
+        let pulverizer = registrar
+            .block_entity_type(support::PULVERIZER_TYPE)
+            .blocks(&[support::PULVERIZER])
+            .build();
+        if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&pulverizer, PulverizerPart) {
+            context.refuse(&error.to_string());
+        }
+    }
+
+    /// `/oritech info|energy <x> <y> <z> [amount]`: the harness controls. Upstream
+    /// has no commands of its own (its GUI and config are the only controls);
+    /// these exist so a player without the GUI, and the harness, can read a
+    /// machine's buffers.
+    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        event
+            .commands
+            .push(Command::new("oritech info <pos:block_pos>"));
+        event.commands.push(Command::op(
+            "oritech energy <pos:block_pos> <amount:integer>",
+            2,
+        ));
+    }
+
+    /// The command bodies. The dispatcher parses and resolves the arguments, so
+    /// this only reads the machine and answers.
+    fn run_mod_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut RunModCommandEvent<'_>,
+    ) -> Flow {
+        let literals: Vec<&str> = event.command.literals.iter().map(String::as_str).collect();
+        let line = match literals.as_slice() {
+            ["oritech", "info"] => {
+                let Some(CommandArgumentValue::BlockPos(pos)) = event.command.argument("pos")
+                else {
+                    return Flow::Continue;
+                };
+                support::info_line(host, *pos)
+                    .unwrap_or_else(|| format!("{pos:?} is not a mod block entity."))
+            }
+            ["oritech", "energy"] => {
+                let (
+                    Some(CommandArgumentValue::BlockPos(pos)),
+                    Some(CommandArgumentValue::Integer(amount)),
+                ) = (
+                    event.command.argument("pos"),
+                    event.command.argument("amount"),
+                )
+                else {
+                    return Flow::Continue;
+                };
+                support::set_energy(host, *pos, *amount)
+                    .unwrap_or_else(|| format!("{pos:?} is not an Oritech machine."))
+            }
+            _ => return Flow::Continue,
+        };
+        let _ = host.commands().feedback(Text::literal(line));
+        Flow::Cancel
+    }
+
+    /// A right click on a machine inserts fuel or a recipe input, or reads its
+    /// state with an empty hand; there is no GUI in slice 1 (`right_click_block`
+    /// is the pre-block, cancellable route the retired bundle used).
+    fn right_click_block(&self, host: HostSide<'_>, event: &mut RightClickBlockEvent<'_>) -> Flow {
+        support::right_click(host, event)
+    }
+
+    /// After a level's tick: the queued generator positions hand their FE to the
+    /// pulverizers beside them. A ticked block entity is out of the world during
+    /// its own tick, which is why this waits for here.
+    fn level_tick_post(&self, host: HostSide<'_>, event: &mut LevelTickPostEvent) {
+        let HostSide::Server(host) = host else {
+            return;
+        };
+        support::on_level_tick_post(host, event.level);
+    }
+
+    /// A world opened or closed: the parsed recipe cache and the push queue
+    /// belong to one world.
+    fn world_lifecycle(&self, _host: &mut dyn ServerHost, _event: &mut WorldLifecycleEvent<'_>) {
+        support::reset_world_state();
+    }
+}
+
+/// The Basic Generator's block entity.
+struct GeneratorPart;
+/// The Pulverizer's block entity.
+struct PulverizerPart;
+
+#[mod_api::horizon_part]
+impl BlockPart for GeneratorPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for GeneratorPart {
+    /// `EntityBlock.newBlockEntity`: an empty saved compound; the first tick
+    /// fills it.
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    /// `EntityBlock.getTicker`: it ticks on the server.
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: load one fuel item when upstream would, burn one tick
+    /// for 32 FE, then queue the adjacent transfer.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_generator(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for PulverizerPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for PulverizerPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: find the matching recipe, check the output room, and let
+    /// the pure state machine spend FE and advance.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_pulverizer(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
