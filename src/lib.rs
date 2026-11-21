@@ -46,13 +46,25 @@ impl Hooks for Mod {
         registrar.register_recipe_type(support::PULVERIZER_RECIPE);
         registrar
             .register_raw_recipe_serializer(support::PULVERIZER_RECIPE, support::PULVERIZER_RECIPE);
-        for block in [support::GENERATOR, support::PULVERIZER, support::FURNACE] {
+        // The chiller's two recipes name `oritech:cooler`, and the port reads them with its own
+        // parser for the same reason: a 26.3 loader knows nothing of this mod's recipe kind.
+        registrar.register_recipe_type(support::COOLER_RECIPE);
+        registrar.register_raw_recipe_serializer(support::COOLER_RECIPE, support::COOLER_RECIPE);
+        for block in [
+            support::GENERATOR,
+            support::PULVERIZER,
+            support::FURNACE,
+            support::COOLER,
+        ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
                 registrar.block_container(&key, container);
             }
             if let Some(battery) = support::battery(block) {
                 registrar.block_energy(&key, battery);
+            }
+            if let Some(tanks) = support::fluids(block) {
+                registrar.block_fluids(&key, tanks);
             }
         }
         let generator = registrar
@@ -67,6 +79,10 @@ impl Hooks for Mod {
             .block_entity_type(support::FURNACE_TYPE)
             .blocks(&[support::FURNACE])
             .build();
+        let cooler = registrar
+            .block_entity_type(support::COOLER_TYPE)
+            .blocks(&[support::COOLER])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -74,6 +90,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&furnace, FurnacePart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&cooler, CoolerPart) {
             context.refuse(&error.to_string());
         }
     }
@@ -88,6 +107,15 @@ impl Hooks for Mod {
             .push(Command::new("oritech info <pos:block_pos>"));
         event.commands.push(Command::op(
             "oritech energy <pos:block_pos> <amount:integer>",
+            2,
+        ));
+        // The chiller's tank, filled through the engine's own fluid handler: the
+        // harness has no bucket path into a mod block entity, and this is the
+        // same harness-control shape as `/oritech energy`. The fluid is a greedy
+        // `text`: the pin's `word` argument stops at a `:`, so a namespaced fluid
+        // id cannot be one.
+        event.commands.push(Command::op(
+            "oritech fluid <pos:block_pos> <amount:integer> <fluid:text>",
             2,
         ));
     }
@@ -122,6 +150,22 @@ impl Hooks for Mod {
                 };
                 support::set_energy(host, *pos, *amount)
                     .unwrap_or_else(|| format!("{pos:?} is not an Oritech machine."))
+            }
+            ["oritech", "fluid"] => {
+                let (
+                    Some(CommandArgumentValue::BlockPos(pos)),
+                    Some(CommandArgumentValue::Integer(amount)),
+                    Some(CommandArgumentValue::String(fluid)),
+                ) = (
+                    event.command.argument("pos"),
+                    event.command.argument("amount"),
+                    event.command.argument("fluid"),
+                )
+                else {
+                    return Flow::Continue;
+                };
+                support::set_fluid(host, *pos, fluid.trim(), *amount)
+                    .unwrap_or_else(|| format!("{pos:?} has no Oritech fluid tank."))
             }
             _ => return Flow::Continue,
         };
@@ -159,6 +203,8 @@ struct GeneratorPart;
 struct PulverizerPart;
 /// The Powered Furnace's block entity.
 struct FurnacePart;
+/// The Industrial Chiller's block entity.
+struct CoolerPart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -256,6 +302,39 @@ impl BlockEntityPart for FurnacePart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_furnace(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for CoolerPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for CoolerPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the furnace's assembly gate, then one cooler craft from
+    /// the fluid in the tank, which the craft takes its millibuckets out of.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_cooler(host, level, pos, &mut nbt, &mut event.entity.items);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

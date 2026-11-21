@@ -196,3 +196,65 @@ Read for behaviour only (the clone was shallow at the same tag
 The frames and expandable multis (`MultiblockFrameInteractionEntity`, `ExpandableMultiblockEnergyStorage`),
 the addon blocks and their scan (`MachineAddonController`), the other multiblock machines, the
 accelerator/reactor, the GUI/screens, GeckoLib models and the pipe network.
+
+## Slice 3: the Industrial Chiller and the mod's fluid recipes
+
+Read for behaviour only (the clone was shallow at the same tag `v1.2.13` /
+`4069b6dd14b05dfe0c80126618739b64054630ea`, deleted after these findings):
+
+- `common/src/main/java/rearth/oritech/block/entity/processing/CoolerBlockEntity.java`
+- `common/src/main/java/rearth/oritech/block/blocks/processing/CoolerBlock.java`
+- `common/src/main/java/rearth/oritech/block/base/entity/MachineBlockEntity.java`
+  (`serverTick`, `calculateEnergyUsage`, `craftItem`, `checkCraftingFinished`, `canOutputRecipe`)
+- `common/src/main/java/rearth/oritech/block/entity/processing/CentrifugeBlockEntity.java`
+  (`recipeInputMatchesTank`, the shared tank check)
+- `common/src/main/java/rearth/oritech/util/FluidIngredient.java` (the `amount` default)
+- `common/src/main/java/rearth/oritech/api/fluid/containers/SimpleFluidStorage.java` (the save shape)
+- `common/src/main/java/rearth/oritech/init/OritechConfig.java` (`coolerData`)
+- `common/src/main/java/rearth/oritech/init/recipes/OritechRecipe.java` + `FluidIngredient`
+- the jar's `data/oritech/recipe/cooler/{ice,obsidian,snow}.json`
+
+### Industrial Chiller (`oritech:cooler_block`, "Industrial Chiller")
+
+- Buffer `BasicMachineConfig(b, "coolerData", 50_000, 32 * 8, 0, 32)`: capacity **50,000 FE**, insert
+  **256**, extraction none, `energyPerTick` **32**.
+- `calculateEnergyUsage` = `energyPerTick * efficiency * (1 / speed)`; with no addon both are 1, so
+  **32 FE a working tick**. `checkCraftingFinished` = `progress >= time * speed`, so the jar's
+  `time: 200` is **200 ticks**.
+- **Cold biome**: `getSpeedMultiplier`/`getEfficiencyMultiplier` are halved in a biome of
+  `TagContent.CONVENTIONAL_COLD` — twice as fast *and* the same 32 FE a tick, i.e. half the FE for the
+  same craft. The pin has no biome read for a mod: recorded as `blocked(no-biome-tag-read)`.
+- `fluidStorage = SimpleFluidStorage(4 * bucketAmount())`: **one 4,000 mB tank**. Upstream saves it
+  with `writeNbt(nbt, "")` (a `FluidStack` codec compound under `fluid`); this port saves it in the
+  engine's `fluids` list shape so the declared handler can be filled.
+- Recipe type `oritech:cooler`; `getRecipe()` asks the table for recipes the (empty) item inventory
+  matches, which for this machine is only the ingredient-less ones, then filters by
+  `recipeInputMatchesTank` — the tank must hold that fluid and at least the recipe's amount.
+  `FluidIngredient.CODEC` defaults `amount` to one bucket.
+- `craftItem` → `processCraftInstance`: refuse when `heldStacks[0].count + result.count > 64`
+  (upstream compares against a literal 64, not the item's stack size); otherwise extract exactly the
+  recipe's millibuckets and grow the one result.
+- Slots `InventorySlotAssignment(0, 0, 0, 1)`, `getInventorySize()` 1: **one output, no item input**.
+- `getCorePositions` = `Vec3i(0, 0, -1)`: the one core is **one block north**, not above (the
+  furnace's is above), and `getAddonSlots` = (0, 0, -2). `MultiblockMachineEntity` supplies the
+  assembled gate, as for the furnace.
+
+### Values carried into the port
+
+| Value | Source | Used for |
+|---|---|---|
+| `COOLER_CAPACITY = 50_000` | `coolerData.energyCapacity` | the buffer |
+| `COOLER_MAX_INSERT = 256` | `coolerData.maxEnergyInsertion` (`32 * 8`) | the most one insert moves |
+| `COOLER_ENERGY_PER_TICK = 32` | `coolerData.energyPerTick` | the usage |
+| `COOLER_TANK = 4_000` | `SimpleFluidStorage(4 * bucketAmount())` | the one tank |
+| `COOLER_CORE_OFFSET = [0, 0, -1]` | `getCorePositions` | where the core goes |
+| `COOLER_OUTPUT_LIMIT = 64` | `processCraftInstance` | the output rule |
+| `FluidInput.amount` default 1,000 | `FluidIngredient.CODEC` | millibuckets a craft takes |
+
+### Not read / not ported (still gaps)
+
+The GUI/screens and GeckoLib models, the addon blocks and their `extraChambers` repeat, the cold-biome
+bonus (no biome read at the pin), the mod's own fluids (`oritech:still_steam`, `still_diesel`, …), the
+tank's item/fluid pipe network, and every machine family whose recipes need the ore-processing items or
+those fluids (assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel/lava
+generators, deep drill, reactor, accelerator, augment stations).

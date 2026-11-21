@@ -24,8 +24,10 @@ Keep every gameplay rule and number in `src/runtime.rs` with its test; the glue 
 calls `runtime`, and writes the result back. `src/runtime.rs`'s **slice-1 part** is byte-identical to the
 retired port's file up to and including `after_consuming` — do not "tidy" it; slice 2 appended the
 Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `core_quality`,
-`furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use). A
-declaration or readout test belongs next to its code in `src/support.rs`.
+`furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use) and slice
+3 the Industrial Chiller's (`COOLER_*`, `FluidInput`, `tank_matches`, `cooler_output_fits`,
+`after_draining`, `CoolerRecipe`, `Cooler`, on the same `advance`). A declaration or readout test
+belongs next to its code in `src/support.rs`.
 
 Validate, in this order, each inside a lease:
 
@@ -56,7 +58,10 @@ BUILD_LOCAL=1 ../tools/build-slot.sh run --job oritech-e2e --port ports/oritech 
 
 `cargo horizon-mod build` packs; it does not compile against the game. The native compile is
 `horizon-launcher native-build . --instance <i> --trust-native-code`. The in-game leg needs the
-launcher-built game carrying this package: do not claim an in-game result without one.
+launcher-built game carrying this package: do not claim an in-game result without one. The game is
+reused when `horizon-mod.toml` is byte-identical, so **bump the version in the manifest before any e2e
+meant to exercise new code**, then check the build really recompiled (`strings
+~/.cache/horizon-e2e/<pin>/<mod>/lib<mod>.so | grep <a new string>`).
 
 The package's one registry dependency is `serde_json`, so **keep `Cargo.lock`** (it is packed and
 is this package's record of its pins) — the opposite of the lock-free ports. `cargo fmt --check`,

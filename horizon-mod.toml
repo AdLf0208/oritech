@@ -2,17 +2,19 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.2"
-description = """A port of Oritech 1.2.13 for Horizon, slices 1 and 2: the Basic Generator, the Pulverizer and
-the Powered Furnace multiblock. The generator burns any fuel the game's fuel table knows for 32 FE a
-tick into a 50,000 FE buffer that accepts no inserts and gives 256 FE a call; the pulverizer spends
-32 FE a tick and turns one input into its recipe's results in the recipe's time, reading the jar's
-own `oritech:pulverizer` files; the powered furnace is the mod's first multiblock machine — a
-controller plus one of the seven machine cores above it — that smelts any vanilla smelting recipe at
-twice a vanilla furnace's speed for 32 FE a tick, and stops working when its core is broken. Every
-buffer is a real block energy capability another mod's cable can read, and a fuelled generator pushes
-its FE to the machines beside it. Not yet ported: the GUI, GeckoLib models, addons, energy pipes, the
-ore-processing chain and the other multiblock machines."""
+version = "0.2.5"
+description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 3: the Basic Generator, the Pulverizer, the Powered
+Furnace multiblock and the Industrial Chiller. The generator burns any fuel the game's fuel table knows
+for 32 FE a tick into a 50,000 FE buffer that accepts no inserts and gives 256 FE a call; the pulverizer
+spends 32 FE a tick and turns one input into its recipe's results in the recipe's time, reading the
+jar's own `oritech:pulverizer` files; the powered furnace is a controller plus one of the seven machine
+cores above it that smelts any vanilla smelting recipe at twice a vanilla furnace's speed for 32 FE a
+tick; the chiller is the mod's first fluid machine — a controller plus a core to its north, one
+four-bucket tank, that freezes a bucket of water into three ice or a bucket of lava into two obsidian in
+200 ticks for 6,400 FE, from the jar's own `oritech:cooler` recipes. Every buffer is a real block energy
+capability another mod's cable can read, the chiller's tank a real block fluid handler another mod's
+pipe can fill, and a fuelled generator pushes its FE to the machines beside it. Not yet ported: the GUI,
+GeckoLib models, addons, energy pipes, the ore-processing chain and the other multiblock machines."""
 authors = ["Rearth", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins, beside
 # the carried assets/ and data/. The id is the resource namespace and the only identity.

@@ -32,6 +32,9 @@ CARRIED = [
     "assets/oritech/textures/block/models/basic_generator_block.png",
     "assets/oritech/textures/block/models/pulverizer_block.png",
     "assets/oritech/textures/block/models/powered_furnace_block.png",
+    # Slice 3's chiller: same shape again (`blockstates/cooler_block.json` names
+    # the `machine_speed_addon` placeholder, the look is the `.geo` model).
+    "assets/oritech/textures/block/models/cooler_block.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -49,6 +52,12 @@ REWRITTEN_RECIPES = [
     "data/oritech/recipe/pulverizer/coalore.json",
     "data/oritech/recipe/pulverizer/diamondore.json",
     "data/oritech/recipe/pulverizer/lapisore.json",
+    # Slice 3: the chiller's two recipes whose fluid and result both exist here
+    # (water -> ice, lava -> obsidian). The third, `snow.json`, takes
+    # `oritech:still_steam`, a fluid this package does not declare, so it is not
+    # carried: a recipe that can never match is dead data (notes.md, gap).
+    "data/oritech/recipe/cooler/ice.json",
+    "data/oritech/recipe/cooler/obsidian.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -84,6 +93,12 @@ BLOCKS = {
     "powered_furnace_block": {
         "name": "Powered Furnace",
         "texture": "oritech:block/models/powered_furnace_block",
+    },
+    # Slice 3: the Industrial Chiller (upstream's `tooltip.oritech.cooler_block`
+    # sits beside the block's name in the jar's lang).
+    "cooler_block": {
+        "name": "Industrial Chiller",
+        "texture": "oritech:block/models/cooler_block",
     },
 }
 CORE_NAMES = [

@@ -11,20 +11,25 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mod_api::{
-    BlockUpdateFlags, Compound, Direction, ENERGY, Flow, Host, HostSide, HostTransaction,
-    Identifier, Ingredient, InteractionResult, ItemPlace, ItemResource, ItemStack, LevelRef,
-    ModContainer, ModEnergyBuffer, RightClickBlockEvent, ServerHost, Tag, Text, move_energy,
+    BlockUpdateFlags, Compound, Direction, ENERGY, FLUIDS, Flow, FluidResource, FluidStack, Host,
+    HostSide, HostTransaction, Identifier, Ingredient, InteractionResult, ItemPlace, ItemResource,
+    ItemStack, LevelRef, ModContainer, ModEnergyBuffer, ModFluidTanks, RightClickBlockEvent,
+    ServerHost, Tag, Text, move_energy,
 };
 
 use crate::runtime::{
-    CORE_OFFSET, FURNACE_CAPACITY, FURNACE_MAX_INSERT, Furnace, GENERATOR_CAPACITY,
+    COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler,
+    CoolerRecipe, FURNACE_CAPACITY, FURNACE_MAX_INSERT, Furnace, GENERATOR_CAPACITY,
     GENERATOR_MAX_EXTRACT, Generator, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
-    PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work, after_consuming, can_output,
-    clamp_energy, core_quality, furnace_ticks, is_fuel, output_fits,
+    PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work, after_consuming, after_draining,
+    can_output, clamp_energy, cooler_output_fits, cooler_ticks, core_quality, furnace_ticks,
+    is_fuel, output_fits, tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
 pub(crate) const FURNACE: &str = "oritech:powered_furnace_block";
+/// The Industrial Chiller (`BlockContent.COOLER_BLOCK`) — slice 3.
+pub(crate) const COOLER: &str = "oritech:cooler_block";
 /// The vanilla recipe table the furnace reads (upstream's
 /// `RecipeType.SMELTING`); nothing is registered, the game already has it.
 pub(crate) const SMELTING_RECIPE: &str = "minecraft:smelting";
@@ -35,23 +40,30 @@ pub(crate) const GENERATOR: &str = "oritech:basic_generator_block";
 pub(crate) const PULVERIZER: &str = "oritech:pulverizer_block";
 /// The recipe type the jar's `data/oritech/recipe/pulverizer/*.json` names.
 pub(crate) const PULVERIZER_RECIPE: &str = "oritech:pulverizer";
+/// The recipe type the jar's `data/oritech/recipe/cooler/*.json` names.
+pub(crate) const COOLER_RECIPE: &str = "oritech:cooler";
 
 /// The block entity type names, in this mod's namespace; the block ids are the
 /// types' own `.blocks(…)` lists.
 pub(crate) const GENERATOR_TYPE: &str = "basic_generator";
 pub(crate) const PULVERIZER_TYPE: &str = "pulverizer";
 pub(crate) const FURNACE_TYPE: &str = "powered_furnace";
+pub(crate) const COOLER_TYPE: &str = "cooler";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
-/// two outputs, the furnace's input and its one output
+/// two outputs, the furnace's input and its one output, the cooler's one output
 /// (`InventorySlotAssignment`).
 const FUEL_SLOT: usize = 0;
 const INPUT_SLOT: usize = 0;
 const OUTPUT_ONE: usize = 1;
 const OUTPUT_TWO: usize = 2;
+/// The cooler's `InventorySlotAssignment(0, 0, 0, 1)` counts its slots from 0:
+/// one output and no input, so its result slot is the first one.
+const COOLER_OUTPUT: usize = 0;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
+const COOLER_SLOTS: usize = 1;
 
 /// Saved keys: the API 142 buffer's own `energy`, upstream's machine progress,
 /// the generator's `storedBurn`, the recipe an operation belongs to, and the
@@ -159,6 +171,9 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
         ),
         // `InventorySlotAssignment(0, 1, 1, 1)`: one input, one output.
         FURNACE => (FURNACE_SLOTS, vec![INPUT_SLOT], vec![OUTPUT_ONE]),
+        // `InventorySlotAssignment(0, 0, 0, 1)`: no input, one output — the
+        // chiller's input is the fluid tank below, not a slot.
+        COOLER => (COOLER_SLOTS, vec![], vec![COOLER_OUTPUT]),
         _ => return None,
     };
     Some(ModContainer {
@@ -171,13 +186,15 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
 }
 
 /// The FE buffers: the generator's `BasicMachineConfig(50_000, 0, 256, 32)`,
-/// the pulverizer's `(25_000, 256, 0, 32)` and the furnace's
-/// `FurnaceConfig(10_000, 256, —, 32)`.
+/// the pulverizer's `(25_000, 256, 0, 32)`, the furnace's
+/// `FurnaceConfig(10_000, 256, —, 32)` and the cooler's
+/// `BasicMachineConfig(50_000, 256, 0, 32)`.
 pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
     let (capacity, max_insert, max_extract) = match block {
         GENERATOR => (GENERATOR_CAPACITY, 0, GENERATOR_MAX_EXTRACT),
         PULVERIZER => (PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, 0),
         FURNACE => (FURNACE_CAPACITY, FURNACE_MAX_INSERT, 0),
+        COOLER => (COOLER_CAPACITY, COOLER_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -187,6 +204,33 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         insert_faces: [max_insert > 0; 6],
         extract_faces: [max_extract > 0; 6],
     })
+}
+
+/// The fluid tanks a block declares through `Registrar::block_fluids`: the
+/// chiller's one four-bucket tank, reachable from every face, fillable and not
+/// drainable (`CoolerBlockEntity.fluidStorage` is a `SimpleFluidStorage` the
+/// machine only takes from). The amount lives in the entity's saved `fluids`
+/// list, in the shape the game reads (`Fluid` + `Amount`, millibuckets).
+pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
+    if block != COOLER {
+        return None;
+    }
+    let all = vec![0usize];
+    // `ModFluidTanks` is `#[non_exhaustive]`: it is built from its default and
+    // filled in, the way `rangedpumps` declares its tank.
+    let mut tanks = ModFluidTanks::default();
+    tanks.tanks = vec![COOLER_TANK];
+    tanks.faces = [
+        all.clone(),
+        all.clone(),
+        all.clone(),
+        all.clone(),
+        all.clone(),
+        all,
+    ];
+    tanks.inputs = vec![0];
+    tanks.outputs = Vec::new();
+    Some(tanks)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +281,19 @@ fn write_float(nbt: &mut Compound, key: &str, value: f32) {
     nbt.insert(key.into(), Tag::Float(value.to_bits()));
 }
 
+/// The multiblock facts upstream keeps on the block (`MultiblockMachine`'s
+/// `machine_assembled` state) and on the cores: their offsets
+/// (`connectedCores`) and their average tier (`coreQuality`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Assembly {
+    /// `MultiblockMachine.ASSEMBLED` — a blockstate upstream, saved here.
+    pub(crate) assembled: bool,
+    /// The connected core's offset from the controller (`connectedCores`).
+    pub(crate) core: Option<[i32; 3]>,
+    /// `coreQuality`: the average of the connected cores' tiers.
+    pub(crate) quality: f32,
+}
+
 /// The Powered Furnace saved in a block entity's compound: the machine's three
 /// values plus the multiblock facts (upstream's `connectedCores`, saved as the
 /// one core's offset, and `coreQuality`).
@@ -244,29 +301,49 @@ fn write_float(nbt: &mut Compound, key: &str, value: f32) {
 pub(crate) struct FurnaceSaved {
     /// The buffer, progress and recipe the pure state machine keeps.
     pub(crate) machine: Furnace,
-    /// `MultiblockMachine.ASSEMBLED` — a blockstate upstream, saved here.
-    pub(crate) assembled: bool,
-    /// The connected core's offset from the controller (`connectedCores`).
-    pub(crate) core: Option<[i32; 3]>,
-    /// `coreQuality`: the average of the connected cores' tiers.
-    pub(crate) core_quality: f32,
+    /// The assembly: assembled flag, core offset, core quality.
+    pub(crate) assembly: Assembly,
 }
 
-/// The furnace saved in a block entity's compound; a fresh one is unassembled.
-pub(crate) fn furnace_state(nbt: &Compound) -> FurnaceSaved {
+/// The multiblock facts in a compound: the assembled byte, the one connected
+/// core's offset and its quality.
+fn multiblock_state(nbt: &Compound) -> Assembly {
     let cores = match nbt.get(&KEY_CORES.into()) {
         Some(Tag::List(entries)) => entries.as_slice(),
         _ => &[],
     };
+    Assembly {
+        assembled: matches!(nbt.get(&KEY_ASSEMBLED.into()), Some(Tag::Byte(1))),
+        core: cores.iter().find_map(core_offset),
+        quality: read_float(nbt, KEY_QUALITY),
+    }
+}
+
+/// Write the multiblock facts back: the assembled byte, `connectedCores` as a
+/// list of one offset, and `coreQuality`.
+fn store_multiblock(nbt: &mut Compound, assembly: Assembly) {
+    let assembled = i8::from(assembly.assembled);
+    nbt.insert(KEY_ASSEMBLED.into(), Tag::Byte(assembled));
+    let cores = assembly.core.map_or_else(Vec::new, |[x, y, z]| {
+        vec![Tag::compound([
+            ("x", Tag::Int(x)),
+            ("y", Tag::Int(y)),
+            ("z", Tag::Int(z)),
+        ])]
+    });
+    nbt.insert(KEY_CORES.into(), Tag::List(cores));
+    write_float(nbt, KEY_QUALITY, assembly.quality);
+}
+
+/// The furnace saved in a block entity's compound; a fresh one is unassembled.
+pub(crate) fn furnace_state(nbt: &Compound) -> FurnaceSaved {
     FurnaceSaved {
         machine: Furnace {
             energy: clamp_energy(read_int(nbt, KEY_ENERGY), FURNACE_CAPACITY),
             progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
             recipe: read_string(nbt, KEY_RECIPE),
         },
-        assembled: matches!(nbt.get(&KEY_ASSEMBLED.into()), Some(Tag::Byte(1))),
-        core: cores.iter().find_map(core_offset),
-        core_quality: read_float(nbt, KEY_QUALITY),
+        assembly: multiblock_state(nbt),
     }
 }
 
@@ -291,17 +368,7 @@ pub(crate) fn store_furnace(nbt: &mut Compound, saved: &FurnaceSaved) {
     write_int(nbt, KEY_ENERGY, saved.machine.energy);
     write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
     write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
-    let assembled = i8::from(saved.assembled);
-    nbt.insert(KEY_ASSEMBLED.into(), Tag::Byte(assembled));
-    let cores = saved.core.map_or_else(Vec::new, |[x, y, z]| {
-        vec![Tag::compound([
-            ("x", Tag::Int(x)),
-            ("y", Tag::Int(y)),
-            ("z", Tag::Int(z)),
-        ])]
-    });
-    nbt.insert(KEY_CORES.into(), Tag::List(cores));
-    write_float(nbt, KEY_QUALITY, saved.core_quality);
+    store_multiblock(nbt, saved.assembly);
 }
 
 /// What the readout prints about a furnace: its saved state plus what the world
@@ -311,6 +378,93 @@ pub(crate) struct FurnaceView<'a> {
     pub(crate) saved: &'a FurnaceSaved,
     pub(crate) core: Option<(&'a str, i32)>,
     pub(crate) input: Option<(&'a str, u32)>,
+    pub(crate) output: Option<(&'a str, u32)>,
+}
+
+/// The Industrial Chiller saved in a block entity's compound: the machine's
+/// three values, the multiblock facts, and the one tank.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct CoolerSaved {
+    /// The buffer, progress and recipe the pure state machine keeps.
+    pub(crate) machine: Cooler,
+    /// The assembly: assembled flag, core offset, core quality.
+    pub(crate) assembly: Assembly,
+    /// The tank: its fluid and its amount in millibuckets; `None` when empty.
+    pub(crate) tank: Option<(String, i32)>,
+}
+
+/// The chiller saved in a block entity's compound; a fresh one is empty.
+pub(crate) fn cooler_state(nbt: &Compound) -> CoolerSaved {
+    CoolerSaved {
+        machine: Cooler {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), COOLER_CAPACITY),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+        tank: tank_state(nbt),
+    }
+}
+
+/// Write the chiller's tick result back.
+pub(crate) fn store_cooler(nbt: &mut Compound, saved: &CoolerSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, saved.assembly);
+    store_tank(
+        nbt,
+        saved
+            .tank
+            .as_ref()
+            .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+    );
+}
+
+/// The entity's first (only) tank, as the game keeps it under `fluids`: a list
+/// of `{Fluid, Amount}` compounds, an empty tank `minecraft:empty` with 0. This
+/// is the shape `native_fluids.rs` reads and writes, so a foreign insert lands
+/// where this reads it.
+pub(crate) fn tank_state(nbt: &Compound) -> Option<(String, i32)> {
+    let Some(Tag::List(entries)) = nbt.get(&"fluids".into()) else {
+        return None;
+    };
+    let Some(Tag::Compound(entry)) = entries.first() else {
+        return None;
+    };
+    let fluid = match entry.get(&"Fluid".into()) {
+        Some(Tag::String(fluid)) if fluid.to_string_lossy() != "minecraft:empty" => {
+            fluid.to_string_lossy()
+        }
+        _ => return None,
+    };
+    let amount = match entry.get(&"Amount".into()) {
+        Some(Tag::Int(amount)) => *amount,
+        _ => 0,
+    };
+    let amount = amount.clamp(0, COOLER_TANK);
+    (amount > 0).then_some((fluid, amount))
+}
+
+/// Write the tank back in the game's shape, keeping the one entry so the tank
+/// number stays in place.
+fn store_tank(nbt: &mut Compound, tank: Option<(&str, i32)>) {
+    let (fluid, amount) = match tank {
+        Some((fluid, amount)) if amount > 0 => (fluid, amount.clamp(0, COOLER_TANK)),
+        _ => ("minecraft:empty", 0),
+    };
+    let entry = Tag::compound([
+        ("Fluid", Tag::String(fluid.into())),
+        ("Amount", Tag::Int(amount)),
+    ]);
+    nbt.insert("fluids".into(), Tag::List(vec![entry]));
+}
+
+/// What the readout prints about a chiller: its saved state plus what the world
+/// says about its core and its output slot.
+pub(crate) struct CoolerView<'a> {
+    pub(crate) saved: &'a CoolerSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
     pub(crate) output: Option<(&'a str, u32)>,
 }
 
@@ -418,19 +572,9 @@ pub(crate) fn tick_furnace(
     // The core is the assembly: a controller whose core block is gone (broken,
     // replaced, or never there) is not assembled, and its progress is kept —
     // upstream's `onCoreBroken` clears the assembly, not the operation.
-    if saved.assembled {
-        let core_alive = saved.core.is_some_and(|offset| {
-            block_at(host, level, offset_pos(pos, offset))
-                .is_some_and(|id| core_quality(&id).is_some())
-        });
-        if !core_alive {
-            saved.assembled = false;
-            saved.core = None;
-            saved.core_quality = 0.0;
-        }
-    }
+    recheck_core(host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
-    if saved.assembled {
+    if saved.assembly.assembled {
         let input = items[INPUT_SLOT].clone();
         let recipe = input.as_ref().and_then(|stack| find_smelting(host, stack));
         let work = recipe.as_ref().and_then(|recipe| {
@@ -462,6 +606,92 @@ pub(crate) fn tick_furnace(
 /// `ItemStack.getCount` as an `i32`.
 fn count_of(stack: &ItemStack) -> i32 {
     i32::try_from(stack.count()).unwrap_or(i32::MAX)
+}
+
+/// `MultiblockMachineController.onCoreBroken`: a controller whose core block is
+/// gone (broken, replaced, or never there) is no longer assembled, and its
+/// operation's progress is kept.
+fn recheck_core(host: &dyn Host, level: LevelRef, pos: [i32; 3], assembly: &mut Assembly) {
+    if !assembly.assembled {
+        return;
+    }
+    let core_alive = assembly.core.is_some_and(|offset| {
+        block_at(host, level, offset_pos(pos, offset)).is_some_and(|id| core_quality(&id).is_some())
+    });
+    if !core_alive {
+        *assembly = Assembly::default();
+    }
+}
+
+/// One server tick of the Industrial Chiller: the same assembly gate as the
+/// furnace, then one `oritech:cooler` craft from the fluid in the tank. A
+/// finished craft takes the recipe's millibuckets out of the tank and grants its
+/// one result.
+pub(crate) fn tick_cooler(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != COOLER_SLOTS;
+    if resized {
+        items.resize(COOLER_SLOTS, None);
+    }
+    let before = cooler_state(nbt);
+    let mut saved = before.clone();
+    recheck_core(host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled {
+        // `getRecipe()` picks a recipe whose fluid the tank holds
+        // (`recipeInputMatchesTank`); `canOutputRecipe` is the 64 rule.
+        let recipe = saved
+            .tank
+            .as_ref()
+            .and_then(|(fluid, amount)| find_cooler(host, fluid, *amount));
+        let work = recipe.as_ref().and_then(|recipe| {
+            let output = items
+                .get(COOLER_OUTPUT)
+                .and_then(Option::as_ref)
+                .map(|stack| (stack.item().id(host), count_of(stack)));
+            cooler_output_fits(
+                output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                &recipe.result,
+            )
+            .then_some(Work {
+                id: &recipe.id,
+                time: cooler_ticks(recipe.time),
+            })
+        });
+        step = saved.machine.tick(work);
+        if step == Step::Finished
+            && let Some(recipe) = recipe.as_ref()
+        {
+            finish_cooler(host, &mut saved, items, recipe);
+        }
+    }
+    store_cooler(nbt, &saved);
+    resized || step != Step::Idle || saved != before
+}
+
+/// `CoolerBlockEntity.processCraftInstance`: take the recipe's millibuckets out
+/// of the tank and grant its one result into the output slot.
+fn finish_cooler(
+    host: &dyn Host,
+    saved: &mut CoolerSaved,
+    items: &mut [Option<ItemStack>],
+    recipe: &CoolerRecipe,
+) {
+    // The recipe was chosen because the tank holds it, so this is a re-check of
+    // the same rule, not a second one.
+    let Some((fluid, amount)) = saved.tank.clone() else {
+        return;
+    };
+    if !tank_matches(Some((fluid.as_str(), amount)), &recipe.fluid) {
+        return;
+    }
+    grow_output(host, items, COOLER_OUTPUT, &recipe.result);
+    saved.tank = after_draining(amount, recipe.fluid.amount).map(|left| (fluid, left));
 }
 
 /// `MachineBlockEntity.craftItem`: every result into its own output slot, then
@@ -554,6 +784,9 @@ struct Resolved<T> {
 
 static PULVERIZER_RECIPES: Mutex<Option<Vec<Resolved<PulverizerRecipe>>>> = Mutex::new(None);
 static SMELTING_RECIPES: Mutex<Option<Vec<Resolved<SmeltingRecipe>>>> = Mutex::new(None);
+/// The cooler's recipes have no item ingredient, so they match a tank rather
+/// than an `Ingredient` and are cached as parsed recipes only.
+static COOLER_RECIPES: Mutex<Option<Vec<CoolerRecipe>>> = Mutex::new(None);
 static RECIPE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// The first recipe of `kind` whose ingredient takes `input`: the pin's
@@ -625,6 +858,32 @@ fn find_smelting(host: &dyn Host, input: &ItemStack) -> Option<SmeltingRecipe> {
         },
         input,
     )
+}
+
+/// The `oritech:cooler` recipe a tank's contents start: the first whose fluid
+/// input the tank holds (`CoolerBlockEntity.getRecipe` →
+/// `recipeInputMatchesTank`). No ingredient is resolved, because a cooler recipe
+/// has no item input.
+fn find_cooler(host: &dyn Host, fluid: &str, amount: i32) -> Option<CoolerRecipe> {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = COOLER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let parsed = host
+            .recipes_of_type(COOLER_RECIPE)
+            .iter()
+            .filter_map(|recipe| CoolerRecipe::parse(&recipe.id, &recipe.json.to_string()).ok())
+            .collect();
+        *cache = Some(parsed);
+    }
+    let recipes = cache.as_ref()?;
+    recipes
+        .iter()
+        .find(|recipe| tank_matches(Some((fluid, amount)), &recipe.fluid))
+        .cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -721,7 +980,8 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     let Some(name) = block_at(&*server, level, pos) else {
         return Flow::Continue;
     };
-    if name != GENERATOR && name != PULVERIZER && name != FURNACE {
+    let is_multiblock = name == FURNACE || name == COOLER;
+    if !is_multiblock && name != GENERATOR && name != PULVERIZER {
         return Flow::Continue;
     }
     // A spectator's right click reaches this hook at the pinned host; it must not insert
@@ -733,8 +993,8 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     }
     *event.cancellation_result = InteractionResult::Success;
     let Some(held) = click.stack.cloned() else {
-        if name == FURNACE
-            && let Some(message) = try_assemble(server, level, pos)
+        if let Some(offset) = core_offset_for(&name)
+            && let Some(message) = try_assemble(server, level, pos, offset)
         {
             say(server, click.player, &message);
         }
@@ -743,15 +1003,28 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         }
         return Flow::Cancel;
     };
-    if name == FURNACE {
+    if is_multiblock {
         let held_id = held.item().id(&*server);
         // `MultiblockMachineController.tryPlaceNextCore`: a core in the hand
-        // fills the empty core position instead of the input slot.
-        if core_quality(&held_id).is_some() {
-            let message = place_core(server, level, pos, click.player, click.hand, &held);
+        // fills the empty core position instead of the machine's own slots.
+        if core_quality(&held_id).is_some()
+            && let Some(offset) = core_offset_for(&name)
+        {
+            let message = place_core(server, level, pos, click.player, click.hand, &held, offset);
             say(server, click.player, &message);
             return Flow::Cancel;
         }
+    }
+    if name == COOLER {
+        // No input slot: the chiller's input is its fluid tank, which a pipe or
+        // `/oritech fluid` fills. A held item has nowhere to go.
+        let held_id = held.item().id(&*server);
+        let message = format!("{held_id} has nowhere to go: the chiller takes fluid, not items");
+        say(server, click.player, &message);
+        return Flow::Cancel;
+    }
+    if name == FURNACE {
+        let held_id = held.item().id(&*server);
         if find_smelting(&*server, &held).is_none() {
             let message = format!("{held_id} has no smelting recipe");
             say(server, click.player, &message);
@@ -788,9 +1061,20 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     Flow::Cancel
 }
 
+/// The core offset a multiblock controller assembles at: the furnace's one
+/// block above, the chiller's one block north. `None` for anything else, which
+/// is the click path's "not a machine" test.
+fn core_offset_for(block: &str) -> Option<[i32; 3]> {
+    match block {
+        FURNACE => Some(CORE_OFFSET),
+        COOLER => Some(COOLER_CORE_OFFSET),
+        _ => None,
+    }
+}
+
 /// `MultiblockMachineController.tryPlaceNextCore`: put the held machine core in
-/// the controller's missing core position, one block above, and take it out of
-/// the hand (a creative hand gives for free). Answers the line to print.
+/// the controller's missing core position (`offset`), and take it out of the
+/// hand (a creative hand gives for free). Answers the line to print.
 fn place_core(
     host: &mut dyn ServerHost,
     level: LevelRef,
@@ -798,8 +1082,9 @@ fn place_core(
     player: u128,
     hand: mod_api::Hand,
     held: &ItemStack,
+    offset: [i32; 3],
 ) -> String {
-    let target = offset_pos(pos, CORE_OFFSET);
+    let target = offset_pos(pos, offset);
     let held_id = held.item().id(&*host);
     match block_at(&*host, level, target) {
         Some(occupied) if occupied != "minecraft:air" => {
@@ -826,29 +1111,35 @@ fn place_core(
     format!("placed {id} at {target:?}; right-click the controller again to assemble")
 }
 
-/// `MultiblockMachineController.initMultiblock` on a click: the block one above
-/// the controller must be one of the seven machine cores; then the machine is
-/// assembled and the core recorded. Answers the line to print.
-fn try_assemble(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3]) -> Option<String> {
+/// `MultiblockMachineController.initMultiblock` on a click: the block at
+/// `offset` from the controller must be one of the seven machine cores; then the
+/// machine is assembled and the core recorded. Answers the line to print.
+fn try_assemble(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    offset: [i32; 3],
+) -> Option<String> {
     let entity = host.block_entity(level, pos)?;
     let nbt = entity.data(&*host)?;
-    let saved = furnace_state(&nbt);
-    let core_pos = offset_pos(pos, CORE_OFFSET);
+    let saved = multiblock_state(&nbt);
+    let core_pos = offset_pos(pos, offset);
     let core_id = block_at(&*host, level, core_pos)?;
     let Some(quality) = core_quality(&core_id) else {
         return Some(format!(
             "missing core: place a machine core at {core_pos:?} (it holds {core_id})"
         ));
     };
-    if saved.assembled && saved.core == Some(CORE_OFFSET) {
+    if saved.assembled && saved.core == Some(offset) {
         return Some(format!("already assembled with {core_id}"));
     }
-    let mut updated = saved;
-    updated.assembled = true;
-    updated.core = Some(CORE_OFFSET);
-    updated.core_quality = f32::from(i16::try_from(quality).unwrap_or(0));
+    let updated = Assembly {
+        assembled: true,
+        core: Some(offset),
+        quality: f32::from(i16::try_from(quality).unwrap_or(0)),
+    };
     let mut patch = Compound::new();
-    store_furnace(&mut patch, &updated);
+    store_multiblock(&mut patch, updated);
     // `merge_data` is `/data merge block`: it loads the patch and marks the
     // chunk changed, which is the `setChanged` an assembled machine needs.
     entity.merge_data(host, patch).ok()?;
@@ -963,6 +1254,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
             // The core comes from the world, not from the saved offset, so a
             // line cannot name a core that is no longer there.
             let core = saved
+                .assembly
                 .core
                 .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
                 .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
@@ -974,6 +1266,24 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     saved: &saved,
                     core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
                     input: input.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                },
+                time,
+            ))
+        }
+        COOLER => {
+            let saved = cooler_state(&nbt);
+            let core = saved
+                .assembly
+                .core
+                .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
+                .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
+            let output = slot(COOLER_OUTPUT);
+            Some(cooler_line(
+                pos,
+                &CoolerView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
                     output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
                 time,
@@ -995,6 +1305,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         GENERATOR => GENERATOR_CAPACITY,
         PULVERIZER => PULVERIZER_CAPACITY,
         FURNACE => FURNACE_CAPACITY,
+        COOLER => COOLER_CAPACITY,
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -1009,6 +1320,48 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         .map(|_| format!("{name} at {pos:?}: {energy}/{capacity} FE."))
 }
 
+/// `/oritech fluid <pos> <fluid> <amount>`: fill a machine's tank through the
+/// engine's own `native_fluid_insert`, so the *declaration* is what is being
+/// proved — the game routes the fluid by the tanks and faces the block declared,
+/// and refuses a block that declares none. Answers the line to print, or `None`
+/// when no machine with a tank stands there.
+pub(crate) fn set_fluid(
+    host: &mut dyn ServerHost,
+    pos: [i32; 3],
+    fluid: &str,
+    amount: i32,
+) -> Option<String> {
+    let level = host.level(host.dimension())?;
+    let name = block_at(&*host, level, pos)?;
+    fluids(&name)?;
+    let asked = amount.max(0);
+    // Through the engine's own `horizon:fluids` handler for this block: the game
+    // builds it from the tanks the block *declared*, so a block that declared
+    // none accepts nothing, and a fluid the pack does not know is not even
+    // nameable. That is what makes the reply evidence of the declaration.
+    let accepted = host.fluid_key(fluid).map_or(0, |key| {
+        let resource = FluidResource::of(&FluidStack::new(key, 1));
+        let Some(handler) = level.capability(&mut *host, &FLUIDS, pos, Some(Direction::Up)) else {
+            return 0;
+        };
+        host.transaction(|host, tx| -> Result<u32, ()> {
+            Ok(handler.insert_any(host, tx, &resource, u32::try_from(asked).unwrap_or(0)))
+        })
+        .unwrap_or(0)
+    });
+    let entity = host.block_entity(level, pos)?;
+    let nbt = entity.data(&*host)?;
+    let (tank_fluid, tank_amount) = tank_state(&nbt).unwrap_or_else(|| ("empty".to_owned(), 0));
+    Some(fluid_line(
+        &name,
+        pos,
+        &tank_fluid,
+        tank_amount,
+        asked,
+        i32::try_from(accepted).unwrap_or(i32::MAX),
+    ))
+}
+
 /// A world opened or closed: the parsed recipe caches and the push queue belong
 /// to one world.
 pub(crate) fn reset_world_state() {
@@ -1016,6 +1369,9 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *SMELTING_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *COOLER_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     RECIPE_TICKS.store(0, Ordering::Relaxed);
@@ -1093,10 +1449,75 @@ pub(crate) fn furnace_line(pos: [i32; 3], view: &FurnaceView<'_>, t: i64) -> Str
          progress {} recipe {recipe}, input {}, out {}, t={t}",
         saved.machine.energy,
         FURNACE_CAPACITY,
-        if saved.assembled { "yes" } else { "no" },
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
         saved.machine.progress,
         slot_text(view.input),
         slot_text(view.output),
+    )
+}
+
+/// A tank as a line prints it: the fluid and its amount against the declared
+/// capacity, or `empty`.
+fn tank_text(tank: Option<(&str, i32)>) -> String {
+    match tank {
+        Some((fluid, amount)) => format!("{fluid} {amount}/{COOLER_TANK} mB"),
+        None => format!("empty 0/{COOLER_TANK} mB"),
+    }
+}
+
+/// The chiller's line: the assembly first, then the tank and the one craft.
+pub(crate) fn cooler_line(pos: [i32; 3], view: &CoolerView<'_>, t: i64) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    format!(
+        "Industrial Chiller at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, tank {}, out {}, t={t}",
+        saved.machine.energy,
+        COOLER_CAPACITY,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress,
+        tank_text(
+            saved
+                .tank
+                .as_ref()
+                .map(|(fluid, amount)| (fluid.as_str(), *amount))
+        ),
+        slot_text(view.output),
+    )
+}
+
+/// The line `/oritech fluid` answers: what the tank holds after the game's own
+/// insert, and how much of the request it took.
+pub(crate) fn fluid_line(
+    name: &str,
+    pos: [i32; 3],
+    fluid: &str,
+    amount: i32,
+    asked: i32,
+    accepted: i32,
+) -> String {
+    let tank = match fluid {
+        "empty" => None,
+        fluid => Some((fluid, amount)),
+    };
+    format!(
+        "{name} at {pos:?}: tank {} (asked {asked}, accepted {accepted})",
+        tank_text(tank)
     )
 }
 
@@ -1303,9 +1724,11 @@ mod tests {
                 progress: 11,
                 recipe: "minecraft:iron_ingot_from_smelting_iron_ore".to_owned(),
             },
-            assembled: true,
-            core: Some(CORE_OFFSET),
-            core_quality: 2.0,
+            assembly: Assembly {
+                assembled: true,
+                core: Some(CORE_OFFSET),
+                quality: 2.0,
+            },
         };
         store_furnace(&mut nbt, &saved);
         assert_eq!(furnace_state(&nbt), saved);
@@ -1356,9 +1779,11 @@ mod tests {
                 progress: 11,
                 recipe: "minecraft:iron_ingot_from_smelting_iron_ore".to_owned(),
             },
-            assembled: true,
-            core: Some(CORE_OFFSET),
-            core_quality: 2.0,
+            assembly: Assembly {
+                assembled: true,
+                core: Some(CORE_OFFSET),
+                quality: 2.0,
+            },
         };
         assert_eq!(
             furnace_line(
@@ -1391,6 +1816,217 @@ mod tests {
             ),
             "Powered Furnace at [8, 100, 0]: 0/10000 FE, assembled no core empty quality 0, \
              progress 0 recipe none, input empty, out minecraft:iron_ingot x1, t=7"
+        );
+    }
+
+    // -- slice 3: the Industrial Chiller --------------------------------------
+
+    #[test]
+    fn the_cooler_declares_one_output_slot_and_no_item_input() {
+        let slots = container(COOLER).expect("the chiller has a container");
+        assert_eq!(slots.slots, COOLER_SLOTS, "one slot, and it is the output");
+        assert_eq!(
+            slots.inputs,
+            Vec::<usize>::new(),
+            "InventorySlotAssignment(0, 0, 0, 1): the chiller's input is fluid"
+        );
+        assert_eq!(
+            slots.outputs,
+            vec![COOLER_OUTPUT],
+            "the one result may be taken"
+        );
+        assert_eq!(
+            slots.faces,
+            std::array::from_fn(|_| vec![COOLER_OUTPUT]),
+            "automation reaches the output from every face"
+        );
+        assert_eq!(slots.menu, None, "no GUI in this slice");
+    }
+
+    #[test]
+    fn the_cooler_buffer_is_the_jars_numbers() {
+        let cooler = battery(COOLER).expect("the chiller has a buffer");
+        assert_eq!(cooler.capacity, 50_000, "coolerData.energyCapacity");
+        assert_eq!(cooler.max_insert, 256, "32 * 8");
+        assert_eq!(cooler.max_extract, 0, "the chiller gives nothing back");
+        assert_eq!(cooler.insert_faces, [true; 6]);
+        assert_eq!(cooler.extract_faces, [false; 6]);
+    }
+
+    #[test]
+    fn the_cooler_declares_one_four_bucket_tank_a_neighbour_can_fill() {
+        let tanks = fluids(COOLER).expect("the chiller has a tank");
+        assert_eq!(tanks.tanks, vec![COOLER_TANK], "one four-bucket tank");
+        assert_eq!(tanks.inputs, vec![0], "a neighbour may fill it");
+        assert_eq!(
+            tanks.outputs,
+            Vec::<usize>::new(),
+            "nothing may drain it: the machine only takes fluid"
+        );
+        assert_eq!(
+            tanks.faces,
+            std::array::from_fn(|_| vec![0]),
+            "every face reaches the tank"
+        );
+        assert!(
+            fluids("minecraft:stone").is_none(),
+            "a foreign block has none"
+        );
+        assert!(
+            fluids(FURNACE).is_none(),
+            "the furnace's input is an item, not a fluid"
+        );
+    }
+
+    #[test]
+    fn each_multiblock_assembles_at_its_own_core_offset() {
+        assert_eq!(
+            core_offset_for(FURNACE),
+            Some(CORE_OFFSET),
+            "the furnace's core is one block above"
+        );
+        assert_eq!(
+            core_offset_for(COOLER),
+            Some(COOLER_CORE_OFFSET),
+            "the chiller's core is one block north"
+        );
+        assert_eq!(
+            core_offset_for(GENERATOR),
+            None,
+            "a plain machine has no core"
+        );
+        assert_eq!(core_offset_for(PULVERIZER), None);
+        assert_eq!(core_offset_for("minecraft:stone"), None);
+    }
+
+    #[test]
+    fn the_cooler_s_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        assert_eq!(
+            cooler_state(&nbt),
+            CoolerSaved::default(),
+            "a fresh chiller is empty, unassembled and has an empty tank"
+        );
+        let saved = CoolerSaved {
+            machine: Cooler {
+                energy: 43_600,
+                progress: 11,
+                recipe: "oritech:cooler/ice".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                core: Some(COOLER_CORE_OFFSET),
+                quality: 2.0,
+            },
+            tank: Some(("minecraft:water".to_owned(), 1_000)),
+        };
+        store_cooler(&mut nbt, &saved);
+        assert_eq!(cooler_state(&nbt), saved);
+        assert_eq!(
+            nbt.get(&KEY_ENERGY.into()),
+            Some(&Tag::Int(43_600)),
+            "the buffer is the int `energy` the energy capability reads"
+        );
+        assert_eq!(
+            nbt.get(&KEY_ASSEMBLED.into()),
+            Some(&Tag::Byte(1)),
+            "the assembled flag is a byte, as a vanilla boolean state is"
+        );
+        assert_eq!(
+            nbt.get(&"fluids".into()),
+            Some(&Tag::List(vec![Tag::compound([
+                ("Fluid", Tag::String("minecraft:water".into())),
+                ("Amount", Tag::Int(1_000)),
+            ])])),
+            "the tank is the game's own `fluids` shape, so `fluid_insert` writes here too"
+        );
+        // Drained: the entry stays and reads as `minecraft:empty`.
+        store_cooler(
+            &mut nbt,
+            &CoolerSaved {
+                tank: None,
+                ..saved
+            },
+        );
+        assert_eq!(tank_state(&nbt), None, "an empty tank is no tank");
+        assert_eq!(
+            nbt.get(&"fluids".into()),
+            Some(&Tag::List(vec![Tag::compound([
+                ("Fluid", Tag::String("minecraft:empty".into())),
+                ("Amount", Tag::Int(0)),
+            ])])),
+            "the entry keeps its place, as the game's writer does"
+        );
+    }
+
+    #[test]
+    fn a_cooler_tank_above_its_capacity_is_clamped() {
+        let mut nbt = Compound::new();
+        store_tank(&mut nbt, Some(("minecraft:water", COOLER_TANK + 5)));
+        assert_eq!(
+            tank_state(&nbt),
+            Some(("minecraft:water".to_owned(), COOLER_TANK))
+        );
+        store_tank(&mut nbt, Some(("minecraft:water", -5)));
+        assert_eq!(tank_state(&nbt), None, "a negative amount is an empty tank");
+    }
+
+    #[test]
+    fn the_cooler_line_is_the_one_the_e2e_asserts() {
+        let working = CoolerSaved {
+            machine: Cooler {
+                energy: 43_600,
+                progress: 11,
+                recipe: "oritech:cooler/ice".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                core: Some(COOLER_CORE_OFFSET),
+                quality: 2.0,
+            },
+            tank: Some(("minecraft:water".to_owned(), 1_000)),
+        };
+        assert_eq!(
+            cooler_line(
+                [12, 100, 0],
+                &CoolerView {
+                    saved: &working,
+                    core: Some(("oritech:machine_core_2", 2)),
+                    output: None,
+                },
+                424
+            ),
+            "Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core \
+             oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank \
+             minecraft:water 1000/4000 mB, out empty, t=424"
+        );
+
+        let idle = CoolerSaved::default();
+        assert_eq!(
+            cooler_line(
+                [12, 100, 0],
+                &CoolerView {
+                    saved: &idle,
+                    core: None,
+                    output: Some(("minecraft:ice", 3)),
+                },
+                7
+            ),
+            "Industrial Chiller at [12, 100, 0]: 0/50000 FE, assembled no core empty quality 0, \
+             progress 0 recipe none, tank empty 0/4000 mB, out minecraft:ice x3, t=7"
+        );
+    }
+
+    #[test]
+    fn the_fluid_command_line_is_the_one_the_e2e_asserts() {
+        assert_eq!(
+            fluid_line(COOLER, [12, 100, 0], "minecraft:water", 1_000, 1_000, 1_000),
+            "oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB \
+             (asked 1000, accepted 1000)"
+        );
+        assert_eq!(
+            fluid_line(COOLER, [12, 100, 0], "empty", 0, 1_000, 0),
+            "oritech:cooler_block at [12, 100, 0]: tank empty 0/4000 mB (asked 1000, accepted 0)"
         );
     }
 }

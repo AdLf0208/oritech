@@ -764,20 +764,22 @@ seven carried pulverizer recipes crafted with its input consumed
 EXIT:0
 ```
 
-### Parity coverage (the mod's families, this slice)
+### What slice 2 covered, and by which phase
 
-| Family | Status |
+(The machine-checked table for all three slices is under *Slice 3* → *Parity coverage*.)
+
+| Family | Where |
 |---|---|
-| `oritech:powered_furnace_block` block + item | **tested** — phase M (given + read back), H (placed), I (clicked) |
-| `oritech:machine_core_1..7` blocks + items | **tested** — phase M places all seven and reads each back; `machine_core_8` is refused |
-| multiblock assembly (controller + core) | **tested** — phase I: a core in the hand is placed above by a right click, the empty-hand click assembles, the readout is `assembled yes core … quality 2` |
-| disassembly on a broken core | **tested** — phase L: progress frozen for 60 ticks with FE unspent, then core 4 re-assembles and the smelt finishes |
-| vanilla smelting recipe family | **tested** — phase J: `minecraft:iron_ingot_from_smelting_iron_ore` (200-tick recipe) → 1 ingot in exactly 100 ticks for exactly 3,200 FE; the table is the game's own, so any smelting recipe runs |
-| the furnace's FE buffer (10,000 / 256 / 0) | **tested** — `H`/`J` readouts and `/oritech energy` writes; declaration pinned by a unit test |
-| `oritech:pulverizer/bone` | **tested** — phase D (100 ticks, 3,200 FE) and O |
-| `oritech:pulverizer/blaze`, `dripstone`, `glowstoneore`, `coalore`, `diamondore`, `lapisore` | **tested** — phase O: each crafted with its declared input, output id and count asserted, input consumed |
-| the remaining 117 pulverizer recipes | **not ported** — they need the ore-processing items (dusts/clumps/gems) the port does not carry (gap 6) |
-| GUI/screen, GeckoLib render, addons, energy pipes, the other multiblocks | **not ported** — recorded gaps |
+| `oritech:powered_furnace_block` block + item | phase M (given + read back), H (placed), I (clicked) |
+| `oritech:machine_core_1..7` blocks + items | phase M places all seven and reads each back; `machine_core_8` is refused |
+| multiblock assembly (controller + core) | phase I: a core in the hand is placed above by a right click, the empty-hand click assembles, the readout is `assembled yes core … quality 2` |
+| disassembly on a broken core | phase L: progress frozen for 60 ticks with FE unspent, then core 4 re-assembles and the smelt finishes |
+| vanilla smelting recipe family | phase J: `minecraft:iron_ingot_from_smelting_iron_ore` (200-tick recipe) → 1 ingot in exactly 100 ticks for exactly 3,200 FE; the table is the game's own, so any smelting recipe runs |
+| the furnace's FE buffer (10,000 / 256 / 0) | `H`/`J` readouts and `/oritech energy` writes; declaration pinned by a unit test |
+| `oritech:pulverizer/bone` | phase D (100 ticks, 3,200 FE) and O |
+| the other six carried pulverizer recipes | phase O: each crafted with its declared input, output id and count asserted, input consumed |
+| the remaining 117 pulverizer recipes | not carried: they need the ore-processing items (dusts/clumps/gems) the port does not carry (gap 6) |
+| GUI/screen, GeckoLib render, addons, energy pipes, the other multiblocks | not ported; recorded gaps |
 
 ### Carry defect fixed: the object-form ingredient
 
@@ -821,5 +823,221 @@ lock from the launcher's own cargo home is what worked. The launcher has a **glo
 
 `## Upstream defects fixed`: none found in this slice. The ingredient form was a carry mistake in this
 port (a 1.21.1 file into a 26.3 pack), fixed here and covered in game.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Slice 3 — the Industrial Chiller (`oritech:cooler_block`), the mod's fluid machine (0.2.5, 2026-11-21)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **13**,
+verbatim: "Not carried: the powered furnace (a multiblock machine that needs its core assembled), the
+assembler, atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the
+augment stations, the jetpack and equipment, the resource-node worldgen and the ores. All later
+slices."
+
+Every other machine named there (`assembler`, `centrifuge`, `atomic forge`, `foundry`, `refinery`,
+`grinder`, the generators) consumes Oritech dusts, clumps, gems, components or mod fluids that this
+port does not carry, so its recipes could never match — dead data, which the campaign forbids shipping.
+The **cooler** is the one machine family whose whole process runs on vanilla content: `minecraft:water`
+→ 3 `minecraft:ice` and `minecraft:lava` → 2 `minecraft:obsidian`, both of them fluids the engine's
+fluid handler knows. It is also the first **fluid** machine, and its core sits at a *different* offset
+from the furnace's, so it generalises the multiblock assembly slice 2 built instead of duplicating it.
+Class + tier unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the machines
+shape (a block entity, a declared container, a declared FE buffer, a declared **fluid tank**, a recipe
+family, a multiblock assembly). No renderer, no GUI, no dimension, no accelerator.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| capacity 50,000 FE | `OritechConfig.processingMachines.coolerData` (`init/OritechConfig.java:360`) | `COOLER_CAPACITY` |
+| insert 256 FE/t (`32 * 8`) | same | `COOLER_MAX_INSERT` |
+| 32 FE a working tick | same `energyPerTick`; `calculateEnergyUsage` = 32 × efficiency(1) × (1/speed(1)) | `cooler_energy_usage()` |
+| 200 ticks a craft | the jar's `data/oritech/recipe/cooler/*.json` `time: 200`; `checkCraftingFinished` = `time * speed` | `cooler_ticks(time)` |
+| tank 4 buckets | `CoolerBlockEntity.fluidStorage = SimpleFluidStorage(4 * bucketAmount())` | `COOLER_TANK = 4000` |
+| one bucket a craft | `FluidIngredient`'s `amount` defaults to `FluidStack.bucketAmount()` | `FluidInput::amount` |
+| core at **(0, 0, -1)** | `CoolerBlockEntity.getCorePositions` | `COOLER_CORE_OFFSET` |
+| slots `(0, 0, 0, 1)`, inventory 1 | `getSlotAssignments` / `getInventorySize` | container: one output, no item input |
+| output rule `count + result <= 64` | `CoolerBlockEntity.processCraftInstance` | `cooler_output_fits` |
+| cold biome: speed ×0.5 **and** efficiency ×0.5 | `getSpeedMultiplier` / `getEfficiencyMultiplier` | `blocked(no-biome-tag-read)` — see deviations |
+
+### What was added
+
+- `src/runtime.rs`: `COOLER_*`, `cooler_energy_usage`, `cooler_ticks`, `FluidInput` + `tank_matches`
+  (`recipeInputMatchesTank`), `cooler_output_fits`, `after_draining`, `CoolerRecipe::parse` /
+  `CoolerError`, and `Cooler` — which advances through the **same** private `advance` step as the
+  pulverizer and the furnace, so three machines cannot drift apart. Ten new unit tests.
+- `src/support.rs`: the cooler's container/buffer/**fluid-tank** arms, `Assembly` (the multiblock
+  facts both machines now share), `CoolerSaved` with its tank in the game's own `fluids` shape,
+  `tick_cooler` (assembly re-check, the tank's recipe, the 64-item rule, the drain-then-grant), the
+  cooler recipe cache (no `Ingredient`: a cooler recipe has no item input), `core_offset_for`,
+  `/oritech fluid`, `set_energy`'s cooler arm and the readout line. Its own eight tests pin the
+  declarations, the saved shape and the exact lines.
+- `src/lib.rs`: `CoolerPart`, the fourth block-entity type, `Registrar::block_fluids` for the tank,
+  the `oritech:cooler` recipe type + raw serializer, and `/oritech fluid <pos> <amount> <fluid>`.
+- Content: `oritech:cooler_block` (blockstate, block and item models, its own texture, 26.3 item
+  definition, block declaration, loot, lang `Industrial Chiller`, the machines tab, the pickaxe and
+  stone-tool tags) and the jar's two cooler recipes whose fluid and result both exist here.
+  `assets/` + `data/` are now **90 files** (`tools/carry_content.py --check` → `90 files, 0 differ`).
+- `tools/parse_info.py` learned the chiller's and the fluid reply's shapes; `tools/e2e.sh` gained
+  phases P–W; `PLAN-slice3.md` is the slice's plan; `VALIDATION.md` is the ladder.
+
+### Deviations (slice 3)
+
+1. **The cold-biome bonus is not ported** — `blocked(no-biome-tag-read)`. Upstream halves the speed
+   *and* the efficiency in a biome of `TagContent.CONVENTIONAL_COLD`, which leaves the usage at 32
+   FE/tick and halves the duration (a 200-tick craft becomes 100 ticks for 3,200 FE). The pin's mod
+   API has no biome read at all (no `biome` surface item in `sdk.json`'s 749 hooks), so this port
+   always runs the warm figures. The semantic difference is stated in `runtime::cooler_energy_usage`.
+2. **The tank is saved in the game's `fluids` shape, not upstream's `fluid` tag.** Upstream writes
+   `fluidStorage.writeNbt(nbt, "")` (a `FluidStack` codec compound under the key `fluid`); API 54's
+   fluid handler reads and writes a **list** under `fluids`, with `Fluid` + `Amount` per entry. The
+   port uses the engine's shape, exactly as slice 1 used the API's `energy` int instead of
+   `oritech.machine_energy` — otherwise the declared tank would be invisible to the engine and to
+   every other mod's pipe.
+3. **A fluid tag input can never match** — `blocked(no-fluid-tag-lookup)`. `tank_matches` refuses a
+   `#tag` input rather than treating it as "any fluid", because the pin's mod API has no fluid-tag
+   query. Only the jar's `snow.json` uses one (`#c:steam`).
+4. **`snow.json` is not carried**: its input is `oritech:still_steam`, a fluid this package does not
+   declare, so the recipe could never match. Recorded as `blocked(fluid-whitelist: oritech:still_steam)`
+   and *measured* in game (phase U: the engine refuses the id, `accepted 0`).
+5. **`/oritech fluid` is a harness control, not an upstream command.** Upstream fills the tank from its
+   GUI or a pipe; there is no bucket route into a mod block entity at this pin, so the harness needs a
+   way in. It goes through the engine's own `horizon:fluids` handler for the block, which means the
+   reply is evidence of the *declaration*: a block that declared no tank accepts nothing.
+6. **No GUI, no `lit` state, no GeckoLib render, no addons** — the same recorded gaps as slices 1–2.
+   The chiller's addon slot at (0, 0, -2) and its `extraChambers` repeat are not ported (0 extra
+   chambers without an addon).
+
+### Verification (0.2.5)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime + glue red | `cargo test --offline`, the ten new bodies `todo!()` | **38 passed, 10 failed** — every failure `panicked at src/runtime.rs:…: not yet implemented` (`slice3-test-red.log`) |
+| glue fail-capability (counterfactual) | nine targeted mutations of the declarations/readout, then the tests | **48 passed, 8 failed**, one per new glue test; the file restored byte-identically afterwards (`slice3-glue-red-counterfactual.log`, `tools/slice3-glue-counterfactual.py`) |
+| tests (green) | `cargo test --offline` | **56 passed**, 0 failed (`sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| package | `cargo horizon-mod build` twice, the artifact deleted between | **94,227 B**, sha256 `89d0ae6f…2045ef3b`, `cmp` identical, **99 entries**, no packed `Cargo.lock` (`sdk-build.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.5 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (`sdk-fits.log`) |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `90 files, 0 differ` (`slice3-carry-check.log`) |
+| e2e | `launcher-game.sh build oritech` (manifest 0.2.5 ⇒ a real recompile), then `build-slot.sh run --step e2e` | **PASS** + `EXIT:0` (`e2e-slice3.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package the generator item is absent and the generator, furnace, core and **chiller** ids stay `minecraft:air` (`e2e-slice3-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME` | **EXIT:1** — `the generator did not place` (`e2e-slice3-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` (`e2e-slice3-selftest.log`) |
+| fail-capability, chiller | `SELFTEST_COOLER=1` | **EXIT:1** — `148 ticks needed exactly 4736 FE, so the buffer should hold 32, not 0` (`e2e-slice3-selftest-cooler.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 12 logs, 12 ok, 0 bad |
+
+The chiller leg is fail-capable four ways: the no-core phase (water and 5,000 FE, nothing happens), the
+ten-tick arithmetic (320 FE must advance exactly ten ticks), the exact-FE completion (144 ticks must
+cost exactly 4,608 FE and leave 0; a slower machine starves and makes nothing, a faster one leaves FE
+behind), and `SELFTEST_COOLER=1`, which flips the last one and exits 1. Phase U adds two more: the
+furnace has no tank (per-block declaration) and a fluid the pack does not have is refused.
+
+### In-game transcript (quoted from `e2e-slice3.log`)
+
+```
+  info(12,100,0): Industrial Chiller at [12, 100, 0]: 0/50000 FE, assembled no core empty quality 0, progress 0 recipe none, tank empty 0/4000 mB, out empty, t=3359
+  fluid(12,100,0): oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
+  info(12,100,0): Industrial Chiller at [12, 100, 0]: 5000/50000 FE, assembled no core empty quality 0, progress 0 recipe none, tank minecraft:water 1000/4000 mB, out empty, t=3458
+  unassembled, with water and 5,000 FE: still progress 0, 5000 FE, tank minecraft:water 1000, no ice
+  core click: {"ok":true,"block":"oritech:cooler_block"}
+  block(12,100,-1) = oritech:machine_core_3 (the chiller's core is north, not above)
+  info(12,100,0): Industrial Chiller at [12, 100, 0]: 3848/50000 FE, assembled yes core oritech:machine_core_3 quality 3, progress 36 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=3570
+  info(12,100,0): Industrial Chiller at [12, 100, 0]: 0/50000 FE, assembled yes core oritech:machine_core_3 quality 3, progress 46 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=3591
+  320 FE advanced the craft exactly 10 ticks (46 -> 56 of 200), tank still 1000 mB
+  info(12,100,0): Industrial Chiller at [12, 100, 0]: 0/50000 FE, assembled yes core oritech:machine_core_3 quality 3, progress 0 recipe none, tank empty 0/4000 mB, out minecraft:ice x3, t=3869
+  from progress 56: 144 ticks spent exactly 4608 FE, buffer 0, out minecraft:ice x3, tank empty
+  fluid(16,100,0): oritech:cooler_block at [16, 100, 0]: tank minecraft:lava 1000/4000 mB (asked 1000, accepted 1000)
+  info(16,100,0): Industrial Chiller at [16, 100, 0]: 5952/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 14 recipe oritech:cooler/obsidian, tank minecraft:lava 1000/4000 mB, out empty, t=3991
+  info(16,100,0): Industrial Chiller at [16, 100, 0]: 0/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank empty 0/4000 mB, out minecraft:obsidian x2, t=4246
+  lava -> minecraft:obsidian x2 for exactly 6400 FE, tank empty
+  the furnace has no tank: /oritech fluid answered '[8, 100, 0] has no Oritech fluid tank.'
+  fluid(12,100,0): oritech:cooler_block at [12, 100, 0]: tank empty 0/4000 mB (asked 1000, accepted 0)
+  oritech:still_steam: accepted 0 of 1000 mB, tank empty (the jar's snow recipe is recorded as a gap)
+  every carried loot table rolled its block into the inventory
+  an unknown loot table gave nothing (inventory entries 36 -> 36)
+PASS: … an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, and every carried loot table rolled its own block
+EXIT:0
+```
+
+The craft's arithmetic: the first read lands 56 ticks into the operation, so the rest is
+`200 - 56 = 144` ticks and `144 × 32 = 4,608` FE — the whole craft is `200 × 32 = 6,400` FE, the jar's
+`time: 200` at its own 32 FE a tick. The lava craft starts from progress 0 and runs the full 200 ticks
+for exactly 6,400 FE.
+
+### The fluid path that worked, and the one that does not exist
+
+- **`Host::fluid_insert` is not in the mod API at this pin.** The game has `native_fluid_insert`
+  (`game/machines/native_fluids.rs`), but the SDK's `Host` has no such method; what a mod can reach is
+  the **capability**: `level.capability(&mut *host, &FLUIDS, pos, Some(face))` →
+  `ResourceHandler<FluidResource>` → `insert_any`, which is exactly what `rangedpumps` drains through
+  and what this port fills through. The engine builds that handler from
+  `Registrar::block_fluids` — so the `accepted 1000` in phase P is the declaration working end to end.
+- **`fluid_insert` refuses every fluid but `minecraft:water`/`minecraft:lava`** (HANDOVER §9f), and
+  this port needs neither more nor less: its two recipes take exactly those two.
+- **A `word` command argument stops at `:`** (`horizon-command`'s `is_allowed_in_unquoted` allows only
+  alphanumerics and `_ - . +`), so `/oritech fluid` takes its fluid as a greedy `text` **last**:
+  `<pos:block_pos> <amount:integer> <fluid:text>`. A `word` variant fails the parse with
+  *"Expected whitespace to end one argument"* — measured, and the first e2e run died on it.
+
+### Parity coverage (the mod's families, slices 1–3)
+
+The machine-checked form (`python3 ports/tools/check-coverage.py oritech`): one row per selector, the
+specific ones above the wildcard, so a carried-and-tested entry outranks the family it belongs to.
+
+| Family | Status | Evidence / reason |
+|---|---|---|
+| `oritech:basic_generator_block` | tested | A (no fuel, no FE), C (coal click, 32 FE a tick), F (stone refused), F2 (spectator), G (relaunch) |
+| `oritech:pulverizer_block` | tested | B (no power, keeps its bone), D (100 ticks, 3,200 FE), E (the adjacent generator drives it), N (tag recipe) |
+| `oritech:powered_furnace_block` | tested | H (no core), H2 (unassembled), I (core + assembly), J (100 ticks, 3,200 FE), L (core broken, progress kept) |
+| `oritech:cooler_block` | tested | P (no core), Q (core north), R (10 ticks), S (3 ice, exactly 6,400 FE, tank emptied), T (lava), V (item given) |
+| `oritech:machine_core_1` | tested | M places and reads it back; Q assembles the chiller with core 3 |
+| `oritech:machine_core_2` | tested | M; I assembles the furnace with core 2; T assembles the second chiller |
+| `oritech:machine_core_3` | tested | M; Q assembles the chiller with core 3 |
+| `oritech:machine_core_4` | tested | M; L reassembles the furnace with core 4 |
+| `oritech:machine_core_5` | tested | M |
+| `oritech:machine_core_6` | tested | M |
+| `oritech:machine_core_7` | tested | M |
+| `oritech:blocks/basic_generator_block` | tested | W: the carried loot table rolls the generator into the inventory |
+| `oritech:blocks/pulverizer_block` | tested | W |
+| `oritech:blocks/powered_furnace_block` | tested | W |
+| `oritech:blocks/cooler_block` | tested | W |
+| `oritech:blocks/machine_core_1` | tested | W |
+| `oritech:blocks/machine_core_2` | tested | W |
+| `oritech:blocks/machine_core_3` | tested | W |
+| `oritech:blocks/machine_core_4` | tested | W |
+| `oritech:blocks/machine_core_5` | tested | W |
+| `oritech:blocks/machine_core_6` | tested | W |
+| `oritech:blocks/machine_core_7` | tested | W |
+| `multiblock` | tested | furnace I/L (core above), chiller Q (core north) |
+| `block_entity` | tested | every machine read through `/oritech info` after a relaunch (G) and across a core break (L) |
+| `oritech:pulverizer/bone` | tested | D (100 ticks, 3,200 FE) and O |
+| `oritech:pulverizer/blaze` | tested | O: crafted, output id and count asserted, input consumed |
+| `oritech:pulverizer/dripstone` | tested | O |
+| `oritech:pulverizer/glowstoneore` | tested | O |
+| `oritech:pulverizer/coalore` | tested | N (tag form) and O |
+| `oritech:pulverizer/diamondore` | tested | O |
+| `oritech:pulverizer/lapisore` | tested | O |
+| `oritech:cooler/ice` | tested | R (10 ticks) and S (3 ice, exactly 6,400 FE, tank emptied) |
+| `oritech:cooler/obsidian` | tested | T (2 obsidian, exactly 6,400 FE) |
+| `oritech:cooler/snow` | blocked(fluid-whitelist: oritech:still_steam) | U measures the refusal (`accepted 0`); the fluid does not exist in this pack |
+| `recipe:oritech:pulverizer` | not ported | the other 117 need Oritech dusts/clumps/gems this port does not carry (gap 6) |
+| `recipe:oritech:cooler` | not ported | `compat/pneumaticcraft/plastic` needs PneumaticCraft (gap 4) and `snow` is blocked above |
+| `recipe:*` | not ported | assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel/lava generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting/crafting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
+| `tag:block` | not ported | 14 block tags (`frame_support`, `laser_accelerated`, …) belong to families outside this slice |
+| `tag:item` | not ported | 21 item tags (`biomatter`, `feeder_blacklist`, …) — same |
+| `tag:entity_type` | not ported | `spawner_blacklist` — the spawner family is not ported |
+| `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
+| `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
+| `command` | tested | `/oritech info` (every phase), `/oritech energy` (D, H, R, S, T), `/oritech fluid` (P, T, U) |
+| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the addons, the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, cooler's reactor kin, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above |
+
+`## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
+mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

@@ -536,6 +536,251 @@ impl SmeltingRecipe {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Slice 3: the Industrial Chiller (`oritech:cooler_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.coolerData.energyCapacity`.
+pub const COOLER_CAPACITY: i32 = 50_000;
+/// ...`.maxEnergyInsertion` (`32 * 8`): the most one insert moves.
+pub const COOLER_MAX_INSERT: i32 = 256;
+/// ...`.energyPerTick`: the config's own figure (the usage below is derived
+/// from it).
+pub const COOLER_ENERGY_PER_TICK: i32 = 32;
+/// `CoolerBlockEntity.fluidStorage` = `new SimpleFluidStorage(4 * bucketAmount())`:
+/// the machine's one tank, in millibuckets.
+pub const COOLER_TANK: i32 = 4_000;
+/// `CoolerBlockEntity.getCorePositions`: the one core, one block to the north
+/// (`Vec3i(0, 0, -1)`) — a different offset from the furnace's core, which is
+/// why the assembly reads it per machine.
+pub const COOLER_CORE_OFFSET: [i32; 3] = [0, 0, -1];
+/// `CoolerBlockEntity.processCraftInstance`'s fit rule: the output slot's count
+/// plus the result's must not pass 64. Upstream compares against a literal 64,
+/// not the item's stack size.
+pub const COOLER_OUTPUT_LIMIT: i32 = 64;
+
+/// `CoolerBlockEntity.calculateEnergyUsage` with its no-addon multipliers
+/// (`energyPerTick * efficiency(1) * (1 / speed(1))`). A cold biome halves both
+/// multipliers, which leaves the usage where it is and halves the duration; the
+/// pin has no biome read for a mod, so both are the warm figures here
+/// (`notes.md`, *Deviations (slice 3)*).
+#[must_use]
+pub fn cooler_energy_usage() -> i32 {
+    COOLER_ENERGY_PER_TICK
+}
+
+/// The ticks one craft of `time` takes here: `checkCraftingFinished`'s
+/// `progress >= time * speed`, never below one tick.
+#[must_use]
+pub fn cooler_ticks(time: u32) -> u32 {
+    time.max(1)
+}
+
+/// A recipe's fluid input: `FluidIngredient`'s `fluid` (an id, or `#tag` for a
+/// tag) and its `amount`, a bucket when the file leaves the amount out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FluidInput {
+    /// The fluid id, or `#tag` when the file names a tag.
+    pub fluid: String,
+    /// Millibuckets one craft takes.
+    pub amount: i32,
+}
+
+impl FluidInput {
+    /// Whether the file named a tag rather than one fluid.
+    #[must_use]
+    pub fn is_tag(&self) -> bool {
+        self.fluid.starts_with('#')
+    }
+}
+
+/// `CentrifugeBlockEntity.recipeInputMatchesTank`, the test the cooler reuses: a
+/// recipe that needs no fluid always matches; otherwise the tank must hold that
+/// fluid and at least the amount.
+///
+/// A tag input cannot be resolved here: the pin's mod API has no fluid-tag
+/// lookup, so such a recipe never matches and is recorded as a gap rather than
+/// silently treated as "any fluid".
+#[must_use]
+pub fn tank_matches(tank: Option<(&str, i32)>, input: &FluidInput) -> bool {
+    if input.amount <= 0 {
+        return true;
+    }
+    if input.is_tag() || input.fluid.is_empty() {
+        return false;
+    }
+    let Some((fluid, amount)) = tank else {
+        return false;
+    };
+    fluid == input.fluid && amount >= input.amount
+}
+
+/// `CoolerBlockEntity.processCraftInstance`: the whole result must fit the one
+/// output slot — the same item, and `count + result.count <= 64`.
+#[must_use]
+pub fn cooler_output_fits(output: Option<(&str, i32)>, result: &RecipeResult) -> bool {
+    let budget = COOLER_OUTPUT_LIMIT.max(0);
+    if result.count <= 0 || result.count > budget {
+        return false;
+    }
+    match output {
+        None => true,
+        Some((item, count)) => {
+            item == result.item && count.max(0).saturating_add(result.count) <= budget
+        }
+    }
+}
+
+/// The tank's amount after one craft takes `needed`: `None` when the craft took
+/// the last of it, because an empty tank is written as `minecraft:empty`.
+#[must_use]
+pub fn after_draining(amount: i32, needed: i32) -> Option<i32> {
+    let left = amount.saturating_sub(needed);
+    (left > 0).then_some(left)
+}
+
+/// Why a cooler recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoolerError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `fluidInput`, or a fluid input with no fluid id.
+    BadFluid,
+    /// No result with an item id, a count outside 1..=99, or more than one
+    /// result (the cooler has one output slot).
+    BadResult,
+    /// No positive `time`.
+    BadTime,
+}
+
+impl std::fmt::Display for CoolerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::BadFluid => "no fluid input",
+            Self::BadResult => "no result with an item id, a bad count, or more than one",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for CoolerError {}
+
+/// One `oritech:cooler` recipe: a fluid in, one item out, in `time` ticks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoolerRecipe {
+    /// The recipe id.
+    pub id: String,
+    /// The fluid it takes.
+    pub fluid: FluidInput,
+    /// Its one result.
+    pub result: RecipeResult,
+    /// `time`, in ticks.
+    pub time: u32,
+}
+
+impl CoolerRecipe {
+    /// Parse one `oritech:cooler` file: `{type, fluidInput: {fluid, amount?},
+    /// results: [{id, count}], time}`.
+    pub fn parse(id: &str, json: &str) -> Result<Self, CoolerError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| CoolerError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(CoolerError::Unreadable);
+        }
+        // `FluidIngredient.CODEC`: `fluid` is an id or `#tag`, and `amount`
+        // defaults to one bucket when the file leaves it out.
+        let input = value
+            .get("fluidInput")
+            .ok_or(CoolerError::BadFluid)?
+            .as_object()
+            .ok_or(CoolerError::BadFluid)?;
+        let fluid = input
+            .get("fluid")
+            .and_then(Value::as_str)
+            .filter(|fluid| !fluid.is_empty())
+            .ok_or(CoolerError::BadFluid)?;
+        let amount = match input.get("amount") {
+            None => 1_000,
+            Some(amount) => amount
+                .as_i64()
+                .filter(|amount| *amount > 0)
+                .ok_or(CoolerError::BadFluid)?,
+        };
+        // The cooler has one output slot: one result, or the recipe cannot run.
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(CoolerError::BadResult)?;
+        if results.len() != 1 {
+            return Err(CoolerError::BadResult);
+        }
+        let entry = &results[0];
+        let item = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|item| !item.is_empty())
+            .ok_or(CoolerError::BadResult)?;
+        let count = entry.get("count").and_then(Value::as_i64).unwrap_or(1);
+        if !(1..=99).contains(&count) {
+            return Err(CoolerError::BadResult);
+        }
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(CoolerError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            fluid: FluidInput {
+                fluid: fluid.to_owned(),
+                amount: i32::try_from(amount).unwrap_or(i32::MAX),
+            },
+            result: RecipeResult {
+                item: item.to_owned(),
+                count: i32::try_from(count).unwrap_or(1),
+            },
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Industrial Chiller's state: the buffer, the progress toward the current
+/// craft and the recipe it belongs to — the same three values the Pulverizer and
+/// the Furnace keep, because the pin's machines advance one way.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Cooler {
+    /// Stored FE.
+    pub energy: i32,
+    /// Ticks done toward the current craft.
+    pub progress: u32,
+    /// The recipe being worked on; empty when none.
+    pub recipe: String,
+}
+
+impl Cooler {
+    /// An empty, unassembled chiller's state.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick. `work` is `None` when the tank does not hold a recipe's
+    /// fluid, its output does not fit, or the machine is not assembled.
+    pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            cooler_energy_usage(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,5 +1370,282 @@ mod tests {
             "there is no eighth tier"
         );
         assert_eq!(core_quality("minecraft:iron_block"), None);
+    }
+
+    // -- slice 3: the Industrial Chiller --------------------------------------
+
+    #[test]
+    fn the_coolers_numbers_are_the_jars() {
+        assert_eq!(COOLER_CAPACITY, 50_000, "coolerData.energyCapacity");
+        assert_eq!(COOLER_MAX_INSERT, 256, "32 * 8");
+        assert_eq!(COOLER_ENERGY_PER_TICK, 32, "coolerData.energyPerTick");
+        assert_eq!(COOLER_TANK, 4_000, "SimpleFluidStorage(4 * bucketAmount())");
+        assert_eq!(cooler_energy_usage(), 32, "32 * 1 * (1 / 1)");
+        assert_eq!(cooler_ticks(200), 200, "a 200-tick file at speed 1");
+        assert_eq!(cooler_ticks(0), 1, "never below one tick");
+        assert_eq!(
+            COOLER_CORE_OFFSET,
+            [0, 0, -1],
+            "getCorePositions: the core sits to the north"
+        );
+        assert_ne!(
+            COOLER_CORE_OFFSET, CORE_OFFSET,
+            "the two multiblocks do not share an offset"
+        );
+    }
+
+    #[test]
+    fn the_cooler_spends_32_fe_a_tick() {
+        let mut cooler = Cooler {
+            energy: 1_000,
+            progress: 0,
+            recipe: String::new(),
+        };
+        assert_eq!(cooler.tick(work("oritech:cooler/ice", 200)), Step::Working);
+        assert_eq!(cooler.energy, 968, "one working tick is 32 FE");
+        assert_eq!(cooler.progress, 1);
+        assert_eq!(cooler.recipe, "oritech:cooler/ice");
+    }
+
+    #[test]
+    fn the_cooler_finishes_in_200_ticks_for_6400_fe() {
+        let mut cooler = Cooler {
+            energy: COOLER_CAPACITY,
+            progress: 0,
+            recipe: String::new(),
+        };
+        let mut ticks = 0;
+        loop {
+            ticks += 1;
+            if cooler.tick(work("oritech:cooler/ice", 200)) == Step::Finished {
+                break;
+            }
+            assert!(ticks < 500, "the chiller never finished");
+        }
+        assert_eq!(ticks, 200, "the jar's `time: 200` at speed 1");
+        assert_eq!(COOLER_CAPACITY - cooler.energy, 6_400, "200 ticks x 32 FE");
+        assert_eq!(cooler.progress, 0, "the finished craft resets the progress");
+    }
+
+    #[test]
+    fn a_starved_cooler_keeps_its_progress_and_no_work_resets_it() {
+        let mut cooler = Cooler {
+            energy: 10,
+            progress: 40,
+            recipe: "oritech:cooler/ice".to_owned(),
+        };
+        assert_eq!(cooler.tick(work("oritech:cooler/ice", 200)), Step::Starved);
+        assert_eq!(cooler.progress, 40, "a starved craft keeps its progress");
+        assert_eq!(cooler.energy, 10, "and spends nothing");
+
+        let mut cooler = Cooler {
+            energy: 100,
+            progress: 40,
+            recipe: "oritech:cooler/ice".to_owned(),
+        };
+        assert_eq!(cooler.tick(None), Step::Idle);
+        assert_eq!(cooler.progress, 0, "no work resets the progress");
+        assert!(cooler.recipe.is_empty(), "and forgets the recipe");
+        assert_eq!(cooler.energy, 100, "without spending FE");
+    }
+
+    #[test]
+    fn the_tank_holds_what_the_recipe_needs_and_nothing_else() {
+        let water = FluidInput {
+            fluid: "minecraft:water".to_owned(),
+            amount: 1_000,
+        };
+        assert!(tank_matches(Some(("minecraft:water", 1_000)), &water));
+        assert!(
+            tank_matches(Some(("minecraft:water", 4_000)), &water),
+            "a full tank has room for the craft"
+        );
+        assert!(
+            !tank_matches(Some(("minecraft:water", 999)), &water),
+            "a bucket short is not enough"
+        );
+        assert!(
+            !tank_matches(Some(("minecraft:lava", 4_000)), &water),
+            "lava is not water"
+        );
+        assert!(!tank_matches(None, &water), "an empty tank matches nothing");
+        let steam = FluidInput {
+            fluid: "#c:steam".to_owned(),
+            amount: 32,
+        };
+        assert!(steam.is_tag());
+        assert!(
+            !tank_matches(Some(("#c:steam", 4_000)), &steam),
+            "a fluid tag cannot be resolved at this pin, so it must not match"
+        );
+        assert!(
+            tank_matches(
+                None,
+                &FluidInput {
+                    fluid: String::new(),
+                    amount: 0,
+                }
+            ),
+            "a recipe that needs no fluid matches an empty tank"
+        );
+    }
+
+    #[test]
+    fn the_cooler_parser_reads_the_jars_ice_recipe() {
+        let json = r#"{
+          "type": "oritech:cooler",
+          "fluidInput": {"fluid": "minecraft:water"},
+          "ingredients": [],
+          "results": [{"count": 3, "id": "minecraft:ice"}],
+          "time": 200
+        }"#;
+        let recipe =
+            CoolerRecipe::parse("oritech:cooler/ice", json).expect("the jar's ice recipe parses");
+        assert_eq!(recipe.id, "oritech:cooler/ice");
+        assert_eq!(recipe.fluid.fluid, "minecraft:water");
+        assert_eq!(
+            recipe.fluid.amount, 1_000,
+            "FluidIngredient's amount defaults to one bucket"
+        );
+        assert_eq!(recipe.result.item, "minecraft:ice");
+        assert_eq!(recipe.result.count, 3);
+        assert_eq!(recipe.time, 200);
+    }
+
+    #[test]
+    fn the_cooler_parser_reads_an_amount_and_a_tag() {
+        let lava = r#"{
+          "type": "oritech:cooler",
+          "fluidInput": {"fluid": "minecraft:lava", "amount": 500},
+          "ingredients": [],
+          "results": [{"count": 2, "id": "minecraft:obsidian"}],
+          "time": 200
+        }"#;
+        let recipe = CoolerRecipe::parse("oritech:cooler/obsidian", lava).expect("parses");
+        assert_eq!(recipe.fluid.amount, 500, "an explicit amount is kept");
+        assert_eq!(recipe.result.item, "minecraft:obsidian");
+        assert_eq!(recipe.result.count, 2);
+
+        let steam = r##"{
+          "type": "oritech:cooler",
+          "fluidInput": {"fluid": "#c:steam", "amount": 32},
+          "ingredients": [],
+          "results": [{"count": 3, "id": "minecraft:snow_block"}],
+          "time": 200
+        }"##;
+        let recipe = CoolerRecipe::parse("oritech:cooler/snow", steam).expect("parses");
+        assert_eq!(recipe.fluid.fluid, "#c:steam");
+        assert!(recipe.fluid.is_tag());
+    }
+
+    #[test]
+    fn the_cooler_parser_refuses_what_the_machine_cannot_run() {
+        let good = r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+            "ingredients":[],"results":[{"count":3,"id":"minecraft:ice"}],"time":200}"#;
+        assert!(CoolerRecipe::parse("r", good).is_ok());
+
+        let cases = [
+            ("unreadable", "{", CoolerError::Unreadable),
+            (
+                "no type",
+                r#"{"fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":3,"id":"minecraft:ice"}],"time":200}"#,
+                CoolerError::Unreadable,
+            ),
+            (
+                "no fluid",
+                r#"{"type":"oritech:cooler","fluidInput":{},
+                    "results":[{"count":3,"id":"minecraft:ice"}],"time":200}"#,
+                CoolerError::BadFluid,
+            ),
+            (
+                "no fluidInput",
+                r#"{"type":"oritech:cooler",
+                    "results":[{"count":3,"id":"minecraft:ice"}],"time":200}"#,
+                CoolerError::BadFluid,
+            ),
+            (
+                "no results",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[],"time":200}"#,
+                CoolerError::BadResult,
+            ),
+            (
+                "two results",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":1,"id":"minecraft:ice"},{"count":1,"id":"minecraft:snow_block"}],
+                    "time":200}"#,
+                CoolerError::BadResult,
+            ),
+            (
+                "a zero count",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":0,"id":"minecraft:ice"}],"time":200}"#,
+                CoolerError::BadResult,
+            ),
+            (
+                "no id",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":3}],"time":200}"#,
+                CoolerError::BadResult,
+            ),
+            (
+                "no time",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":3,"id":"minecraft:ice"}]}"#,
+                CoolerError::BadTime,
+            ),
+            (
+                "a zero time",
+                r#"{"type":"oritech:cooler","fluidInput":{"fluid":"minecraft:water"},
+                    "results":[{"count":3,"id":"minecraft:ice"}],"time":0}"#,
+                CoolerError::BadTime,
+            ),
+        ];
+        for (what, json, want) in cases {
+            assert_eq!(CoolerRecipe::parse("r", json), Err(want), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_cooler_output_must_fit_its_one_slot() {
+        let ice = RecipeResult {
+            item: "minecraft:ice".to_owned(),
+            count: 3,
+        };
+        assert!(cooler_output_fits(None, &ice), "an empty slot takes 3");
+        assert!(
+            cooler_output_fits(Some(("minecraft:ice", 61)), &ice),
+            "61 + 3 is exactly the cap"
+        );
+        assert!(
+            !cooler_output_fits(Some(("minecraft:ice", 62)), &ice),
+            "62 + 3 passes the 64-item cap"
+        );
+        assert!(
+            !cooler_output_fits(Some(("minecraft:snow_block", 0)), &ice),
+            "another item cannot share the slot"
+        );
+        assert!(
+            !cooler_output_fits(
+                None,
+                &RecipeResult {
+                    item: "minecraft:ice".to_owned(),
+                    count: 65,
+                }
+            ),
+            "a result larger than the cap never fits"
+        );
+    }
+
+    #[test]
+    fn one_craft_takes_exactly_the_recipes_amount_out_of_the_tank() {
+        assert_eq!(after_draining(4_000, 1_000), Some(3_000));
+        assert_eq!(
+            after_draining(1_000, 1_000),
+            None,
+            "the last bucket empties the tank"
+        );
+        assert_eq!(after_draining(999, 1_000), None, "never negative");
     }
 }

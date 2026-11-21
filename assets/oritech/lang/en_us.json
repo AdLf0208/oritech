@@ -1,5 +1,6 @@
 {
   "block.oritech.basic_generator_block": "Basic Generator",
+  "block.oritech.cooler_block": "Industrial Chiller",
   "block.oritech.machine_core_1": "Primitive Machine Core",
   "block.oritech.machine_core_2": "Basic Machine Core",
   "block.oritech.machine_core_3": "Improved Machine Core",

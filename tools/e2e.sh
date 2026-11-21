@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# In-game check for Oritech slices 1 and 2: the Basic Generator, the Pulverizer
-# and the Powered Furnace multiblock (controller + one machine core).
+# In-game check for Oritech slices 1 to 3: the Basic Generator, the Pulverizer,
+# the Powered Furnace multiblock (controller + one machine core) and the
+# Industrial Chiller (a second multiblock, with a fluid tank).
 #
-# STATUS: 0.2.2 (SDK package, pin 0a875da). The run needs a game the launcher
+# STATUS: 0.2.3 (SDK package, pin 0a875da). The run needs a game the launcher
 # built with this package: `ports/tools/launcher-game.sh build oritech`, then
 # `eval "$(ports/tools/launcher-game.sh env oritech)"` and this script in a
 # build-slot lease. The 0.1.0 and 0.2.x runs are the historical evidence for
-# the slice-1 behaviour; every run of this file is the oracle for both slices.
+# the slice-1 behaviour; every run of this file is the oracle for all slices.
 #
 # The arena is the Overworld at y=100 (a stone floor, clear air above), so every
 # block read and right click is in the player's own dimension (`ctl tp` is
@@ -42,14 +43,29 @@
 #  - breaking the core disassembles the machine mid-smelt, keeps its progress
 #    and spends nothing until it is assembled again with another core;
 #  - the seven machine cores and the furnace block place and read back, and
-#    `oritech:machine_core_8` is refused.
+#    `oritech:machine_core_8` is refused;
+#  - an industrial chiller with no core freezes nothing even with water and 5,000
+#    FE (the second multiblock's assembly gate);
+#  - a bucket of water enters its tank through the block's own declared
+#    `horizon:fluids` handler (the reply names what was accepted), its core
+#    assembles it one block to the north, 320 FE advances the craft exactly ten
+#    ticks, and water becomes exactly 3 ice for exactly 6,400 FE with the tank
+#    emptied;
+#  - lava becomes exactly 2 obsidian on a second chiller (the second carried
+#    recipe), and `oritech:still_steam` is refused: the jar's snow recipe is the
+#    recorded gap;
+#  - `/oritech fluid` answers a block without a tank (the furnace) with its
+#    refusal, so the declaration is per block;
+#  - every carried loot table rolls its block into the inventory, and a table
+#    that does not exist gives nothing.
 #
 # CONTROL=1 (with CONTROL_GAME set) launches the package-less build first, where
 # every id must be unknown: that is the differential run, and without it the
 # scenario proves only that the ids exist.
 #
 # SELFTEST=1 flips the exact-FE assertion of each machine leg (it must FAIL),
-# proving the scenario can fail.
+# proving the scenario can fail; `SELFTEST_COOLER=1` does the same for the
+# chiller's leg on its own.
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -70,6 +86,7 @@ CONTROL_WORLD=OritechControl
 GENERATOR=oritech:basic_generator_block
 PULVERIZER=oritech:pulverizer_block
 FURNACE=oritech:powered_furnace_block
+COOLER=oritech:cooler_block
 # The jar's numbers (`FINDINGS.md`).
 GENERATOR_RATE=32
 ROOM_CAPACITY=25000
@@ -81,6 +98,13 @@ FURNACE_CAPACITY=10000
 FURNACE_RATE=32
 FURNACE_TICKS=100
 FURNACE_CORE_TIER=2
+# Slice 3: `OritechConfig.processingMachines.coolerData` (50,000 FE, 32 FE a
+# tick, speed 1) and the jar's `time: 200` / one bucket a craft.
+COOLER_CAPACITY=50000
+COOLER_RATE=32
+COOLER_TICKS=200
+COOLER_TANK=4000
+COOLER_CORE_TIER=3
 
 command -v jq >/dev/null || { echo "missing jq (every assertion parses a ctl reply)" >&2; exit 1; }
 command -v "$CTL" >/dev/null || { echo "missing horizon-ctl: $CTL" >&2; exit 1; }
@@ -94,13 +118,13 @@ command -v "$CTL" >/dev/null || { echo "missing horizon-ctl: $CTL" >&2; exit 1; 
     || { echo "CONTROL_GAME is set but not executable: $CONTROL_GAME" >&2; exit 1; }
 [ -d "$RES/assets" ] || { echo "missing prepared resources: $RES" >&2; exit 1; }
 
-SCRATCH=$(mktemp -d /tmp/opencode/oritech-home.XXXXXX)
+SCRATCH=$(mktemp -d "${E2E_TMP:-/tmp/opencode}/oritech-home.XXXXXX")
 export HORIZON_HOME=$SCRATCH/game
 export HORIZON_LAUNCHER_HOME=$SCRATCH/launcher
 export XDG_DATA_HOME=$SCRATCH/data
 export XDG_CONFIG_HOME=$SCRATCH/config
 export HORIZON_NO_AUDIO=1
-mkdir -p "$(dirname "$SOCK")" "$XDG_CONFIG_HOME"
+mkdir -p "${E2E_TMP:-/tmp/opencode}" "$(dirname "$SOCK")" "$XDG_CONFIG_HOME"
 rm -f "$SOCK"
 
 ctl() { "$CTL" --socket "$SOCK" "$@"; }
@@ -205,6 +229,26 @@ info() { # info X Y Z
     fail "no fresh /oritech info reply for $x,$y,$z: $(jq -c '{chat,action_bar}' <<<"$out")"
 }
 
+# `/oritech fluid X Y Z FLUID AMOUNT`: fill a machine's tank through the engine's
+# own fluid handler. Answers the reply line, retried until a *new* one arrives
+# (the chat read lags the send by ~1-2 s here).
+fluid_put() { # fluid_put X Y Z FLUID AMOUNT
+    local x=$1 y=$2 z=$3 fluid=$4 amount=$5 before out line
+    before=$(ctl messages 24 | jq -r '.chat[]' | grep -F "at [$x, $y, $z]: tank" || true)
+    say "oritech fluid $x $y $z $amount $fluid"
+    for _ in $(seq 1 30); do
+        ctl wait 4 >/dev/null
+        out=$(ctl messages 24)
+        line=$(jq -r '.chat[]' <<<"$out" | grep -F "at [$x, $y, $z]: tank" | head -1 || true)
+        if [ -n "$line" ] && [ "$line" != "$before" ]; then
+            echo "  fluid($x,$y,$z): $line" >&2
+            echo "$line"
+            return
+        fi
+    done
+    fail "no fresh /oritech fluid reply for $x,$y,$z: $(jq -c '{chat}' <<<"$out")"
+}
+
 # feed X Y Z ITEM: stand beside the machine and right-click it with ITEM in hand (the
 # player's own insertion path; the machine keeps its slots in the mod's view).
 feed() { # feed X Y Z ITEM
@@ -261,13 +305,17 @@ control_leg() {
     # may exist, so the furnace leg cannot pass by accident.
     ctl command "setblock 8 100 0 $FURNACE" >/dev/null 2>&1 || true
     ctl command "setblock 8 101 0 oritech:machine_core_2" >/dev/null 2>&1 || true
+    ctl command "setblock 12 100 0 $COOLER" >/dev/null 2>&1 || true
+    ctl command "setblock 12 100 -1 oritech:machine_core_2" >/dev/null 2>&1 || true
     ctl wait 4
-    local furnace core
+    local furnace core chiller
     furnace=$(block_name 8 100 0)
     core=$(block_name 8 101 0)
+    chiller=$(block_name 12 100 0)
     [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
     [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
-    echo "  without this package: no generator item, and the generator, furnace and core blocks all stayed $name"
+    [ "$chiller" = "minecraft:air" ] || fail "the control game holds $chiller, so the chiller id was known"
+    echo "  without this package: no generator item, and the generator, furnace, core and chiller blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -701,4 +749,204 @@ for i in "${!RECIPE_INPUTS[@]}"; do
 done
 
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed"
+echo "== P: a chiller with no core freezes nothing, even with a bucket of water and 5,000 FE =="
+ctl command "setblock 12 100 0 $COOLER" >/dev/null
+ctl wait 6
+[ "$(block_name 12 100 0)" = "$COOLER" ] || fail "the chiller did not place"
+line=$(info 12 100 0)
+read_info "$line"
+expect KIND cooler
+expect ENERGY 0
+expect ASSEMBLED no
+expect CORE empty
+expect TANK_FLUID empty
+say "oritech energy 12 100 0 5000"
+ctl wait 8
+# The tank is filled through the engine's own `horizon:fluids` handler, which is
+# built from the tanks this block *declared*: `accepted 1000` is the declaration
+# working, and a block without one accepts nothing (phase U).
+line=$(fluid_put 12 100 0 minecraft:water 1000)
+read_info "$line"
+expect KIND fluid
+expect TANK_FLUID minecraft:water
+expect TANK_AMOUNT 1000
+expect TANK_CAP "$COOLER_TANK"
+expect ASKED 1000
+expect ACCEPTED 1000
+ctl wait 60
+line=$(info 12 100 0)
+read_info "$line"
+expect ENERGY 5000
+expect PROGRESS 0
+expect TANK_AMOUNT 1000
+expect OUT0 empty
+has_not 12 100 0 minecraft:ice
+echo "  unassembled, with water and 5,000 FE: still progress $PROGRESS, $ENERGY FE, tank $TANK_FLUID $TANK_AMOUNT, no ice"
+
+echo "== Q: a machine core to the north assembles the chiller; the empty-hand click gates it =="
+ctl give "oritech:machine_core_$COOLER_CORE_TIER" 1 >/dev/null
+ctl wait 3
+ctl select "oritech:machine_core_$COOLER_CORE_TIER" >/dev/null
+ctl wait 3
+ctl command "execute in minecraft:overworld run tp @s 12.5 100 2.5" >/dev/null
+ctl wait 6
+ctl look-at-block 12 100 0 south >/dev/null
+ctl wait 2
+echo "  core click: $(ctl interact 12 100 0 | jq -c '{ok, block: .block.block}')"
+ctl wait 8
+COOLER_CORE_BLOCK=$(block_name 12 100 -1)
+[ "$COOLER_CORE_BLOCK" = "oritech:machine_core_$COOLER_CORE_TIER" ] \
+    || fail "the core click left $COOLER_CORE_BLOCK north of the chiller, not a machine core"
+echo "  block(12,100,-1) = $COOLER_CORE_BLOCK (the chiller's core is north, not above)"
+ctl command "clear @s" >/dev/null
+ctl wait 6
+ctl look-at-block 12 100 0 south >/dev/null
+ctl wait 2
+ctl interact 12 100 0 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 12 100 0)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE "oritech:machine_core_$COOLER_CORE_TIER"
+expect QUALITY "$COOLER_CORE_TIER"
+echo "  assembled: core $CORE quality $QUALITY, progress $PROGRESS"
+
+echo "== R: 320 FE advances the craft exactly ten ticks =="
+# The assembly started the craft against the 5,000 FE: take the buffer to zero and
+# record where the progress stands, then pay for exactly ten ticks.
+say "oritech energy 12 100 0 0"
+ctl wait 8
+line=$(info 12 100 0)
+read_info "$line"
+expect ENERGY 0
+P_ZERO=$PROGRESS
+[ "$P_ZERO" -lt "$COOLER_TICKS" ] || fail "the craft finished before the measurement"
+say "oritech energy 12 100 0 $((COOLER_RATE * 10))"
+ctl wait 40
+line=$(info 12 100 0)
+read_info "$line"
+expect ENERGY 0
+[ "$PROGRESS" -eq "$((P_ZERO + 10))" ] \
+    || fail "320 FE should be exactly 10 ticks of work: progress $P_ZERO -> $PROGRESS"
+P_START=$PROGRESS
+[ "$P_START" -lt "$COOLER_TICKS" ] || fail "the craft finished in ten ticks"
+expect TANK_AMOUNT 1000
+echo "  320 FE advanced the craft exactly 10 ticks ($P_ZERO -> $P_START of $COOLER_TICKS), tank still $TANK_AMOUNT mB"
+
+echo "== S: a bucket of water -> exactly 3 ice for exactly 6,400 FE, tank empty =="
+NEEDED=$((COOLER_RATE * (COOLER_TICKS - P_START)))
+say "oritech energy 12 100 0 $NEEDED"
+ctl wait 8
+line=$(info 12 100 0)
+read_info "$line"
+[ "$RECIPE" = "oritech:cooler/ice" ] || fail "the working chiller's recipe is '$RECIPE'"
+ctl wait 200
+line=$(info 12 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect OUT0 "minecraft:ice x3"
+expect TANK_FLUID empty
+expect TANK_AMOUNT 0
+WANT_LEFT=0
+# Its own switch, like the furnace's: the slice-3 exact-FE assertion is proven
+# fail-capable on its own.
+if [ "${SELFTEST_COOLER:-0}" = 1 ] || [ "$SELFTEST" = 1 ]; then
+    echo "  SELFTEST: expecting $COOLER_RATE FE left in the buffer (this must fail)"
+    WANT_LEFT=$COOLER_RATE
+fi
+[ "$ENERGY" -eq "$WANT_LEFT" ] \
+    || fail "$((COOLER_TICKS - P_START)) ticks needed exactly $NEEDED FE, so the buffer should hold $WANT_LEFT, not $ENERGY"
+echo "  from progress $P_START: $((COOLER_TICKS - P_START)) ticks spent exactly $NEEDED FE, buffer $ENERGY, out $OUT0, tank empty"
+
+echo "== T: a bucket of lava -> exactly 2 obsidian (the second carried recipe) =="
+ctl command "setblock 16 100 0 $COOLER" >/dev/null
+ctl command "setblock 16 100 -1 oritech:machine_core_2" >/dev/null
+ctl wait 8
+[ "$(block_name 16 100 0)" = "$COOLER" ] || fail "the second chiller did not place"
+ctl command "execute in minecraft:overworld run tp @s 16.5 100 2.5" >/dev/null
+ctl wait 6
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl look-at-block 16 100 0 south >/dev/null
+ctl wait 2
+ctl interact 16 100 0 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 16 100 0)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE oritech:machine_core_2
+line=$(fluid_put 16 100 0 minecraft:lava 1000)
+read_info "$line"
+expect TANK_FLUID minecraft:lava
+expect ACCEPTED 1000
+say "oritech energy 16 100 0 $((COOLER_RATE * COOLER_TICKS))"
+ctl wait 8
+line=$(info 16 100 0)
+read_info "$line"
+[ "$RECIPE" = "oritech:cooler/obsidian" ] || fail "the lava chiller's recipe is '$RECIPE'"
+ctl wait 240
+line=$(info 16 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect OUT0 "minecraft:obsidian x2"
+expect TANK_FLUID empty
+expect ENERGY 0
+echo "  lava -> $OUT0 for exactly $((COOLER_RATE * COOLER_TICKS)) FE, tank empty"
+
+echo "== U: the tank is per block, and a fluid this pack does not have is refused =="
+# The furnace has an item input and an FE buffer but no tank, so `/oritech fluid`
+# answers its refusal instead of filling anything: the declaration is per block.
+say "oritech fluid 8 100 0 1000 minecraft:water"
+ctl wait 10
+ctl messages 24 | jq -r '.chat[]' | grep -F "[8, 100, 0] has no Oritech fluid tank." >/dev/null \
+    || fail "the furnace accepted a fluid: $(ctl messages 6 | jq -c '.chat')"
+echo "  the furnace has no tank: /oritech fluid answered '[8, 100, 0] has no Oritech fluid tank.'"
+# `snow.json` takes `oritech:still_steam`, a fluid this package does not declare
+# (it is not carried: a recipe that can never match is dead data). The engine
+# cannot even name it, so nothing is accepted — the measured gap.
+line=$(fluid_put 12 100 0 oritech:still_steam 1000)
+read_info "$line"
+expect ACCEPTED 0
+expect TANK_FLUID empty
+echo "  oritech:still_steam: accepted $ACCEPTED of $ASKED mB, tank $TANK_FLUID (the jar's snow recipe is recorded as a gap)"
+
+echo "== V: the chiller's block and item place and read back =="
+ctl give "$COOLER" 1 >/dev/null
+ctl wait 4
+ctl inventory | jq -e --arg item "$COOLER" \
+    '[.hotbar[], .main[] | select(.item == $item)] | length > 0' >/dev/null \
+    || fail "the chiller item could not be given"
+echo "  block(12,100,0) = $COOLER, block(16,100,0) = $COOLER, and its item is in the inventory"
+
+echo "== W: every carried loot table rolls its own block =="
+# The ten carried `data/oritech/loot_table/blocks/*.json` are the jar's self-drop,
+# rewritten into 26.3's singular `condition`. Rolling each table directly asserts
+# the table loads and its entry resolves; a missing table answers an error and the
+# item never arrives.
+ctl command "clear @s" >/dev/null
+ctl wait 4
+for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" \
+    oritech:machine_core_1 oritech:machine_core_2 oritech:machine_core_3 \
+    oritech:machine_core_4 oritech:machine_core_5 oritech:machine_core_6 \
+    oritech:machine_core_7; do
+    ctl command "loot give @s loot oritech:blocks/${block#oritech:}" >/dev/null
+done
+ctl wait 8
+INV=$(ctl inventory)
+for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" \
+    oritech:machine_core_1 oritech:machine_core_7; do
+    jq -e --arg item "$block" \
+        '[.hotbar[], .main[] | select(.item == $item)] | length > 0' <<<"$INV" >/dev/null \
+        || fail "loot table oritech:blocks/${block#oritech:} gave nothing: $(jq -c '{hotbar, main}' <<<"$INV")"
+done
+echo "  every carried loot table rolled its block into the inventory"
+# A table that does not exist must give nothing: the assertion above is not
+# satisfied by any `/loot` call, only by a table that resolves.
+BEFORE=$(jq '[.hotbar[], .main[]] | length' <<<"$INV")
+ctl command "loot give @s loot oritech:blocks/no_such_block" >/dev/null 2>&1 || true
+ctl wait 6
+AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
+[ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
+echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
+
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, and every carried loot table rolled its own block"
