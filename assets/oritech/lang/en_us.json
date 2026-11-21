@@ -1,5 +1,13 @@
 {
   "block.oritech.basic_generator_block": "Basic Generator",
+  "block.oritech.machine_core_1": "Primitive Machine Core",
+  "block.oritech.machine_core_2": "Basic Machine Core",
+  "block.oritech.machine_core_3": "Improved Machine Core",
+  "block.oritech.machine_core_4": "Advanced Machine Core",
+  "block.oritech.machine_core_5": "Elite Machine Core",
+  "block.oritech.machine_core_6": "Ultra Machine Core",
+  "block.oritech.machine_core_7": "Ultimate Machine Core",
+  "block.oritech.powered_furnace_block": "Powered Furnace",
   "block.oritech.pulverizer_block": "Pulverizer",
   "itemgroup.oritech.machines": "Oritech Machines"
 }

@@ -2,7 +2,15 @@
   "icon": "oritech:basic_generator_block",
   "items": [
     "oritech:basic_generator_block",
-    "oritech:pulverizer_block"
+    "oritech:pulverizer_block",
+    "oritech:powered_furnace_block",
+    "oritech:machine_core_1",
+    "oritech:machine_core_2",
+    "oritech:machine_core_3",
+    "oritech:machine_core_4",
+    "oritech:machine_core_5",
+    "oritech:machine_core_6",
+    "oritech:machine_core_7"
   ],
   "title": "itemgroup.oritech.machines"
 }

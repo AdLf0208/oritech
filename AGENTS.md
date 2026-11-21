@@ -21,26 +21,41 @@ carried content and travel in the same file. The retired `.hnmod` layout is hist
 `../_shared/evidence/oritech/retired-hnmod-0.1.0/`.
 
 Keep every gameplay rule and number in `src/runtime.rs` with its test; the glue only reads the game,
-calls `runtime`, and writes the result back. **`src/runtime.rs` is byte-identical to the retired
-port's file (SHA-256 `0451000b2c153b1be1bb6750096a8cbf71b9c49de956ad7bc7195333c770661e`) — do not
-"tidy" it.** A declaration or readout test belongs next to its code in `src/support.rs`.
+calls `runtime`, and writes the result back. `src/runtime.rs`'s **slice-1 part** is byte-identical to the
+retired port's file up to and including `after_consuming` — do not "tidy" it; slice 2 appended the
+Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `core_quality`,
+`furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use). A
+declaration or readout test belongs next to its code in `src/support.rs`.
 
 Validate, in this order, each inside a lease:
 
 ```sh
 BUILD_LOCAL=1 ../tools/build-slot.sh run --job oritech-sdk --port ports/oritech --step test \
-    -- bash -c 'cd ports/oritech && CARGO_INCREMENTAL=0 cargo test --offline'
+    -- bash -c 'cd ports/oritech && rm -f Cargo.lock && CARGO_INCREMENTAL=0 cargo test --offline'
 BUILD_LOCAL=1 ../tools/build-slot.sh run --job oritech-sdk --port ports/oritech --step lint \
     -- bash -c 'cd ports/oritech && cargo fmt --check && CARGO_INCREMENTAL=0 cargo clippy --all-targets --offline -- -D warnings'
 BUILD_LOCAL=1 ../tools/build-slot.sh run --job oritech-sdk --port ports/oritech --step build \
-    -- bash -c 'cd ports/oritech && CARGO_INCREMENTAL=0 cargo horizon-mod build'
+    -- bash -c 'cd ports/oritech && rm -f Cargo.lock && CARGO_INCREMENTAL=0 cargo horizon-mod build'
 cp target/horizon-mod/oritech.hmod ./oritech.hmod
-cargo horizon-mod check oritech.hmod && cargo horizon-mod fits oritech.hmod --build nightly
+cargo horizon-mod check oritech.hmod && cargo horizon-mod fits oritech.hmod --build 0a875da
+cargo horizon-mod fits oritech.hmod --build 0b14f8a        # a *different* build: the pin run is a tautology
+```
+
+The in-game leg (launcher 0.2.92, nightly `0a875da`) needs a tree `Cargo.lock` for `native-build`
+while the package must not pack one, so:
+
+```sh
+cd ports/oritech
+CARGO_HOME=$HOME/.cache/horizon-e2e/root/data/horizon-launcher/cargo cargo generate-lockfile --offline
+../tools/launcher-game.sh build oritech     # game + control game, one global launcher lock
+rm -f Cargo.lock
+eval "$(../tools/launcher-game.sh env oritech)"
+BUILD_LOCAL=1 ../tools/build-slot.sh run --job oritech-e2e --port ports/oritech --step e2e \
+    -- bash ports/oritech/tools/e2e.sh      # PASS + EXIT:0; CONTROL=1, SELFTEST=1, SELFTEST_FURNACE=1
 ```
 
 `cargo horizon-mod build` packs; it does not compile against the game. The native compile is
-`horizon-launcher native-build . --instance <i> --trust-native-code`, which is **not installed
-here** — the compile gate is `cargo test` + `cargo clippy -D warnings`. The in-game leg needs a
+`horizon-launcher native-build . --instance <i> --trust-native-code`. The in-game leg needs the
 launcher-built game carrying this package: do not claim an in-game result without one.
 
 The package's one registry dependency is `serde_json`, so **keep `Cargo.lock`** (it is packed and

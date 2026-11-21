@@ -28,10 +28,22 @@ PULVERIZER = re.compile(
     r"input (?P<INPUT>.+?), out0 (?P<OUT0>.+?), out1 (?P<OUT1>.+?), t=(?P<T>\d+)$"
 )
 
+FURNACE = re.compile(
+    r"^Powered Furnace at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"input (?P<INPUT>.+?), out (?P<OUT0>.+?), t=(?P<T>\d+)$"
+)
+
 
 def main(argv: list[str]) -> int:
     line = " ".join(argv).strip()
-    for kind, pattern in (("generator", GENERATOR), ("pulverizer", PULVERIZER)):
+    for kind, pattern in (
+        ("generator", GENERATOR),
+        ("pulverizer", PULVERIZER),
+        ("furnace", FURNACE),
+    ):
         match = pattern.match(line)
         if not match:
             continue
@@ -45,10 +57,21 @@ def main(argv: list[str]) -> int:
             out.setdefault("INPUT", fields["FUEL"])
             out.setdefault("OUT0", "")
             out.setdefault("OUT1", "")
+            out.setdefault("ASSEMBLED", "")
+            out.setdefault("CORE", "")
+            out.setdefault("QUALITY", "")
+        elif kind == "pulverizer":
+            out.setdefault("BURN", "")
+            out.setdefault("MAXBURN", "")
+            out.setdefault("FUEL", "")
+            out.setdefault("ASSEMBLED", "")
+            out.setdefault("CORE", "")
+            out.setdefault("QUALITY", "")
         else:
             out.setdefault("BURN", "")
             out.setdefault("MAXBURN", "")
             out.setdefault("FUEL", "")
+            out.setdefault("OUT1", "")
         for key, value in out.items():
             print(f"{key}={shlex.quote(str(value))}")
         return 0

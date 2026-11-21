@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# In-game check for Oritech slice 1: the Basic Generator and the Pulverizer.
+# In-game check for Oritech slices 1 and 2: the Basic Generator, the Pulverizer
+# and the Powered Furnace multiblock (controller + one machine core).
 #
-# STATUS: 0.2.0 (SDK package). This scenario is the behaviour's oracle, but it
-# has NOT been re-run since the migration: a native `.hmod` loads only in a game
-# the launcher built with this package (`horizon-launcher native-build .
-# --instance <i> --trust-native-code`), and no launcher is installed in this
-# environment. The 0.1.0 runs are the historical evidence (they exercised a
-# byte-identical `src/runtime.rs` through the retired helper glue):
-#   ports/_shared/evidence/oritech/e2e.log
-#   ports/_shared/evidence/oritech/e2e-selftest.log
-#   ports/_shared/evidence/oritech/e2e-embedded.log
-#   ports/_shared/evidence/oritech/e2e-embedded-selftest.log
-# Do not claim a 0.2.0 in-game result without a new run of this script.
+# STATUS: 0.2.2 (SDK package, pin 0a875da). The run needs a game the launcher
+# built with this package: `ports/tools/launcher-game.sh build oritech`, then
+# `eval "$(ports/tools/launcher-game.sh env oritech)"` and this script in a
+# build-slot lease. The 0.1.0 and 0.2.x runs are the historical evidence for
+# the slice-1 behaviour; every run of this file is the oracle for both slices.
 #
 # The arena is the Overworld at y=100 (a stone floor, clear air above), so every
 # block read and right click is in the player's own dimension (`ctl tp` is
@@ -34,14 +29,27 @@
 #    its bone into 6 bone meal;
 #  - stone is refused as fuel and as an input, and is not placed on either
 #    machine (the click is claimed);
-#  - the machines keep their FE/burn/output across `save` + quit + relaunch.
+#  - a spectator's right click inserts nothing (the game-mode check runs before
+#    the slot write);
+#  - the machines keep their FE/burn/output across `save` + quit + relaunch;
+#  - a powered furnace with no core does nothing even with ore and 5,000 FE in
+#    it (the assembly gate's counterfactual);
+#  - a machine core in the hand is placed one block above the controller by a
+#    right click, and the empty-hand click assembles the multiblock;
+#  - 320 FE advances a smelt exactly ten ticks, and iron ore becomes an iron
+#    ingot for exactly 3,200 FE: the jar's 0.5 speed turns a 200-tick recipe
+#    into 100 ticks, and both a faster and a slower machine fail the assertion;
+#  - breaking the core disassembles the machine mid-smelt, keeps its progress
+#    and spends nothing until it is assembled again with another core;
+#  - the seven machine cores and the furnace block place and read back, and
+#    `oritech:machine_core_8` is refused.
 #
 # CONTROL=1 (with CONTROL_GAME set) launches the package-less build first, where
-# both ids must be unknown: that is the differential run, and without it the
+# every id must be unknown: that is the differential run, and without it the
 # scenario proves only that the ids exist.
 #
-# SELFTEST=1 flips the exact-FE assertion (it must FAIL), proving the scenario
-# can fail.
+# SELFTEST=1 flips the exact-FE assertion of each machine leg (it must FAIL),
+# proving the scenario can fail.
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -61,12 +69,18 @@ CONTROL_WORLD=OritechControl
 
 GENERATOR=oritech:basic_generator_block
 PULVERIZER=oritech:pulverizer_block
+FURNACE=oritech:powered_furnace_block
 # The jar's numbers (`FINDINGS.md`).
 GENERATOR_RATE=32
 ROOM_CAPACITY=25000
 RECIPE_TICKS=100
 PRIMED=10000
 SPENT=$((GENERATOR_RATE * RECIPE_TICKS))
+# Slice 2: `OritechConfig.FurnaceConfig` (10,000 FE, 32 FE a tick, 0.5 speed).
+FURNACE_CAPACITY=10000
+FURNACE_RATE=32
+FURNACE_TICKS=100
+FURNACE_CORE_TIER=2
 
 command -v jq >/dev/null || { echo "missing jq (every assertion parses a ctl reply)" >&2; exit 1; }
 command -v "$CTL" >/dev/null || { echo "missing horizon-ctl: $CTL" >&2; exit 1; }
@@ -122,20 +136,32 @@ launch() { # launch [WORLD] [GAME]
 }
 
 block_name() { ctl block "$1" "$2" "$3" | jq -r '.name // .block // empty'; }
-slots() { ctl container "$1" "$2" "$3" | jq -c '[.slots[] | select(. != null)]'; }
+# A mod block entity keeps its slots in the mod's own view, which `ctl container` (the
+# engine's vanilla container map) does not reach; the machine's own `/oritech info` line
+# is the readout, so these two helpers parse it (`read_info` sets FUEL/INPUT/OUT0/OUT1).
+machine_holds() { # machine_holds X Y Z ITEM
+    local line field
+    line=$(info "$1" "$2" "$3")
+    read_info "$line"
+    for field in FUEL INPUT OUT0 OUT1; do
+        case "${!field}" in
+            "$4 x"*|"$4") return 0 ;;
+        esac
+    done
+    return 1
+}
 has() { # has X Y Z ITEM COUNT
-    local got
-    got=$(slots "$1" "$2" "$3")
-    jq -e --arg item "$4" --argjson count "$5" \
-        '[.[] | select(.item == $item) | .count] | add // 0 | . == $count' <<<"$got" >/dev/null \
-        || fail "expected $5 x $4 at $1,$2,$3; got $got"
-    echo "  has($1,$2,$3) $4 x$5: ok"
+    machine_holds "$1" "$2" "$3" "$4" || fail "expected $5 x $4 at $1,$2,$3: $(info "$1" "$2" "$3")"
+    case "$5" in
+        1) ;;
+        *) fail "has only checks one item here, not $5" ;;
+    esac
+    echo "  has($1,$2,$3) $4: ok"
 }
 has_not() { # has_not X Y Z ITEM
-    local got
-    got=$(slots "$1" "$2" "$3")
-    jq -e --arg item "$4" '[.[] | select(.item == $item)] | length == 0' <<<"$got" >/dev/null \
-        || fail "did not expect $4 at $1,$2,$3; got $got"
+    if machine_holds "$1" "$2" "$3" "$4"; then
+        fail "did not expect $4 at $1,$2,$3: $(info "$1" "$2" "$3")"
+    fi
 }
 
 # A stone floor at y=99 with clear air above, in the Overworld, and the player
@@ -179,6 +205,21 @@ info() { # info X Y Z
     fail "no fresh /oritech info reply for $x,$y,$z: $(jq -c '{chat,action_bar}' <<<"$out")"
 }
 
+# feed X Y Z ITEM: stand beside the machine and right-click it with ITEM in hand (the
+# player's own insertion path; the machine keeps its slots in the mod's view).
+feed() { # feed X Y Z ITEM
+    ctl command "execute in minecraft:overworld run tp @s $1.5 100 $(( $3 - 2 )).5" >/dev/null
+    ctl wait 6
+    ctl command "item replace entity @s hotbar.0 with $4 1" >/dev/null
+    ctl wait 4
+    ctl select 1 >/dev/null
+    ctl wait 3
+    ctl look-at-block "$1" "$2" "$3" north >/dev/null
+    ctl wait 2
+    ctl interact "$1" "$2" "$3" >/dev/null 2>&1 || true
+    ctl wait 4
+}
+
 # Parses one info line into shell fields (ENERGY, CAPACITY, BURN, MAXBURN, FUEL,
 # PROGRESS, RECIPE, INPUT, OUT0, OUT1, T, KIND) and checks that all of them
 # parsed. Sets the caller's variables through `eval`.
@@ -216,7 +257,17 @@ control_leg() {
     local name
     name=$(block_name 0 100 0)
     [ "$name" = "minecraft:air" ] || fail "the control game holds $name, so the block id was known"
-    echo "  without this package: no generator item, the block stayed $name"
+    # Slice 2's ids too: without this package neither the controller nor a core
+    # may exist, so the furnace leg cannot pass by accident.
+    ctl command "setblock 8 100 0 $FURNACE" >/dev/null 2>&1 || true
+    ctl command "setblock 8 101 0 oritech:machine_core_2" >/dev/null 2>&1 || true
+    ctl wait 4
+    local furnace core
+    furnace=$(block_name 8 100 0)
+    core=$(block_name 8 101 0)
+    [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
+    [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
+    echo "  without this package: no generator item, and the generator, furnace and core blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -247,8 +298,7 @@ expect ENERGY 0
 echo "  after 40 ticks: $ENERGY/$CAPACITY FE, burning $BURN ticks"
 
 echo "== B: a pulverizer with a bone and no power does nothing (control) =="
-ctl container 4 100 0 minecraft:bone 1 >/dev/null
-ctl wait 6
+feed 4 100 0 minecraft:bone
 line=$(info 4 100 0)
 read_info "$line"
 expect KIND pulverizer
@@ -317,8 +367,7 @@ line=$(info 1 100 0)
 read_info "$line"
 [ "$ENERGY" -gt 0 ] || fail "the adjacent pulverizer got no FE from the generator: $line"
 echo "  the generator moved $ENERGY FE into the adjacent pulverizer"
-ctl container 1 100 0 minecraft:bone 1 >/dev/null
-ctl wait 6
+feed 1 100 0 minecraft:bone
 line=$(info 1 100 0)
 read_info "$line"
 expect INPUT "minecraft:bone x1"
@@ -352,6 +401,28 @@ has_not 1 100 0 minecraft:stone
     || fail "stone was placed on the pulverizer instead of being claimed"
 echo "  stone refused by both machines (no item taken, no block placed)"
 
+echo "== F2: a spectator's right click inserts nothing =="
+line=$(info 0 100 0)
+read_info "$line"
+FUEL_BEFORE=$FUEL
+ctl command "gamemode spectator" >/dev/null
+ctl wait 6
+ctl give minecraft:coal 3 >/dev/null
+ctl wait 3
+ctl select minecraft:coal >/dev/null
+ctl wait 3
+ctl look-at-block 0 100 0 up >/dev/null
+ctl wait 2
+ctl interact 0 100 0 >/dev/null 2>&1 || true
+ctl wait 20
+line=$(info 0 100 0)
+read_info "$line"
+[ "$FUEL" = "$FUEL_BEFORE" ] \
+    || fail "a spectator's click changed the generator's fuel ($FUEL_BEFORE -> $FUEL)"
+ctl command "gamemode creative" >/dev/null
+ctl wait 6
+echo "  as a spectator: fuel still $FUEL"
+
 echo "== G: the machines survive save + quit + relaunch =="
 line=$(info 0 100 0)
 read_info "$line"
@@ -370,7 +441,9 @@ read_info "$line"
 [ "$FUEL" = "minecraft:coal x4" ] || fail "the generator lost its fuel across a relaunch: $line"
 echo "  after relaunch: $ENERGY/$CAPACITY FE, burning $BURN/$MAXBURN ticks (was $BEFORE_BURN), $FUEL"
 echo "  (the buffer reads 0 because the adjacent pulverizer drains it every tick)"
-has 4 100 0 minecraft:bone_meal 6
+line=$(info 4 100 0)
+read_info "$line"
+expect OUT0 "minecraft:bone_meal x6"
 line=$(info 4 100 0)
 read_info "$line"
 expect OUT0 "minecraft:bone_meal x6"
@@ -378,4 +451,254 @@ line=$(info 1 100 0)
 read_info "$line"
 expect OUT0 "minecraft:bone_meal x6"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, and the machines survived a relaunch"
+echo "== H: a powered furnace with no core smelts nothing (the assembly gate) =="
+ctl command "setblock 8 100 0 $FURNACE" >/dev/null
+ctl wait 6
+[ "$(block_name 8 100 0)" = "$FURNACE" ] || fail "the powered furnace did not place"
+line=$(info 8 100 0)
+read_info "$line"
+expect KIND furnace
+expect ASSEMBLED no
+expect CORE empty
+expect QUALITY 0
+say "oritech energy 8 100 0 5000"
+ctl wait 8
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY 5000
+ctl wait 60
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY 5000
+expect PROGRESS 0
+echo "  without a core: $ENERGY/$CAPACITY FE after 60 ticks, progress $PROGRESS, core $CORE"
+
+echo "== H2: the same furnace with a valid recipe and FE still refuses while unassembled =="
+feed 8 100 0 minecraft:iron_ore
+line=$(info 8 100 0)
+read_info "$line"
+expect ASSEMBLED no
+expect INPUT "minecraft:iron_ore x1"
+# `recipe` is the machine's *current* recipe, which only a tick records, so an
+# unassembled machine shows none and the recipe is asserted mid-smelt in J2.
+ctl wait 60
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY 5000
+expect PROGRESS 0
+expect OUT0 empty
+has_not 8 100 0 minecraft:iron_ingot
+echo "  unassembled, with ore and 5,000 FE: still progress $PROGRESS, $ENERGY FE, no ingot"
+
+echo "== I: a machine core in the hand goes above the controller; the empty-hand click assembles =="
+ctl give "oritech:machine_core_$FURNACE_CORE_TIER" 1 >/dev/null
+ctl wait 3
+ctl select "oritech:machine_core_$FURNACE_CORE_TIER" >/dev/null
+ctl wait 3
+ctl command "execute in minecraft:overworld run tp @s 8.5 100 -2.5" >/dev/null
+ctl wait 6
+ctl look-at-block 8 100 0 north >/dev/null
+ctl wait 2
+echo "  core click: $(ctl interact 8 100 0 | jq -c '{ok, block: .block.block}')"
+ctl wait 8
+CORE_BLOCK=$(block_name 8 101 0)
+[ "$CORE_BLOCK" = "oritech:machine_core_$FURNACE_CORE_TIER" ] \
+    || fail "the core click left $CORE_BLOCK above the controller, not a machine core"
+echo "  block(8,101,0) = $CORE_BLOCK"
+# The hand is emptied so the next click is the empty-hand route upstream uses
+# for `initMultiblock` (a creative hand keeps the core when it places one).
+ctl command "clear @s" >/dev/null
+ctl wait 6
+ctl look-at-block 8 100 0 north >/dev/null
+ctl wait 2
+ctl interact 8 100 0 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 8 100 0)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE "oritech:machine_core_$FURNACE_CORE_TIER"
+expect QUALITY "$FURNACE_CORE_TIER"
+echo "  assembled: core $CORE quality $QUALITY, progress $PROGRESS"
+
+echo "== J: iron ore -> iron ingot for exactly 3,200 FE (100 ticks x 32 FE) =="
+# J1: the ore fed while unassembled is smelted now that the machine is one
+# piece; the buffer was set to exactly 5,000 FE in H and nothing else drains it.
+ctl wait 140
+line=$(info 8 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect INPUT empty
+expect OUT0 "minecraft:iron_ingot x1"
+expect ENERGY 1800
+echo "  5000 -> $ENERGY FE, exactly $((5000 - ENERGY)) for one ingot, out0 $OUT0"
+
+# J2: the duration, exactly. The buffer is emptied, the ore is fed, and the
+# machine is given exactly ten ticks' worth of FE (10 x 32): it must advance
+# exactly ten ticks and hold there starved. Then it gets exactly the FE the rest
+# of the smelt needs (32 x the ticks left): a machine that finished in fewer
+# ticks would leave FE in the buffer, and one that needed more would starve with
+# 32 FE left and never produce. Neither can pass by accident, and no readout race
+# is involved.
+say "oritech energy 8 100 0 0"
+ctl wait 6
+feed 8 100 0 minecraft:iron_ore
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY 0
+expect INPUT "minecraft:iron_ore x1"
+P_ZERO=$PROGRESS
+[ "$P_ZERO" -lt "$FURNACE_TICKS" ] || fail "the smelt finished before the measurement"
+say "oritech energy 8 100 0 $((FURNACE_RATE * 10))"
+ctl wait 40
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY 0
+[ "$PROGRESS" -eq "$((P_ZERO + 10))" ] \
+    || fail "320 FE should be exactly 10 ticks of work: progress $P_ZERO -> $PROGRESS"
+P_START=$PROGRESS
+[ "$P_START" -lt "$FURNACE_TICKS" ] || fail "the smelt finished in ten ticks"
+echo "  320 FE advanced the smelt exactly 10 ticks ($P_ZERO -> $P_START of $FURNACE_TICKS)"
+NEEDED=$((FURNACE_RATE * (FURNACE_TICKS - P_START)))
+say "oritech energy 8 100 0 $NEEDED"
+ctl wait 8
+line=$(info 8 100 0)
+read_info "$line"
+[ "$RECIPE" = "minecraft:iron_ingot_from_smelting_iron_ore" ] \
+    || fail "the working furnace's recipe is '$RECIPE'"
+ctl wait 140
+line=$(info 8 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect INPUT empty
+expect OUT0 "minecraft:iron_ingot x2"
+WANT_LEFT=0
+# Its own switch: `SELFTEST=1` flips the slice-1 assertion first (and stops
+# there), so the furnace's exact-FE assertion is proven fail-capable separately.
+if [ "${SELFTEST_FURNACE:-0}" = 1 ] || [ "$SELFTEST" = 1 ]; then
+    echo "  SELFTEST: expecting $FURNACE_RATE FE left in the buffer (this must fail)"
+    WANT_LEFT=$FURNACE_RATE
+fi
+[ "$ENERGY" -eq "$WANT_LEFT" ] \
+    || fail "$((FURNACE_TICKS - P_START)) ticks needed exactly $NEEDED FE, so the buffer should hold $WANT_LEFT, not $ENERGY"
+echo "  from progress $P_START: $((FURNACE_TICKS - P_START)) ticks spent exactly $NEEDED FE, buffer $ENERGY, out0 $OUT0"
+
+echo "== L: breaking the core disassembles the machine and keeps the progress =="
+feed 8 100 0 minecraft:iron_ore
+say "oritech energy 8 100 0 $FURNACE_CAPACITY"
+ctl wait 20
+line=$(info 8 100 0)
+read_info "$line"
+[ "$PROGRESS" -gt 0 ] || fail "the third ore made no progress: $line"
+ctl command "setblock 8 101 0 minecraft:air" >/dev/null
+ctl wait 10
+line=$(info 8 100 0)
+read_info "$line"
+expect ASSEMBLED no
+expect CORE empty
+# The freeze is measured from *after* the machine has noticed the core is gone:
+# between the first read and the break it was still assembled, so it was right to
+# keep working then.
+FROZEN_PROGRESS=$PROGRESS
+FROZEN_ENERGY=$ENERGY
+ctl wait 60
+line=$(info 8 100 0)
+read_info "$line"
+expect ENERGY "$FROZEN_ENERGY"
+expect PROGRESS "$FROZEN_PROGRESS"
+echo "  core broken: assembled $ASSEMBLED, progress held at $PROGRESS for 60 ticks, $ENERGY FE unspent"
+# The core goes back: the same machine assembles again and resumes the smelt.
+ctl command "setblock 8 101 0 oritech:machine_core_4" >/dev/null
+ctl wait 8
+# An empty hand is the assembly click; a held item would go into the input slot.
+ctl command "clear @s" >/dev/null
+ctl wait 6
+ctl look-at-block 8 100 0 north >/dev/null
+ctl wait 2
+ctl interact 8 100 0 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 8 100 0)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE oritech:machine_core_4
+expect QUALITY 4
+ctl wait 140
+line=$(info 8 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect OUT0 "minecraft:iron_ingot x3"
+echo "  reassembled with core 4 and finished the smelt it had started: out0 $OUT0"
+
+echo "== M: every new block places and reads back; an unknown id is refused =="
+for tier in 1 2 3 4 5 6 7; do
+    ctl command "setblock 16 104 $tier oritech:machine_core_$tier" >/dev/null
+done
+ctl wait 8
+for tier in 1 2 3 4 5 6 7; do
+    GOT=$(block_name 16 104 "$tier")
+    [ "$GOT" = "oritech:machine_core_$tier" ] || fail "core $tier placed as '$GOT'"
+done
+ctl command "setblock 16 104 9 oritech:machine_core_8" >/dev/null 2>&1 || true
+ctl wait 4
+[ "$(block_name 16 104 9)" = "minecraft:air" ] \
+    || fail "oritech:machine_core_8 was accepted as a block"
+ctl give "$FURNACE" 1 >/dev/null
+ctl wait 4
+ctl inventory | jq -e --arg item "$FURNACE" \
+    '[.hotbar[], .main[] | select(.item == $item)] | length > 0' >/dev/null \
+    || fail "the powered furnace item could not be given"
+echo "  7 cores placed and read back, machine_core_8 refused, the furnace item given"
+
+echo "== N: a tag-form pulverizer recipe crafts (the 26.3 ingredient form) =="
+# The jar's seven recipes wrote their ingredient as `{"item": …}`/`{"tag": …}`,
+# which 26.3's loader refuses; they now carry the bare form. `bone` (a bare item)
+# is phase D; this is the `#minecraft:coal_ores` tag, end to end.
+ctl command "setblock 20 100 0 $PULVERIZER" >/dev/null
+ctl wait 6
+[ "$(block_name 20 100 0)" = "$PULVERIZER" ] || fail "the tag-recipe pulverizer did not place"
+feed 20 100 0 minecraft:coal_ore
+line=$(info 20 100 0)
+read_info "$line"
+expect INPUT "minecraft:coal_ore x1"
+[ "$RECIPE" = "oritech:pulverizer/coalore" ] \
+    || fail "the coal ore found recipe '$RECIPE', so the tag form did not load"
+say "oritech energy 20 100 0 $PRIMED"
+ctl wait 140
+line=$(info 20 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect INPUT empty
+expect OUT0 "minecraft:coal x2"
+echo "  #minecraft:coal_ores -> $OUT0, the input consumed"
+
+echo "== O: every carried pulverizer recipe crafts and consumes its input =="
+# The parity rule: each carried recipe is crafted the way it declares, with the
+# output id and count asserted *and* the input consumed. One machine each, so no
+# recipe can borrow another's slot.
+RECIPE_INPUTS=(minecraft:bone minecraft:blaze_rod minecraft:dripstone_block \
+    minecraft:glowstone minecraft:coal_ore minecraft:diamond_ore minecraft:lapis_ore)
+RECIPE_EXPECT=("minecraft:bone_meal x6" "minecraft:blaze_powder x3" \
+    "minecraft:pointed_dripstone x4" "minecraft:glowstone_dust x3" "minecraft:coal x2" \
+    "minecraft:diamond x1" "minecraft:lapis_lazuli x6")
+RECIPE_IDS=(bone blaze dripstone glowstoneore coalore diamondore lapisore)
+for i in "${!RECIPE_INPUTS[@]}"; do
+    ctl command "setblock $((28 + i * 2)) 100 0 $PULVERIZER" >/dev/null
+done
+ctl wait 8
+for i in "${!RECIPE_INPUTS[@]}"; do
+    feed $((28 + i * 2)) 100 0 "${RECIPE_INPUTS[$i]}"
+    say "oritech energy $((28 + i * 2)) 100 0 $PRIMED"
+done
+ctl wait 160
+for i in "${!RECIPE_INPUTS[@]}"; do
+    X=$((28 + i * 2))
+    line=$(info "$X" 100 0)
+    read_info "$line"
+    expect PROGRESS 0
+    expect INPUT empty
+    [ "$OUT0" = "${RECIPE_EXPECT[$i]}" ] \
+        || fail "recipe ${RECIPE_IDS[$i]}: out0 is '$OUT0', expected '${RECIPE_EXPECT[$i]}'"
+    echo "  oritech:pulverizer/${RECIPE_IDS[$i]}: ${RECIPE_INPUTS[$i]} -> $OUT0"
+done
+
+
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed"

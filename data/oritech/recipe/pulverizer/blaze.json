@@ -1,9 +1,6 @@
 {
-  "type": "oritech:pulverizer",
   "ingredients": [
-    {
-      "item": "minecraft:blaze_rod"
-    }
+    "minecraft:blaze_rod"
   ],
   "results": [
     {
@@ -11,5 +8,6 @@
       "id": "minecraft:blaze_powder"
     }
   ],
-  "time": 100
+  "time": 100,
+  "type": "oritech:pulverizer"
 }

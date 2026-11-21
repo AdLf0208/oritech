@@ -144,3 +144,55 @@ Both classes read in `common/src/main/java/rearth/oritech/`:
   `c:player_workstations/furnaces` — none exist in this slice or in 26.3, so
   they are not carried (recorded as a gap in `notes.md`).
 - `PulverizerBlock.stepOn` damage and `combineSmallDusts` are not ported.
+
+## Slice 2: the Powered Furnace and the machine cores
+
+Read for behaviour only (the clone was shallow at the same tag
+`v1.2.13` / `4069b6dd14b05dfe0c80126618739b64054630ea`, deleted after these findings):
+
+- `common/src/main/java/rearth/oritech/block/entity/processing/PoweredFurnaceBlockEntity.java`
+- `common/src/main/java/rearth/oritech/block/blocks/processing/PoweredFurnaceBlock.java`
+- `common/src/main/java/rearth/oritech/block/blocks/processing/MachineCoreBlock.java`
+- `common/src/main/java/rearth/oritech/block/base/block/MultiblockMachine.java`
+- `common/src/main/java/rearth/oritech/block/base/entity/MultiblockMachineEntity.java`
+- `common/src/main/java/rearth/oritech/util/MultiblockMachineController.java`
+- `common/src/main/java/rearth/oritech/init/OritechConfig.java` (`FurnaceConfig`, `ProcessingMachines`)
+- `common/src/main/java/rearth/oritech/init/BlockContent.java` (`POWERED_FURNACE_BLOCK`, `MACHINE_CORE_1..7`)
+
+### Powered Furnace (`oritech:powered_furnace_block`)
+
+- Buffer `FurnaceConfig`: capacity **10,000 FE**, `maxEnergyInsertion` `32 * 8` = **256**, extraction
+  none, `energyPerTick` **32**, `speedMultiplier` **0.5** ("relative to vanilla").
+- Usage per working tick: `calculateEnergyUsage` = `energyPerTick * efficiency(1) * (1 / 0.5) / 2` =
+  **32 FE**; duration: `progress >= cookingTime * speedMultiplier` → a vanilla 200-tick smelt takes
+  **100 ticks** here.
+- The recipe is the **vanilla smelting** table (`getRecipeFor(RecipeType.SMELTING, …)`) — its own
+  `getOwnRecipeType()` returns `ASSEMBLER` and is unused ("not used in this special case").
+- Slots `InventorySlotAssignment(0, 1, 1, 1)`, inventory size 2: input 0, output 1.
+- Completion (`craftFurnaceItem`): shrink the input, then add the result to the output, repeated
+  `extraChambers()` times (0 without a processing addon).
+- A multiblock: `getCorePositions()` = one core at **(0, 1, 0)**; the machine only ticks while
+  `MultiblockMachine.ASSEMBLED` is set (`isActive`), and has a `LIT` state with light level 15.
+- `MultiblockMachine` (block): the empty-hand click runs `initMultiblock`; the held-item path
+  (`tryPlaceNextCore`) puts a `MachineCoreBlock` into the next missing core position.
+- `MultiblockMachineController.onCoreBroken`: clears `ASSEMBLED` and the connected cores (the progress
+  is not reset); `onControllerBroken` releases its cores.
+- `MachineCoreBlock`: `USED` boolean state, invisible when used, quality = the tier (1..7);
+  `MachineCoreEntity` stores the controller position.
+
+### Values carried into the port
+
+| Value | Source | Used for |
+|---|---|---|
+| `FURNACE_CAPACITY = 10_000` | `furnaceData.energyCapacity` | the buffer |
+| `FURNACE_MAX_INSERT = 256` | `furnaceData.maxEnergyInsertion` | the most one insert moves |
+| `FURNACE_ENERGY_PER_TICK = 32` | `furnaceData.energyPerTick` | the usage formula |
+| `FURNACE_SPEED = 0.5` | `furnaceData.speedMultiplier` | the duration |
+| `CORE_OFFSET = [0, 1, 0]` | `getCorePositions` | where the core goes |
+| `CORES = machine_core_1..7`, quality = tier | `BlockContent` / `MachineCoreBlock` | assembly |
+
+### Not read / not ported (still gaps)
+
+The frames and expandable multis (`MultiblockFrameInteractionEntity`, `ExpandableMultiblockEnergyStorage`),
+the addon blocks and their scan (`MachineAddonController`), the other multiblock machines, the
+accelerator/reactor, the GUI/screens, GeckoLib models and the pipe network.

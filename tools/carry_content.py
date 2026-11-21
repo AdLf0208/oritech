@@ -31,8 +31,17 @@ CARRIED = [
     # because the pin has no GeckoLib renderer.
     "assets/oritech/textures/block/models/basic_generator_block.png",
     "assets/oritech/textures/block/models/pulverizer_block.png",
-    # Pulverizer recipes whose input and output both exist in this slice: the
-    # jar's own JSON, unchanged (the custom-recipe table keeps it as written).
+    "assets/oritech/textures/block/models/powered_furnace_block.png",
+]
+
+# The pulverizer recipes whose input and output both exist in this slice are the
+# jar's own files, with one change: a 1.21.1 recipe writes its ingredient as an
+# object (`{"item": …}` / `{"tag": …}`), and 26.3's recipe loader rejects that
+# form ("invalid ingredient (unresolved tag or malformed input)") — the file is
+# then dropped and the recipe can never craft. They are emitted in the bare form
+# 26.3 takes (`"minecraft:bone"` / `"#minecraft:coal_ores"`); everything else
+# (results, time, id) is the jar's. See notes.md, "Carry defect fixed".
+REWRITTEN_RECIPES = [
     "data/oritech/recipe/pulverizer/bone.json",
     "data/oritech/recipe/pulverizer/blaze.json",
     "data/oritech/recipe/pulverizer/dripstone.json",
@@ -41,6 +50,22 @@ CARRIED = [
     "data/oritech/recipe/pulverizer/diamondore.json",
     "data/oritech/recipe/pulverizer/lapisore.json",
 ]
+
+# The seven machine cores are plain vanilla models in the jar (a `cube_all` of
+# their own texture, one blockstate variant each), so their blockstate, block
+# model, item model and texture travel byte for byte. `machine_core_hidden` is
+# upstream's worldgen plating, not part of the multiblock; it is not carried.
+CORE_ASSETS = [
+    f"assets/oritech/{kind}/{path}"
+    for core in range(1, 8)
+    for kind, path in (
+        ("blockstates", f"machine_core_{core}.json"),
+        ("models/block", f"machine_core_{core}.json"),
+        ("models/item", f"machine_core_{core}.json"),
+        ("textures/block", f"machine_core_{core}.png"),
+    )
+]
+CARRIED += CORE_ASSETS
 
 # --- authored files ----------------------------------------------------------
 
@@ -53,7 +78,25 @@ BLOCKS = {
         "name": "Pulverizer",
         "texture": "oritech:block/models/pulverizer_block",
     },
+    # Slice 2: the multiblock machine and the cores it assembles from. The
+    # furnace's jar blockstate is the same GeckoLib placeholder as the others, so
+    # its model is authored; the cores' assets are carried (`carry_assets`).
+    "powered_furnace_block": {
+        "name": "Powered Furnace",
+        "texture": "oritech:block/models/powered_furnace_block",
+    },
 }
+CORE_NAMES = [
+    "Primitive Machine Core",
+    "Basic Machine Core",
+    "Improved Machine Core",
+    "Advanced Machine Core",
+    "Elite Machine Core",
+    "Ultra Machine Core",
+    "Ultimate Machine Core",
+]
+for tier, name in enumerate(CORE_NAMES, start=1):
+    BLOCKS[f"machine_core_{tier}"] = {"name": name, "carry_assets": True}
 
 def authored() -> dict[str, str]:
     """The files written from the jar's facts, keyed by their path in the package."""
@@ -71,23 +114,29 @@ def authored() -> dict[str, str]:
     put(f"assets/{NS}/lang/en_us.json", lang)
 
     for block, data in BLOCKS.items():
-        # The jar's blockstate is a GeckoLib placeholder (`machine_speed_addon`);
-        # a full cube of the machine's own texture is the closest a renderer
-        # without GeckoLib can show. CONTENT.md records the deviation.
-        put(
-            f"assets/{NS}/blockstates/{block}.json",
-            {"variants": {"": {"model": f"{NS}:block/{block}"}}},
-        )
-        put(
-            f"assets/{NS}/models/block/{block}.json",
-            {"parent": "minecraft:block/cube_all", "textures": {"all": data["texture"]}},
-        )
-        put(f"assets/{NS}/models/item/{block}.json", {"parent": f"{NS}:block/{block}"})
+        if not data.get("carry_assets"):
+            # The jar's blockstate is a GeckoLib placeholder (`machine_speed_addon`);
+            # a full cube of the machine's own texture is the closest a renderer
+            # without GeckoLib can show. CONTENT.md records the deviation.
+            put(
+                f"assets/{NS}/blockstates/{block}.json",
+                {"variants": {"": {"model": f"{NS}:block/{block}"}}},
+            )
+            put(
+                f"assets/{NS}/models/block/{block}.json",
+                {
+                    "parent": "minecraft:block/cube_all",
+                    "textures": {"all": data["texture"]},
+                },
+            )
+            put(f"assets/{NS}/models/item/{block}.json", {"parent": f"{NS}:block/{block}"})
+        # 26.3's item definition names the item model, carried or authored.
         put(
             f"assets/{NS}/items/{block}.json",
             {"model": {"type": "minecraft:model", "model": f"{NS}:item/{block}"}},
         )
-        # `BlockContent`: `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()`.
+        # `BlockContent`: `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()`
+        # for the machines and the cores alike.
         put(
             f"data/{NS}/horizon/block/{block}.json",
             {
@@ -121,7 +170,7 @@ def authored() -> dict[str, str]:
         f"data/{NS}/horizon/creative_tab/machines.json",
         {
             "icon": f"{NS}:basic_generator_block",
-            "items": [f"{NS}:basic_generator_block", f"{NS}:pulverizer_block"],
+            "items": [f"{NS}:{block}" for block in BLOCKS],
             "title": "itemgroup.oritech.machines",
         },
     )
@@ -130,7 +179,7 @@ def authored() -> dict[str, str]:
     for tag in ("mineable/pickaxe", "needs_stone_tool"):
         put(
             f"data/minecraft/tags/block/{tag}.json",
-            {"values": [f"{NS}:basic_generator_block", f"{NS}:pulverizer_block"]},
+            {"values": [f"{NS}:{block}" for block in BLOCKS]},
         )
     return files
 
@@ -140,9 +189,35 @@ def expected() -> dict[str, bytes]:
     with zipfile.ZipFile(JAR) as jar:
         for name in CARRIED:
             out[name] = jar.read(name)
+        for name in REWRITTEN_RECIPES:
+            out[name] = bare_ingredients(jar.read(name))
     for path, text in authored().items():
         out[path] = text.encode()
     return out
+
+
+def bare_ingredients(raw: bytes) -> bytes:
+    """The jar's recipe with every ingredient in the bare form 26.3 loads.
+
+    A 1.21.1 file writes `{"item": "minecraft:bone"}` or
+    `{"tag": "minecraft:coal_ores"}`; 26.3's loader refuses those and drops the
+    recipe, so they become `"minecraft:bone"` and `"#minecraft:coal_ores"`. The
+    rest of the file (type, results, time) is untouched.
+    """
+    recipe = json.loads(raw)
+
+    def bare(ingredient):
+        if isinstance(ingredient, list):
+            return [bare(entry) for entry in ingredient]
+        if isinstance(ingredient, dict):
+            if "item" in ingredient:
+                return ingredient["item"]
+            if "tag" in ingredient:
+                return f"#{ingredient['tag']}"
+        return ingredient
+
+    recipe["ingredients"] = [bare(entry) for entry in recipe["ingredients"]]
+    return (json.dumps(recipe, indent=2, sort_keys=True) + "\n").encode()
 
 
 def main(argv: list[str]) -> int:

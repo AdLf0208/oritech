@@ -150,29 +150,13 @@ impl Pulverizer {
     /// One server tick. `work` is `None` when the input has no matching recipe
     /// or its results do not fit the output slots.
     pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
-        let Some(work) = work else {
-            self.progress = 0;
-            self.recipe.clear();
-            return Step::Idle;
-        };
-        // `MachineBlockEntity.serverTick`: a recipe that is not the current one
-        // resets the progress before the energy gate.
-        if self.recipe != work.id {
-            self.progress = 0;
-            self.recipe.clear();
-            self.recipe.push_str(work.id);
-        }
-        if self.energy < MACHINE_ENERGY_PER_TICK {
-            return Step::Starved;
-        }
-        self.energy -= MACHINE_ENERGY_PER_TICK;
-        self.progress += 1;
-        if self.progress >= work.time.max(1) {
-            self.progress = 0;
-            Step::Finished
-        } else {
-            Step::Working
-        }
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            MACHINE_ENERGY_PER_TICK,
+        )
     }
 }
 
@@ -333,12 +317,245 @@ pub fn is_fuel(burn_time: u32) -> bool {
     burn_time > 0
 }
 
+/// The count an input slot keeps after one item is consumed: `None` when the
+/// last item went, because an empty stack is `None` and the SDK refuses a stack
+/// of zero. Writing the input back unchanged would leave the item in the slot
+/// while the operation's output was already granted, so the machine would make
+/// output from the same item on every operation.
+#[must_use]
+pub fn after_consuming(count: u32) -> Option<u32> {
+    count.checked_sub(1).filter(|left| *left > 0)
+}
+
+/// `OritechConfig.processingMachines.furnaceData.energyCapacity` (slice 2).
+pub const FURNACE_CAPACITY: i32 = 10_000;
+/// ...`.maxEnergyInsertion` (`32 * 8`).
+pub const FURNACE_MAX_INSERT: i32 = 256;
+/// ...`.energyPerTick`: the config's own figure (the usage below is derived from it).
+pub const FURNACE_ENERGY_PER_TICK: i32 = 32;
+/// ...`.speedMultiplier`: relative to a vanilla furnace, so `0.5` is twice as fast.
+pub const FURNACE_SPEED: f64 = 0.5;
+/// `PoweredFurnaceBlockEntity.getCorePositions`: the one core, one block above.
+pub const CORE_OFFSET: [i32; 3] = [0, 1, 0];
+/// `BlockContent.MACHINE_CORE_1..MACHINE_CORE_7`, in tier order: the blocks a
+/// multiblock machine assembles from, and their `MachineCoreBlock` quality.
+pub const CORES: [&str; 7] = [
+    "oritech:machine_core_1",
+    "oritech:machine_core_2",
+    "oritech:machine_core_3",
+    "oritech:machine_core_4",
+    "oritech:machine_core_5",
+    "oritech:machine_core_6",
+    "oritech:machine_core_7",
+];
+
+/// A machine core's quality: `MachineCoreBlock(…, n)`'s `n`, `None` for any
+/// other block.
+#[must_use]
+pub fn core_quality(block: &str) -> Option<i32> {
+    CORES
+        .iter()
+        .position(|core| *core == block)
+        .and_then(|index| i32::try_from(index).ok())
+        .map(|index| index + 1)
+}
+
+/// The ticks a smelt of `cooking_time` takes here:
+/// `PoweredFurnaceBlockEntity.furnaceCraftingFinished`'s
+/// `progress >= cookingTime * speedMultiplier`, never below one tick.
+#[must_use]
+pub fn furnace_ticks(cooking_time: u32) -> u32 {
+    let ticks = (f64::from(cooking_time) * FURNACE_SPEED) as u32;
+    ticks.max(1)
+}
+
+/// `PoweredFurnaceBlockEntity.calculateEnergyUsage`:
+/// `energyPerTick * efficiency * (1 / speed) / 2`, with both multipliers at
+/// their no-addon defaults (efficiency 1, furniture speed 0.5).
+#[must_use]
+pub fn furnace_energy_usage() -> i32 {
+    // 32 * 1 * (1 / 0.5) / 2 = 32, but written as the jar writes it so a config
+    // change moves one place, not two.
+    let usage = f64::from(FURNACE_ENERGY_PER_TICK) * (1.0 / FURNACE_SPEED) / 2.0;
+    usage as i32
+}
+
+/// The step both processing machines take (`MachineBlockEntity.serverTick` /
+/// `PoweredFurnaceBlockEntity.serverTick`): no work resets the progress, a
+/// starved machine keeps it, a working tick spends `cost` FE, and the
+/// operation finishes at `work.time`. One body, so the two machines cannot
+/// drift apart.
+fn advance(
+    energy: &mut i32,
+    progress: &mut u32,
+    recipe: &mut String,
+    work: Option<Work<'_>>,
+    cost: i32,
+) -> Step {
+    let Some(work) = work else {
+        *progress = 0;
+        recipe.clear();
+        return Step::Idle;
+    };
+    if *recipe != work.id {
+        *progress = 0;
+        recipe.clear();
+        recipe.push_str(work.id);
+    }
+    if *energy < cost {
+        return Step::Starved;
+    }
+    *energy -= cost;
+    *progress += 1;
+    if *progress >= work.time.max(1) {
+        *progress = 0;
+        Step::Finished
+    } else {
+        Step::Working
+    }
+}
+
+/// The Powered Furnace's state: the buffer, the progress toward the current
+/// smelt and the recipe it belongs to — the same three values the Pulverizer
+/// keeps, because the pin's machines advance one way.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Furnace {
+    /// Stored FE.
+    pub energy: i32,
+    /// Ticks done toward the current smelt.
+    pub progress: u32,
+    /// The recipe being worked on; empty when none.
+    pub recipe: String,
+}
+
+impl Furnace {
+    /// An empty furnace.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick. `work` is `None` when the input has no smelting recipe,
+    /// its output does not fit, or the machine is not assembled.
+    pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            furnace_energy_usage(),
+        )
+    }
+}
+
+/// Why a smelting recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmeltError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `ingredient`.
+    BadIngredient,
+    /// No `result` with an item id, or a count outside 1..=99.
+    BadResult,
+    /// A `cookingtime` that is not a positive number.
+    BadTime,
+}
+
+impl std::fmt::Display for SmeltError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::BadIngredient => "no ingredient",
+            Self::BadResult => "no result with an item id, or a bad count",
+            Self::BadTime => "a cooking time that is not positive",
+        })
+    }
+}
+
+impl std::error::Error for SmeltError {}
+
+/// One `minecraft:smelting` recipe, read from the game's own recipe table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmeltingRecipe {
+    /// The recipe id, as the table names it.
+    pub id: String,
+    /// Its ingredient, as the pin's `recipe_ingredient` reads it.
+    pub ingredient: Value,
+    /// Its one result.
+    pub result: RecipeResult,
+    /// `cookingtime`, in ticks (vanilla's 200 when the file leaves it out).
+    pub cooking_time: u32,
+}
+
+impl SmeltingRecipe {
+    /// Parse one `minecraft:smelting` recipe file: `{type, cookingtime,
+    /// ingredient, result}`, the 26.3 shape (a bare id, a list, `{item}` or
+    /// `{tag}` for the ingredient; `{id, count}` for the result).
+    pub fn parse(id: &str, json: &str) -> Result<Self, SmeltError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| SmeltError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(SmeltError::Unreadable);
+        }
+        let raw = value.get("ingredient").ok_or(SmeltError::BadIngredient)?;
+        let ingredient = ingredient_json(raw);
+        if matches!(&ingredient, Value::Array(entries) if entries.is_empty()) {
+            return Err(SmeltError::BadIngredient);
+        }
+        let result = value.get("result").ok_or(SmeltError::BadResult)?;
+        let item = ["id", "item"]
+            .iter()
+            .find_map(|key| result.get(*key).and_then(Value::as_str))
+            .filter(|item| !item.is_empty())
+            .ok_or(SmeltError::BadResult)?;
+        let count = result.get("count").and_then(Value::as_i64).unwrap_or(1);
+        if !(1..=99).contains(&count) {
+            return Err(SmeltError::BadResult);
+        }
+        // `SmeltingRecipe.getCookingTime`'s default is 200 ticks; a file that
+        // names a time must name a usable one.
+        let cooking_time = match value.get("cookingtime") {
+            None => 200,
+            Some(time) => time
+                .as_u64()
+                .filter(|time| *time > 0)
+                .ok_or(SmeltError::BadTime)?,
+        };
+        Ok(Self {
+            id: id.to_owned(),
+            ingredient,
+            result: RecipeResult {
+                item: item.to_owned(),
+                count: i32::try_from(count).unwrap_or(1),
+            },
+            cooking_time: u32::try_from(cooking_time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn work(id: &'static str, time: u32) -> Option<Work<'static>> {
         Some(Work { id, time })
+    }
+
+    #[test]
+    fn consuming_the_last_input_empties_the_slot_instead_of_keeping_it() {
+        // The SDK refuses `set_count(0)`, so a one-item input that is written back would
+        // stay in its slot while the operation's output was already granted: a powered
+        // pulverizer would then create output from the same item for ever.
+        assert_eq!(
+            after_consuming(1),
+            None,
+            "the last item leaves the slot empty"
+        );
+        assert_eq!(after_consuming(2), Some(1));
+        assert_eq!(after_consuming(64), Some(63));
     }
 
     #[test]
@@ -686,5 +903,227 @@ mod tests {
             ingredient_json(&serde_json::json!("minecraft:bone")),
             Value::String("minecraft:bone".to_owned())
         );
+    }
+
+    // -- slice 2: the Powered Furnace and the machine cores -------------------
+
+    #[test]
+    fn the_furnace_smelts_twice_as_fast_as_a_vanilla_furnace() {
+        // `furnaceCraftingFinished`: `progress >= cookingTime * speedMultiplier`
+        // with the config's 0.5, so vanilla's 200-tick smelt takes 100 here.
+        assert_eq!(
+            furnace_ticks(200),
+            100,
+            "an iron ore smelts in 100 ticks, half a vanilla furnace's 200"
+        );
+        assert_eq!(furnace_ticks(100), 50);
+        assert_eq!(furnace_ticks(1), 1, "a one-tick recipe still needs a tick");
+        assert_eq!(furnace_ticks(0), 1, "a smelt is never zero ticks");
+    }
+
+    #[test]
+    fn the_furnace_spends_32_fe_a_tick() {
+        // `calculateEnergyUsage`: `energyPerTick * efficiency(1) * (1 / 0.5) / 2`.
+        let formula = (f64::from(FURNACE_ENERGY_PER_TICK) * (1.0 / FURNACE_SPEED) / 2.0) as i32;
+        assert_eq!(furnace_energy_usage(), 32, "the jar's 32 FE a working tick");
+        assert_eq!(
+            furnace_energy_usage(),
+            formula,
+            "the usage is the config's formula, not a second independent number"
+        );
+    }
+
+    #[test]
+    fn the_furnace_finishes_in_100_ticks_for_3200_fe() {
+        let mut furnace = Furnace {
+            energy: FURNACE_CAPACITY,
+            ..Furnace::new()
+        };
+        let dur = furnace_ticks(200);
+        for tick in 1..dur {
+            assert_eq!(
+                furnace.tick(work("minecraft:iron_ingot_from_smelting_iron_ore", dur)),
+                Step::Working,
+                "tick {tick}"
+            );
+        }
+        assert_eq!(
+            furnace.tick(work("minecraft:iron_ingot_from_smelting_iron_ore", dur)),
+            Step::Finished
+        );
+        assert_eq!(
+            furnace.energy,
+            FURNACE_CAPACITY - 32 * 100,
+            "100 ticks x 32 FE = 3,200 FE"
+        );
+        assert_eq!(furnace.progress, 0);
+    }
+
+    #[test]
+    fn the_furnace_keeps_progress_when_starved_and_resets_without_work() {
+        let mut starved = Furnace {
+            energy: furnace_energy_usage() - 1,
+            progress: 40,
+            recipe: "minecraft:iron_ingot_from_smelting_iron_ore".to_owned(),
+        };
+        assert_eq!(
+            starved.tick(work("minecraft:iron_ingot_from_smelting_iron_ore", 100)),
+            Step::Starved
+        );
+        assert_eq!(starved.progress, 40, "a starved smelt keeps its progress");
+        assert_eq!(starved.energy, furnace_energy_usage() - 1);
+
+        // Upstream's `else` branch: no recipe (or a blocked output) resets it.
+        let mut idle = Furnace {
+            energy: 5_000,
+            progress: 40,
+            recipe: "minecraft:iron_ingot_from_smelting_iron_ore".to_owned(),
+        };
+        assert_eq!(idle.tick(None), Step::Idle);
+        assert_eq!(idle.progress, 0);
+        assert_eq!(idle.recipe, "");
+        assert_eq!(idle.energy, 5_000, "idling spends nothing");
+    }
+
+    #[test]
+    fn the_smelting_parser_reads_the_pins_shape() {
+        // The 26.3 file as the prepared resources hold it.
+        let iron = SmeltingRecipe::parse(
+            "minecraft:iron_ingot_from_smelting_iron_ore",
+            r#"{
+                "type": "minecraft:smelting",
+                "cookingtime": 200,
+                "experience": 0.7,
+                "group": "iron_ingot",
+                "ingredient": "minecraft:iron_ore",
+                "result": { "id": "minecraft:iron_ingot" }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(iron.cooking_time, 200);
+        assert_eq!(
+            iron.ingredient,
+            Value::String("minecraft:iron_ore".to_owned())
+        );
+        assert_eq!(
+            iron.result,
+            RecipeResult {
+                item: "minecraft:iron_ingot".to_owned(),
+                count: 1
+            },
+            "a result without a count is one item"
+        );
+
+        // A list ingredient and a counted result.
+        let nuggets = SmeltingRecipe::parse(
+            "minecraft:copper_nugget_from_smelting",
+            r#"{
+                "type": "minecraft:smelting",
+                "cookingtime": 200,
+                "ingredient": [ "minecraft:copper_pickaxe", "minecraft:copper_shovel" ],
+                "result": { "id": "minecraft:copper_nugget", "count": 3 }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            nuggets.ingredient,
+            serde_json::json!(["minecraft:copper_pickaxe", "minecraft:copper_shovel"])
+        );
+        assert_eq!(nuggets.result.count, 3);
+
+        // `{item}` and `{tag}` read as the pin's `"id"` / `"#tag"`.
+        let tagged = SmeltingRecipe::parse(
+            "r",
+            r#"{"type":"minecraft:smelting","cookingtime":200,
+                "ingredient":{"tag":"minecraft:coals"},
+                "result":{"id":"minecraft:torch","count":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            tagged.ingredient,
+            Value::String("#minecraft:coals".to_owned())
+        );
+        let item = SmeltingRecipe::parse(
+            "r",
+            r#"{"type":"minecraft:smelting","ingredient":{"item":"minecraft:sand"},
+                "result":{"id":"minecraft:glass"}}"#,
+        )
+        .unwrap();
+        assert_eq!(item.ingredient, Value::String("minecraft:sand".to_owned()));
+        assert_eq!(
+            item.cooking_time, 200,
+            "vanilla's SmeltingRecipe default is 200 ticks"
+        );
+    }
+
+    #[test]
+    fn the_smelting_parser_refuses_what_the_furnace_cannot_run() {
+        assert_eq!(
+            SmeltingRecipe::parse("r", "not json"),
+            Err(SmeltError::Unreadable)
+        );
+        assert_eq!(
+            SmeltingRecipe::parse(
+                "r",
+                r#"{"cookingtime":200,"result":{"id":"minecraft:glass"}}"#
+            ),
+            Err(SmeltError::Unreadable),
+            "no type"
+        );
+        assert_eq!(
+            SmeltingRecipe::parse(
+                "r",
+                r#"{"type":"minecraft:smelting","cookingtime":200,"result":{"id":"minecraft:glass"}}"#
+            ),
+            Err(SmeltError::BadIngredient)
+        );
+        assert_eq!(
+            SmeltingRecipe::parse(
+                "r",
+                r#"{"type":"minecraft:smelting","cookingtime":200,"ingredient":"minecraft:sand"}"#
+            ),
+            Err(SmeltError::BadResult)
+        );
+        assert_eq!(
+            SmeltingRecipe::parse(
+                "r",
+                r#"{"type":"minecraft:smelting","cookingtime":200,"ingredient":"minecraft:sand",
+                    "result":{"id":"minecraft:glass","count":0}}"#
+            ),
+            Err(SmeltError::BadResult),
+            "a count outside 1..=99"
+        );
+        assert_eq!(
+            SmeltingRecipe::parse(
+                "r",
+                r#"{"type":"minecraft:smelting","cookingtime":0,"ingredient":"minecraft:sand",
+                    "result":{"id":"minecraft:glass"}}"#
+            ),
+            Err(SmeltError::BadTime)
+        );
+    }
+
+    #[test]
+    fn only_the_seven_cores_are_cores_and_their_quality_is_their_tier() {
+        assert_eq!(CORES.len(), 7, "the jar's MACHINE_CORE_1..7");
+        for (index, core) in CORES.iter().enumerate() {
+            assert_eq!(
+                core_quality(core),
+                Some(i32::try_from(index + 1).expect("seven fits")),
+                "{core}"
+            );
+        }
+        assert_eq!(CORE_OFFSET, [0, 1, 0], "the core sits one block above");
+        assert_eq!(
+            core_quality("oritech:powered_furnace_block"),
+            None,
+            "the controller is not a core"
+        );
+        assert_eq!(
+            core_quality("oritech:machine_core_8"),
+            None,
+            "there is no eighth tier"
+        );
+        assert_eq!(core_quality("minecraft:iron_block"), None);
     }
 }

@@ -1,9 +1,6 @@
 {
-  "type": "oritech:pulverizer",
   "ingredients": [
-    {
-      "tag": "minecraft:diamond_ores"
-    }
+    "#minecraft:diamond_ores"
   ],
   "results": [
     {
@@ -11,5 +8,6 @@
       "id": "minecraft:diamond"
     }
   ],
-  "time": 100
+  "time": 100,
+  "type": "oritech:pulverizer"
 }

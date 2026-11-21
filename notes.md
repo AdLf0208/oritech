@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -8,12 +8,15 @@ public-domain dedication, **licence rank 0**, no obligations. (The source map's
 CC-BY-4.0 is stale; the jar wins, ARCHITECTURE.md §8.) Local-only until the
 maintainer approves publishing.
 
-Pin **`1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9`**, mixins
-**`5a64af938ec86b00d53d16a408aabc0038fb3e57`** (schema 6).
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`**, mixins
+**`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`** (schema 6, `package_format` 6) — the
+campaign pin from 2026-11-21; slice 1 and the 0.2.1 review ran at `0b14f8a`, and the
+0.2.2 package declares the new pin and reports `0b14f8a  fits` (see *Slice 2*).
 
 Status: **ported-partial** — slice 1 (the fuel generator, the pulverizer, their
-energy link, the recipe reader and the content carry) is implemented and
-verified in game. The gap list below is the rest of the mod.
+energy link, the recipe reader and the content carry) and slice 2 (the Powered
+Furnace multiblock and the seven machine cores) are implemented and verified in
+game. The gap list below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
 `precheck-mod.py oritech` offers (`DISPATCHABLE`, jar licence CC0-1.0, no
@@ -593,3 +596,230 @@ covered by `an_empty_output_slot_rejects_a_result_larger_than_one_stack`.
 > installed here (gap 1).
 
 Skills: superpowers/using-superpowers,writing-plans,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Review fixes (2026-11-18) — registry source review #1218
+
+Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices
+
+File: `var/review-all/1218-oritech.md`. Package **0.2.1**, `oritech.hmod` 54,808 B, sha256
+`de762c4efd93b034561223d5ddb18b9c8fa44765ccb332069fe7fa12b5fc6d73`.
+
+1. **`src/support.rs:297` the pulverizer ignored the SDK's refusal to set a count to zero, so the
+   last input returned to its slot after the output was granted and a powered machine produced
+   from the same item for ever.** `finish_operation` now consumes the input **before** granting
+   the output: `runtime::after_consuming(count)` is `None` for the last item (the slot stays
+   empty, which is how the SDK represents an empty slot), `Some(left)` otherwise; a count the
+   stack refuses aborts before any output. Pinned by
+   `consuming_the_last_input_empties_the_slot_instead_of_keeping_it`.
+2. **`src/support.rs:460` the right-click hook ran for spectators.** The acting player's game mode
+   is now checked before the click is claimed or written: a spectator's click returns
+   `Flow::Continue` and changes nothing. Pinned in game by phase **F2** (a spectator's coal click
+   leaves the generator's fuel stack unchanged). `cargo test`: **26 passed**.
+
+**Found by the in-game leg (fixed here, not in the reviewer's list).** The carried
+`data/oritech/recipe/pulverizer/*.json` declare `oritech:pulverizer`, but the port never registered
+a serializer for it, so the game refused every file at load (*"unregistered recipe serializer
+oritech:pulverizer"*) — a hard startup crash, so the 0.2.0 package could not run. `register` now
+declares the type and an object-preserving raw serializer; the port keeps reading the JSON with its
+own matcher. The e2e feeds the machines by the player's right click (a mod block entity's slots are
+not in the engine's vanilla container map, so `ctl container` cannot reach them) and reads the
+`/oritech info` line, which already reports `input`/`out0`/`out1`. In-game: `PASS` + `E2E EXIT:0`
+(`evidence/oritech-e2e/`), control `EXIT:1`; phase **F2** is the spectator.
+
+## Slice 2 — the Powered Furnace multiblock and the machine cores (0.2.2, 2026-11-21)
+
+**Why this family:** `notes.md`'s gap list names it first among the unported machines — gap **13**:
+"Not carried: the powered furnace (a multiblock machine that needs its core assembled), the assembler,
+atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the augment
+stations, the jetpack and equipment, the resource-node worldgen and the ores." `FINDINGS.md` lists the
+same machine among the `MultiblockMachineEntity` family. It is the **system**, not one machine: the
+core block, the assembled gate, the core-position lookup and "a broken core disassembles" are what the
+foundry, refinery, atomic forge, deep drill and reactor all reuse. It also closes the hole slice 1
+left: a generator can now drive a machine that turns ore into ingots.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the
+**machines** shape this slice needs (a block entity, a declared container and FE buffer, a multiblock
+assembly step, one recipe family read from the vanilla `minecraft:smelting` table). No renderer, no
+GUI, no energy network — nothing beyond the tier.
+
+### The jar's numbers (upstream `rearth/oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| capacity 10,000 FE | `OritechConfig.FurnaceConfig.energyCapacity` (`init/OritechConfig.java:497`) | `FURNACE_CAPACITY` |
+| insert 256 FE/t (`32 * 8`) | same, `:498` | `FURNACE_MAX_INSERT` |
+| 32 FE a working tick | same, `energyPerTick` `:499`, and `calculateEnergyUsage` = `energyPerTick * efficiency(1) * (1/0.5) / 2` | `furnace_energy_usage()` |
+| ×0.5 speed (half a vanilla furnace's time) | same, `speedMultiplier` `:500`; `PoweredFurnaceBlockEntity.getSpeedMultiplier` | `FURNACE_SPEED` |
+| duration = `cookingTime * speed` (200 → **100** ticks) | `PoweredFurnaceBlockEntity.furnaceCraftingFinished` | `furnace_ticks()` |
+| one core at offset **(0, 1, 0)** | `PoweredFurnaceBlockEntity.getCorePositions` | `CORE_OFFSET` |
+| slots `(0, 1, 1, 1)`, inventory 2 | `getSlotAssignments` / `getInventorySize` | container: input 0, output 1 |
+| seven cores, quality = the tier | `BlockContent.MACHINE_CORE_1..7` (`MachineCoreBlock(…, n)`) | `CORES` / `core_quality()` |
+| a broken core disassembles, progress kept | `MultiblockMachineController.onCoreBroken` | the tick's core re-check |
+| an unassembled machine does nothing | `PoweredFurnaceBlockEntity.serverTick` → `isActive(state)` | the tick's assembled gate |
+| the recipe is vanilla smelting's first match | `getRecipeFor(RecipeType.SMELTING, …)` | `SmeltingRecipe::parse` + the engine's ingredient test |
+
+### What was added
+
+- `src/runtime.rs`: `FURNACE_*`, `CORE_OFFSET`, `CORES`, `core_quality`, `furnace_ticks`,
+  `furnace_energy_usage`, `Furnace`, `SmeltingRecipe`/`SmeltError`. `Pulverizer::tick` and
+  `Furnace::tick` now share one private `advance` step, so the two machines cannot drift apart; the
+  pulverizer's own tests and behaviour are unchanged.
+- `src/support.rs`: the furnace's container and buffer declarations, `FurnaceSaved`
+  (`connectedCores` + `coreQuality` + the assembled flag), `tick_furnace` (assembly re-check, the
+  smelting lookup, the exact consume-then-grant), `place_core`/`try_assemble` on the right click, the
+  readout line, the third buffer in `/oritech energy`, and one cached recipe lookup for both tables.
+- `src/lib.rs`: `FurnacePart` and the third block-entity type.
+- Content: `oritech:powered_furnace_block` and `oritech:machine_core_1..7` — blockstates, models,
+  item models, textures, 26.3 item definitions, block declarations, loot, lang, the machines tab and
+  the pickaxe/stone-tool tags. `assets/` + `data/` are now **81 files** (`tools/carry_content.py
+  --check` → `81 files, 0 differ`).
+- `tools/{parse_info.py,e2e.sh}` extended; `PLAN-slice2.md` is the slice's plan; `VALIDATION.md` is
+  the ladder.
+
+### Deviations (slice 2)
+
+1. **Assembly state is the block entity's saved compound, not a blockstate.** Upstream keeps
+   `machine_assembled` on the block and `core_used` on the core (which also renders the core
+   invisible). The pin can declare both as `state_properties`, but this slice keeps them in
+   `oritech.multiblock.assembled` on the controller and re-checks the core block each tick instead:
+   the core is visible either way here (no GeckoLib renderer), and one source of truth cannot
+   disagree with itself. The core keeps upstream's `connectedCores`/`coreQuality` keys, so the
+   saved shape is upstream's.
+2. **The `lit` state is not declared.** `PoweredFurnaceBlock` has `LIT` and light level 15; with a
+   `cube_all` model and no light support in the carried declaration the state has no renderer to
+   drive — the same recorded gap as slice 1's `facing`.
+3. **Container and buffer exist while unassembled.** The declaration API is per block; upstream
+   registers the capabilities only after `initMultiblock`. The machine does nothing until assembled
+   (the tick's gate, proven in phase H2), but its declared buffer can be filled by
+   `/oritech energy` or a cable.
+4. **The core block is not clickable.** Upstream forwards a click on a used core to its controller
+   (through `MachineCoreEntity`); here the core is a plain block and the controller is the click
+   target. Nothing depends on it.
+5. **Extra chambers/addons are not ported** (gap 9 stands): one item is smelted per completion
+   (`getBaseAddonData().extraChambers()` is 0 without a processing addon).
+6. **`coreQuality` is stored and shown, not used**: upstream uses it to widen the addon scan, and
+   addons are not ported.
+
+### Verification (0.2.2)
+
+Every Rust and package step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`); the launcher build is
+outside the slot (it has its own global lock and its own cache). Logs in
+[`../_shared/evidence/oritech/`](../../_shared/evidence/oritech/) and
+[`../_shared/evidence/oritech-e2e/`](../../_shared/evidence/oritech-e2e/).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime + glue tests (red) | `cargo test --offline`, new bodies `todo!()` | **26 passed, 7 failed** (`slice2-test-red.log`, every failure `panicked at src/runtime.rs:…: not yet implemented`) |
+| glue tests (red) | same, glue stubs | **35 passed, 3 failed** (`slice2-glue-red.log`) |
+| tests (green) | `cargo test --offline` | **38 passed**, 0 failed (`sdk-test.log`) |
+| lints | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| package | `cargo horizon-mod build` (no `Cargo.lock` in the tree) | **80,939 B**, sha256 `9af384e8…b037eefc`, **90 entries**, no `Cargo.lock` (`slice2-build.log`) |
+| same package twice | delete the artifact, rebuild | `cmp` **identical**, same sha256 both times |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.2 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `80939 bytes … unsigned`, exit 0 |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| e2e | `launcher-game.sh build oritech`, then `build-slot.sh run --step e2e` | **PASS** + `EXIT:0` (`e2e-slice2.log`) |
+| e2e control (whole scenario on the package-less build) | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice2-control.log`) |
+| e2e in-run differential | `CONTROL=1` | the control game has no generator item and the generator, **furnace and core** ids stay `minecraft:air` (`e2e-slice2-differential.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** (`89 ticks spent 2848 FE, expected 2880`) |
+| fail-capability, furnace | `SELFTEST_FURNACE=1` | **EXIT:1** (`90 ticks needed exactly 2880 FE, so the buffer should hold 32, not 0`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 7 logs, 7 ok, 0 bad |
+
+The furnace leg is fail-capable four ways: the no-core phase (a machine with ore and 5,000 FE does
+nothing), the ten-tick arithmetic (320 FE must advance exactly ten ticks), the exact-FE completion
+(a faster machine leaves FE behind; a slower one starves with 32 FE left and makes nothing), and
+`SELFTEST_FURNACE=1`, which flips the last one and exits 1.
+
+### In-game transcript (quoted from `e2e-slice2.log`)
+
+```
+  without a core: 5000/10000 FE after 60 ticks, progress 0, core empty
+  unassembled, with ore and 5,000 FE: still progress 0, 5000 FE, no ingot
+  core click: {"ok":true,"block":"oritech:powered_furnace_block"}
+  block(8,101,0) = oritech:machine_core_2
+  info(8,100,0): Powered Furnace at [8, 100, 0]: 3880/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 35 recipe minecraft:iron_ingot_from_smelting_iron_ore, input minecraft:iron_ore x1, out empty, t=1577
+  assembled: core oritech:machine_core_2 quality 2, progress 35
+  info(8,100,0): Powered Furnace at [8, 100, 0]: 1800/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, input empty, out minecraft:iron_ingot x1, t=1728
+  5000 -> 1800 FE, exactly 3200 for one ingot, out0 minecraft:iron_ingot x1
+  320 FE advanced the smelt exactly 10 ticks (0 -> 10 of 100)
+  from progress 10: 90 ticks spent exactly 2880 FE, buffer 0, out0 minecraft:iron_ingot x2
+  info(8,100,0): Powered Furnace at [8, 100, 0]: 9008/10000 FE, assembled no core empty quality 0, progress 31 recipe minecraft:iron_ingot_from_smelting_iron_ore, input minecraft:iron_ore x1, out minecraft:iron_ingot x2, t=2189
+  core broken: assembled no, progress held at 31 for 60 ticks, 9008 FE unspent
+  info(8,100,0): Powered Furnace at [8, 100, 0]: 6800/10000 FE, assembled yes core oritech:machine_core_4 quality 4, progress 0 recipe none, input empty, out minecraft:iron_ingot x3, t=2403
+  reassembled with core 4 and finished the smelt it had started: out0 minecraft:iron_ingot x3
+  7 cores placed and read back, machine_core_8 refused, the furnace item given
+  oritech:pulverizer/bone: minecraft:bone -> minecraft:bone_meal x6
+  oritech:pulverizer/blaze: minecraft:blaze_rod -> minecraft:blaze_powder x3
+  oritech:pulverizer/dripstone: minecraft:dripstone_block -> minecraft:pointed_dripstone x4
+  oritech:pulverizer/glowstoneore: minecraft:glowstone -> minecraft:glowstone_dust x3
+  oritech:pulverizer/coalore: minecraft:coal_ore -> minecraft:coal x2
+  oritech:pulverizer/diamondore: minecraft:diamond_ore -> minecraft:diamond x1
+  oritech:pulverizer/lapisore: minecraft:lapis_ore -> minecraft:lapis_lazuli x6
+PASS: … a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core
+arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore
+became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and
+kept its progress and reassembly resumed it, every new block placed and read back, every one of the
+seven carried pulverizer recipes crafted with its input consumed
+EXIT:0
+```
+
+### Parity coverage (the mod's families, this slice)
+
+| Family | Status |
+|---|---|
+| `oritech:powered_furnace_block` block + item | **tested** — phase M (given + read back), H (placed), I (clicked) |
+| `oritech:machine_core_1..7` blocks + items | **tested** — phase M places all seven and reads each back; `machine_core_8` is refused |
+| multiblock assembly (controller + core) | **tested** — phase I: a core in the hand is placed above by a right click, the empty-hand click assembles, the readout is `assembled yes core … quality 2` |
+| disassembly on a broken core | **tested** — phase L: progress frozen for 60 ticks with FE unspent, then core 4 re-assembles and the smelt finishes |
+| vanilla smelting recipe family | **tested** — phase J: `minecraft:iron_ingot_from_smelting_iron_ore` (200-tick recipe) → 1 ingot in exactly 100 ticks for exactly 3,200 FE; the table is the game's own, so any smelting recipe runs |
+| the furnace's FE buffer (10,000 / 256 / 0) | **tested** — `H`/`J` readouts and `/oritech energy` writes; declaration pinned by a unit test |
+| `oritech:pulverizer/bone` | **tested** — phase D (100 ticks, 3,200 FE) and O |
+| `oritech:pulverizer/blaze`, `dripstone`, `glowstoneore`, `coalore`, `diamondore`, `lapisore` | **tested** — phase O: each crafted with its declared input, output id and count asserted, input consumed |
+| the remaining 117 pulverizer recipes | **not ported** — they need the ore-processing items (dusts/clumps/gems) the port does not carry (gap 6) |
+| GUI/screen, GeckoLib render, addons, energy pipes, the other multiblocks | **not ported** — recorded gaps |
+
+### Carry defect fixed: the object-form ingredient
+
+- **What it was.** The seven carried `data/oritech/recipe/pulverizer/*.json` were copied byte for byte
+  from the jar, and a 1.21.1 recipe writes its ingredient as an object: `{"item": "minecraft:bone"}`,
+  `{"tag": "minecraft:coal_ores"}`.
+- **Why 26.3 rejects it.** The recipe loader reads ingredients in the bare form — an item id or
+  `#tag`, or a list of them — and an object is refused at load (*"invalid ingredient (unresolved tag
+  or malformed input)"*), so the file is dropped and the recipe can never match. The port's own cache
+  reads the table, so the recipe was silently absent: the machine showed `recipe none`.
+- **What changed.** `tools/carry_content.py` now rewrites the ingredient list only
+  (`{"item": …}` → `"minecraft:…"`, `{"tag": …}` → `"#minecraft:…"`); results, time and type stay the
+  jar's bytes-as-JSON, and the change is deterministic (`--check` → `81 files, 0 differ`).
+- **What a user notices.** The seven recipes exist again: phase O crafts every one — bone → 6 bone
+  meal, blaze rod → 3 blaze powder, dripstone → 4 pointed dripstone, glowstone → 3 glowstone dust,
+  `#coal_ores` → 2 coal, `#diamond_ores` → 1 diamond, `#lapis_ores` → 6 lapis — and the input slot is
+  empty afterwards. Phase N is the tag form end to end.
+- Upstream report: not worth one (the jar targets 1.21.1, where the object form is valid; this is a
+  data-pack format difference, not a mod defect).
+
+### The in-game leg's own prerequisite
+
+`cargo horizon-mod build` packs whatever `Cargo.lock` exists, and the gate requires none, so the tree
+carries no lock; but `horizon-launcher native-build` needs one. The measured sequence is:
+
+```sh
+cd ports/oritech
+CARGO_HOME=$HOME/.cache/horizon-e2e/root/data/horizon-launcher/cargo \
+    cargo generate-lockfile --offline          # the game's own pins (syn 3.0.6, unicode-ident 1.0.26)
+ports/tools/launcher-game.sh build oritech     # native-build + export the game and the control game
+rm -f Cargo.lock                               # keep it out of the package
+ports/tools/launcher-game.sh build oritech     # (not needed again; the game is cached)
+eval "$(ports/tools/launcher-game.sh env oritech)"
+ports/tools/build-slot.sh run --job W1-oritech --port ports/oritech --step e2e -- bash tools/e2e.sh
+```
+
+`horizon-launcher native-lock .` also writes a lock, but at this pin it resolved `unicode-ident
+1.0.27` while the prebuilt game pins `1.0.26`, and `native-build` refuses the mismatch; generating the
+lock from the launcher's own cargo home is what worked. The launcher has a **global** build lock
+(`A native build or cache cleanup is running`), so a build can wait behind another port's.
+
+`## Upstream defects fixed`: none found in this slice. The ingredient form was a carry mistake in this
+port (a 1.21.1 file into a 26.3 pack), fixed here and covered in game.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

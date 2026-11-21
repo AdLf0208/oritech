@@ -1,9 +1,6 @@
 {
-  "type": "oritech:pulverizer",
   "ingredients": [
-    {
-      "item": "minecraft:glowstone"
-    }
+    "minecraft:glowstone"
   ],
   "results": [
     {
@@ -11,5 +8,6 @@
       "id": "minecraft:glowstone_dust"
     }
   ],
-  "time": 100
+  "time": 100,
+  "type": "oritech:pulverizer"
 }

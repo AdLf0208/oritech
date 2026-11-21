@@ -1,9 +1,6 @@
 {
-  "type": "oritech:pulverizer",
   "ingredients": [
-    {
-      "item": "minecraft:bone"
-    }
+    "minecraft:bone"
   ],
   "results": [
     {
@@ -11,5 +8,6 @@
       "id": "minecraft:bone_meal"
     }
   ],
-  "time": 100
+  "time": 100,
+  "type": "oritech:pulverizer"
 }

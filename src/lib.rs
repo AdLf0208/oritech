@@ -39,7 +39,14 @@ impl Hooks for Mod {
     /// `block_entity_energy` hooks wrote into one shared output and had to leave
     /// another mod's entry alone.
     fn register(&self, registrar: &mut dyn Registrar, context: &RegistrationContext) {
-        for block in [support::GENERATOR, support::PULVERIZER] {
+        // The carried `data/oritech/recipe/pulverizer/*.json` declare this type; without a
+        // serializer the game refuses every one of them at load ("unregistered recipe
+        // serializer"), which is a hard startup error. The port reads the JSON itself (the
+        // pulverizer's own matcher), so the serializer only has to accept and keep the object.
+        registrar.register_recipe_type(support::PULVERIZER_RECIPE);
+        registrar
+            .register_raw_recipe_serializer(support::PULVERIZER_RECIPE, support::PULVERIZER_RECIPE);
+        for block in [support::GENERATOR, support::PULVERIZER, support::FURNACE] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
                 registrar.block_container(&key, container);
@@ -56,10 +63,17 @@ impl Hooks for Mod {
             .block_entity_type(support::PULVERIZER_TYPE)
             .blocks(&[support::PULVERIZER])
             .build();
+        let furnace = registrar
+            .block_entity_type(support::FURNACE_TYPE)
+            .blocks(&[support::FURNACE])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&pulverizer, PulverizerPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&furnace, FurnacePart) {
             context.refuse(&error.to_string());
         }
     }
@@ -143,6 +157,8 @@ impl Hooks for Mod {
 struct GeneratorPart;
 /// The Pulverizer's block entity.
 struct PulverizerPart;
+/// The Powered Furnace's block entity.
+struct FurnacePart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -206,6 +222,40 @@ impl BlockEntityPart for PulverizerPart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_pulverizer(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for FurnacePart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for FurnacePart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: a machine whose core is gone is disassembled, an
+    /// unassembled one does nothing, and an assembled one smelts one vanilla
+    /// smelting recipe at twice a furnace's speed.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_furnace(host, level, pos, &mut nbt, &mut event.entity.items);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

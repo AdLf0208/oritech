@@ -2,14 +2,17 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.0"
-description = """A port of Oritech 1.2.13 for Horizon, slice 1: the Basic Generator and the Pulverizer.
-The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE buffer that
-accepts no inserts and gives 256 FE a call; the pulverizer spends 32 FE a tick and turns one input into
-its recipe's results in the recipe's time, reading the jar's own `oritech:pulverizer` files. Both
-buffers are real block energy capabilities another mod's cable can read, and a fuelled generator pushes
+version = "0.2.2"
+description = """A port of Oritech 1.2.13 for Horizon, slices 1 and 2: the Basic Generator, the Pulverizer and
+the Powered Furnace multiblock. The generator burns any fuel the game's fuel table knows for 32 FE a
+tick into a 50,000 FE buffer that accepts no inserts and gives 256 FE a call; the pulverizer spends
+32 FE a tick and turns one input into its recipe's results in the recipe's time, reading the jar's
+own `oritech:pulverizer` files; the powered furnace is the mod's first multiblock machine — a
+controller plus one of the seven machine cores above it — that smelts any vanilla smelting recipe at
+twice a vanilla furnace's speed for 32 FE a tick, and stops working when its core is broken. Every
+buffer is a real block energy capability another mod's cable can read, and a fuelled generator pushes
 its FE to the machines beside it. Not yet ported: the GUI, GeckoLib models, addons, energy pipes, the
-ore-processing chain and the multiblock machines."""
+ore-processing chain and the other multiblock machines."""
 authors = ["Rearth", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins, beside
 # the carried assets/ and data/. The id is the resource namespace and the only identity.
@@ -18,10 +21,10 @@ api = "0.2"
 # server belongs to the client installation.
 side = "both"
 # The one shared value every manifest carries ("May add blocks, items, mob effects and entity
-# types"); this mod declares two blocks and their block entities, so it is used, not just required.
+# types"); this mod declares nine blocks and their block entities, so it is used, not just required.
 capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
