@@ -258,3 +258,53 @@ bonus (no biome read at the pin), the mod's own fluids (`oritech:still_steam`, `
 tank's item/fluid pipe network, and every machine family whose recipes need the ore-processing items or
 those fluids (assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel/lava
 generators, deep drill, reactor, accelerator, augment stations).
+
+## Slice 5: the machine addon system
+
+Read for behaviour only (the clone was shallow at the same tag `v1.2.13` /
+`4069b6dd14b05dfe0c80126618739b64054630ea`, deleted after these findings):
+
+- `common/src/main/java/rearth/oritech/util/MachineAddonController.java` (`getAllAddons`, `gatherAddonStats`, `BaseAddonData`)
+- `common/src/main/java/rearth/oritech/block/blocks/addons/MachineAddonBlock.java` (`AddonSettings`, `setPlacedBy`)
+- `common/src/main/java/rearth/oritech/block/base/entity/UpgradableMachineBlockEntity.java` (burst, `getSpeedMultiplier` / `getEfficiencyMultiplier`, the chamber loop)
+- `common/src/main/java/rearth/oritech/block/base/entity/UpgradableGeneratorBlockEntity.java` (`tryConsumeInput`'s burn time, `produceEnergy`)
+- `common/src/main/java/rearth/oritech/block/base/entity/MachineBlockEntity.java` (`calculateEnergyUsage`, `checkCraftingFinished`, `craftItem`)
+- `common/src/main/java/rearth/oritech/block/entity/processing/{Pulverizer,Cooler,PoweredFurnace}BlockEntity.java` and `block/entity/generators/LavaGeneratorEntity.java` (`getAddonSlots`, the furnace's own speed/usage)
+- `common/src/main/java/rearth/oritech/init/{OritechConfig,OritechStartupConfig,BlockContent}.java` (the config defaults and the six blocks)
+- `common/src/main/resources/assets/oritech/{blockstates,models,textures}` for the six addons
+
+### The six default addons (`BlockContent`)
+
+| Block | `AddonSettings` | Speed | Efficiency | Other |
+|---|---|---|---|---|
+| `machine_speed_addon` | 0.5 / 1.2 | × | × | — |
+| `machine_efficiency_addon` | 1 / 0.8 | — | × | — |
+| `machine_ultimate_addon` | 0.25 / 1.1 | × | × | — |
+| `machine_processing_addon` | 1 / 1.5, `withChambers(1)` | — | × | +1 chamber |
+| `machine_capacitor_addon` | `withAddedCapacity(2_000_000).withAddedInsert(2_000)` | — | — | buffer |
+| `machine_burst_addon` | `withBurstTicks(240)` | burst | burst | 240 ticks |
+
+`OritechConfig.additiveAddons` **defaults to `true`**; `gatherAddonStats` then adds `1 - setting` and
+inverts, giving 2/3 speed and 1.2 efficiency for a speed addon (not 0.5/1.2). The other addon kinds
+(acceptor, fluid, redstone, proxy, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop
+filter) carry machine-family-specific behaviour this port does not ship.
+
+### How the effects reach the tick
+
+- usage `energyPerTick * efficiency * (1/speed)` (the furnace adds `(1/0.5)/2`); a whole-FE buffer loses
+  `ceil` of it each tick;
+- processing duration `progress >= time * speed`; generator burn `(int)(time * speed / efficiency)` and
+  output `energyPerTick * efficiency / speed` (the float is truncated by the long buffer);
+- burst: `remainingBurstTicks` +1 a server tick to `maxBurstTicks`, −2 per working tick, floored at
+  `−max`; bonus `1/8` while positive, `1.2` while negative, `1` otherwise, applied to speed *and*
+  efficiency (so the usage is unchanged); a generator never calls `useEnergy`, so its burst never drains;
+- chambers repeat `craftItem` while another input and the output room remain.
+
+### Not read / not ported (still gaps)
+
+The GUI/screens and GeckoLib models, the `ADDON_USED` blockstate and the addon block entities, the
+addon extender traversal (`layeredExtenders`), the special addon kinds, and the comparator/redstone
+surface of the redstone addon. `ports/_shared/sdk/0a875da/surface.json` does have `has_analog_output`
+(hook 274), `analog_output` (hook 8) and the redstone `signal` read (hook 60), so the redstone addon is
+implementable at this pin.
+

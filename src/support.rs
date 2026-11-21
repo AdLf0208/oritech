@@ -18,14 +18,16 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler,
-    CoolerRecipe, EnergyTarget, FURNACE_CAPACITY, FURNACE_MAX_INSERT, FluidInput, Furnace,
-    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
-    LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator, PULVERIZER_CAPACITY,
-    PULVERIZER_MAX_INSERT, Pulverizer, PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work,
-    after_consuming, after_draining, can_output, clamp_energy, cooler_output_fits, cooler_ticks,
-    core_quality, furnace_ticks, is_fuel, lava_output_targets, lavagen_ticks, output_fits,
-    tank_matches,
+    ADDON_BLOCKS, ADDON_MODE, Addons, Burst, COOLER_CAPACITY, COOLER_CORE_OFFSET,
+    COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler, CoolerRecipe,
+    EnergyTarget, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED,
+    FluidInput, Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY,
+    LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe,
+    LavaGenerator, MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
+    PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work, addon_names, addon_settings,
+    addon_slots, after_consuming, after_draining, can_output, clamp_energy, cooler_output_fits,
+    core_quality, efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output,
+    is_fuel, lava_output_targets, output_fits, processing_ticks, speed_multiplier, tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
@@ -83,6 +85,9 @@ const KEY_RECIPE: &str = "oritech.machine_recipe";
 const KEY_ASSEMBLED: &str = "oritech.multiblock.assembled";
 const KEY_CORES: &str = "connectedCores";
 const KEY_QUALITY: &str = "coreQuality";
+/// `UpgradableMachineBlockEntity.remainingBurstTicks`, a sync field upstream and
+/// a saved int here so a reload does not lose a charged burst.
+const KEY_BURST: &str = "oritech.addon_burst";
 
 /// Rebuild the parsed recipe cache this often (ticks); a `/reload` lands within
 /// two seconds, and the pure parser cost is paid once.
@@ -250,6 +255,107 @@ pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
 }
 
 // ---------------------------------------------------------------------------
+// The machine addon system (slice 5)
+// ---------------------------------------------------------------------------
+
+/// The most addon slots any delivered machine has (`LavaGeneratorEntity`'s two).
+const MAX_ADDON_SLOTS: usize = 2;
+
+/// The addon block ids at a machine's own `getAddonSlots`, in slot order.
+/// Upstream keeps the connected list in the block entity and fills it on a
+/// click or an addon's placement; this port reads the world each tick, so an
+/// addon that is broken stops applying at the next tick without a click. The
+/// offsets are world offsets, not rotated by a facing this port does not model
+/// (PLAN-slice5.md, deviation 1).
+fn connected_addons(
+    host: &dyn Host,
+    level: LevelRef,
+    block: &str,
+    pos: [i32; 3],
+) -> [Option<&'static str>; MAX_ADDON_SLOTS] {
+    let mut found = [None; MAX_ADDON_SLOTS];
+    for (slot, offset) in addon_slots(block).iter().take(MAX_ADDON_SLOTS).enumerate() {
+        let Some(id) = block_at(host, level, offset_pos(pos, *offset)) else {
+            continue;
+        };
+        found[slot] = ADDON_BLOCKS.iter().find(|addon| **addon == id).copied();
+    }
+    found
+}
+
+/// The block ids this machine gathered, packed for [`Addons::gather`].
+fn addon_ids(found: &[Option<&'static str>]) -> [&'static str; MAX_ADDON_SLOTS] {
+    let mut ids = [""; MAX_ADDON_SLOTS];
+    for (slot, id) in found.iter().flatten().enumerate() {
+        ids[slot] = id;
+    }
+    ids
+}
+
+/// `MachineAddonController.gatherAddonStats` over the blocks in the slots.
+fn gathered(found: &[Option<&'static str>]) -> Addons {
+    let ids = addon_ids(found);
+    let connected = found.iter().flatten().count();
+    Addons::gather(&ids[..connected], ADDON_MODE)
+}
+
+/// What a readout prints about a machine's addons: their names, and the burst
+/// counter against the addons' own maximum.
+pub(crate) struct AddonView {
+    pub(crate) names: String,
+    pub(crate) burst: i32,
+    pub(crate) burst_max: i32,
+}
+
+impl AddonView {
+    /// A machine with no addon at all: what every line printed before this slice.
+    #[cfg(test)]
+    pub(crate) fn none() -> Self {
+        Self {
+            names: addon_names(&[]),
+            burst: 0,
+            burst_max: 0,
+        }
+    }
+
+    /// The view for one machine's connected blocks and saved counter.
+    pub(crate) fn of(found: &[Option<&'static str>], burst: Burst, max: i32) -> Self {
+        let ids = addon_ids(found);
+        let connected = found.iter().flatten().count();
+        Self {
+            names: addon_names(&ids[..connected]),
+            burst: burst.remaining,
+            burst_max: max,
+        }
+    }
+
+    /// The field every machine line carries: `addons speed+capacitor`, plus
+    /// `burst <n>/<max>` only when a burst addon sets a maximum.
+    fn text(&self) -> String {
+        if self.burst_max > 0 {
+            format!(
+                "addons {} burst {}/{}",
+                self.names, self.burst, self.burst_max
+            )
+        } else {
+            format!("addons {}", self.names)
+        }
+    }
+}
+
+/// The burst counter saved in a machine's compound.
+pub(crate) fn burst_state(nbt: &Compound) -> Burst {
+    Burst {
+        remaining: read_int(nbt, KEY_BURST),
+    }
+}
+
+/// Write the burst counter back.
+fn store_burst(nbt: &mut Compound, burst: Burst) {
+    write_int(nbt, KEY_BURST, burst.remaining);
+}
+
+// ---------------------------------------------------------------------------
 // Saved state
 // ---------------------------------------------------------------------------
 
@@ -269,10 +375,11 @@ pub(crate) fn store_generator(nbt: &mut Compound, state: &Generator) {
     write_int(nbt, KEY_STORED_BURN, state.max_burn);
 }
 
-/// The pulverizer saved in a block entity's compound; a fresh one is empty.
-pub(crate) fn pulverizer_state(nbt: &Compound) -> Pulverizer {
+/// The pulverizer saved in a block entity's compound; a fresh one is empty. The
+/// capacity is the machine's own plus its addons' (`energyBonusCapacity`).
+pub(crate) fn pulverizer_state(nbt: &Compound, capacity: i32) -> Pulverizer {
     Pulverizer {
-        energy: clamp_energy(read_int(nbt, KEY_ENERGY), PULVERIZER_CAPACITY),
+        energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
         progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
         recipe: read_string(nbt, KEY_RECIPE),
     }
@@ -352,10 +459,10 @@ fn store_multiblock(nbt: &mut Compound, assembly: Assembly) {
 }
 
 /// The furnace saved in a block entity's compound; a fresh one is unassembled.
-pub(crate) fn furnace_state(nbt: &Compound) -> FurnaceSaved {
+pub(crate) fn furnace_state(nbt: &Compound, capacity: i32) -> FurnaceSaved {
     FurnaceSaved {
         machine: Furnace {
-            energy: clamp_energy(read_int(nbt, KEY_ENERGY), FURNACE_CAPACITY),
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
             progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
             recipe: read_string(nbt, KEY_RECIPE),
         },
@@ -410,10 +517,10 @@ pub(crate) struct CoolerSaved {
 }
 
 /// The chiller saved in a block entity's compound; a fresh one is empty.
-pub(crate) fn cooler_state(nbt: &Compound) -> CoolerSaved {
+pub(crate) fn cooler_state(nbt: &Compound, capacity: i32) -> CoolerSaved {
     CoolerSaved {
         machine: Cooler {
-            energy: clamp_energy(read_int(nbt, KEY_ENERGY), COOLER_CAPACITY),
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
             progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
             recipe: read_string(nbt, KEY_RECIPE),
         },
@@ -451,10 +558,10 @@ pub(crate) struct LavaSaved {
 }
 
 /// The lava generator saved in a block entity's compound; a fresh one is empty.
-pub(crate) fn lava_state(nbt: &Compound) -> LavaSaved {
+pub(crate) fn lava_state(nbt: &Compound, capacity: i32) -> LavaSaved {
     LavaSaved {
         machine: LavaGenerator {
-            energy: clamp_energy(read_int(nbt, KEY_ENERGY), LAVA_CAPACITY),
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
             progress: read_int(nbt, KEY_PROGRESS).max(0),
             max_burn: read_int(nbt, KEY_STORED_BURN).max(0),
             recipe: read_string(nbt, KEY_RECIPE),
@@ -579,8 +686,8 @@ pub(crate) fn tick_generator(
 /// operation adds the results, shrinks one input and marks the chunk.
 pub(crate) fn tick_pulverizer(
     host: &mut dyn ServerHost,
-    _level: LevelRef,
-    _pos: [i32; 3],
+    level: LevelRef,
+    pos: [i32; 3],
     nbt: &mut Compound,
     items: &mut Vec<Option<ItemStack>>,
 ) -> bool {
@@ -588,37 +695,129 @@ pub(crate) fn tick_pulverizer(
     if resized {
         items.resize(PULVERIZER_SLOTS, None);
     }
-    let before = pulverizer_state(nbt);
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, PULVERIZER, pos, nbt, PULVERIZER_PROFILE);
+    let capacity = addons.capacity(PULVERIZER_CAPACITY);
+    let before = pulverizer_state(nbt, capacity);
+    let before_burst = burst;
     let input = items[INPUT_SLOT].clone();
-    let recipe = input.as_ref().and_then(|stack| find_recipe(host, stack));
+    let recipe = input.as_ref().and_then(|stack| find_recipe(&*host, stack));
     let work = recipe.as_ref().and_then(|recipe| {
-        let slot = |index: usize| {
-            items.get(index).and_then(Option::as_ref).map(|stack| {
-                (
-                    stack.item().id(host),
-                    i32::try_from(stack.count()).unwrap_or(i32::MAX),
-                )
-            })
-        };
-        let output_one = slot(OUTPUT_ONE);
-        let output_two = slot(OUTPUT_TWO);
-        let outputs = [
-            output_one.as_ref().map(|(id, count)| (id.as_str(), *count)),
-            output_two.as_ref().map(|(id, count)| (id.as_str(), *count)),
-        ];
-        can_output(recipe, outputs, |item| max_stack(host, item)).then_some(Work {
+        let outputs = pulverizer_outputs(&*host, items);
+        can_output(recipe, output_refs(&outputs), |item| {
+            max_stack(&*host, item)
+        })
+        .then_some(Work {
             id: &recipe.id,
-            time: recipe.time,
+            time: processing_ticks(recipe.time, speed),
         })
     });
     let mut state = before.clone();
-    let step = state.tick(work);
-    let finished = step == Step::Finished;
-    if finished && let Some(recipe) = recipe.as_ref() {
-        finish_operation(host, items, recipe);
+    let step = state.tick_with(work, cost);
+    let worked = matches!(step, Step::Working | Step::Finished);
+    if step == Step::Finished
+        && let Some(recipe) = recipe.as_ref()
+    {
+        finish_operation(&*host, items, recipe);
+        // `supportExtraChambersAuto`: the processing addon repeats the craft
+        // while another matching input and its output room remain.
+        for _ in 0..addons.chambers {
+            let Some(stack) = items[INPUT_SLOT].clone() else {
+                break;
+            };
+            let Some(next) = find_recipe(&*host, &stack) else {
+                break;
+            };
+            let outputs = pulverizer_outputs(&*host, items);
+            if next.id != recipe.id
+                || !can_output(&next, output_refs(&outputs), |item| max_stack(&*host, item))
+            {
+                break;
+            }
+            finish_operation(&*host, items, &next);
+        }
     }
+    if worked {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
     store_pulverizer(nbt, &state);
-    resized || finished || step != Step::Idle || state != before
+    store_burst(nbt, burst);
+    resized || step != Step::Idle || state != before || burst != before_burst
+}
+
+/// The pulverizer's two output slots, as `can_output` reads them.
+fn pulverizer_outputs(host: &dyn Host, items: &[Option<ItemStack>]) -> [Option<(String, i32)>; 2] {
+    let slot = |index: usize| {
+        items
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|stack| (stack.item().id(host), count_of(stack)))
+    };
+    [slot(OUTPUT_ONE), slot(OUTPUT_TWO)]
+}
+
+/// The borrowed form of an output list.
+fn output_refs(outputs: &[Option<(String, i32)>; 2]) -> [Option<(&str, i32)>; 2] {
+    [
+        outputs[0].as_ref().map(|(id, count)| (id.as_str(), *count)),
+        outputs[1].as_ref().map(|(id, count)| (id.as_str(), *count)),
+    ]
+}
+
+/// A machine's own numbers, which its addons modulate: the FE one working tick
+/// spends, the speed its base tick uses (only the furnace's is not 1), and the
+/// factor its `calculateEnergyUsage` divides by (only the furnace's is not 1).
+#[derive(Debug, Clone, Copy)]
+struct MachineProfile {
+    base_energy: i32,
+    base_speed: f32,
+    divisor: f64,
+}
+
+/// `OritechConfig.processingMachines.pulverizerData`.
+const PULVERIZER_PROFILE: MachineProfile = MachineProfile {
+    base_energy: MACHINE_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
+/// `FurnaceConfig`: 32 FE a tick, `speedMultiplier` 0.5, and the `/ 2` its own
+/// `calculateEnergyUsage` adds.
+const FURNACE_PROFILE: MachineProfile = MachineProfile {
+    base_energy: FURNACE_ENERGY_PER_TICK,
+    base_speed: FURNACE_SPEED as f32,
+    divisor: 2.0,
+};
+/// `coolerData`.
+const COOLER_PROFILE: MachineProfile = MachineProfile {
+    base_energy: COOLER_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
+
+/// The addon side of one tick: the machine's gathered addons, its effective
+/// speed (base, addons and the current burst bonus), its per-tick cost, and its
+/// saved burst counter brought inside the addons' range.
+fn addon_tick(
+    host: &dyn Host,
+    level: LevelRef,
+    block: &str,
+    pos: [i32; 3],
+    nbt: &Compound,
+    profile: MachineProfile,
+) -> (Addons, f32, i32, Burst) {
+    let found = connected_addons(host, level, block, pos);
+    let addons = gathered(&found);
+    let burst = burst_state(nbt).clamped(addons.burst_ticks);
+    let bonus = burst.bonus();
+    let speed = speed_multiplier(&addons, profile.base_speed, bonus);
+    let cost = energy_usage(
+        profile.base_energy,
+        profile.divisor,
+        speed,
+        efficiency_multiplier(&addons, bonus),
+    );
+    (addons, speed, cost, burst)
 }
 
 /// One server tick of the Powered Furnace: a machine whose core is gone is
@@ -636,40 +835,76 @@ pub(crate) fn tick_furnace(
     if resized {
         items.resize(FURNACE_SLOTS, None);
     }
-    let before = furnace_state(nbt);
+    // The furnace's own 0.5 speed is the base the addons multiply, and its
+    // `calculateEnergyUsage` halves the result of the same formula.
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, FURNACE, pos, nbt, FURNACE_PROFILE);
+    let capacity = addons.capacity(FURNACE_CAPACITY);
+    let before = furnace_state(nbt, capacity);
+    let before_burst = burst;
     let mut saved = before.clone();
     // The core is the assembly: a controller whose core block is gone (broken,
     // replaced, or never there) is not assembled, and its progress is kept —
     // upstream's `onCoreBroken` clears the assembly, not the operation.
-    recheck_core(host, level, pos, &mut saved.assembly);
+    recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
     if saved.assembly.assembled {
         let input = items[INPUT_SLOT].clone();
-        let recipe = input.as_ref().and_then(|stack| find_smelting(host, stack));
+        let recipe = input
+            .as_ref()
+            .and_then(|stack| find_smelting(&*host, stack));
         let work = recipe.as_ref().and_then(|recipe| {
             let output = items
                 .get(OUTPUT_ONE)
                 .and_then(Option::as_ref)
-                .map(|stack| (stack.item().id(host), count_of(stack)));
+                .map(|stack| (stack.item().id(&*host), count_of(stack)));
             let fits = output_fits(
                 output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 &recipe.result,
-                max_stack(host, &recipe.result.item),
+                max_stack(&*host, &recipe.result.item),
             );
             fits.then_some(Work {
                 id: &recipe.id,
-                time: furnace_ticks(recipe.cooking_time),
+                time: processing_ticks(recipe.cooking_time, speed),
             })
         });
-        step = saved.machine.tick(work);
+        step = saved.machine.tick_with(work, cost);
         if step == Step::Finished
             && let Some(recipe) = recipe.as_ref()
         {
-            finish_furnace(host, items, &recipe.result);
+            finish_furnace(&*host, items, &recipe.result);
+            // `PoweredFurnaceBlockEntity.serverTick`'s chamber loop.
+            for _ in 0..addons.chambers {
+                let Some(stack) = items[INPUT_SLOT].clone() else {
+                    break;
+                };
+                let Some(next) = find_smelting(&*host, &stack) else {
+                    break;
+                };
+                let output = items
+                    .get(OUTPUT_ONE)
+                    .and_then(Option::as_ref)
+                    .map(|stack| (stack.item().id(&*host), count_of(stack)));
+                if next.id != recipe.id
+                    || !output_fits(
+                        output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                        &next.result,
+                        max_stack(&*host, &next.result.item),
+                    )
+                {
+                    break;
+                }
+                finish_furnace(&*host, items, &next.result);
+            }
         }
     }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
     store_furnace(nbt, &saved);
-    resized || step != Step::Idle || saved != before
+    store_burst(nbt, burst);
+    resized || step != Step::Idle || saved != before || burst != before_burst
 }
 
 /// `ItemStack.getCount` as an `i32`.
@@ -707,9 +942,13 @@ pub(crate) fn tick_cooler(
     if resized {
         items.resize(COOLER_SLOTS, None);
     }
-    let before = cooler_state(nbt);
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, COOLER, pos, nbt, COOLER_PROFILE);
+    let capacity = addons.capacity(COOLER_CAPACITY);
+    let before = cooler_state(nbt, capacity);
+    let before_burst = burst;
     let mut saved = before.clone();
-    recheck_core(host, level, pos, &mut saved.assembly);
+    recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
     if saved.assembly.assembled {
         // `getRecipe()` picks a recipe whose fluid the tank holds
@@ -717,30 +956,56 @@ pub(crate) fn tick_cooler(
         let recipe = saved
             .tank
             .as_ref()
-            .and_then(|(fluid, amount)| find_cooler(host, fluid, *amount));
+            .and_then(|(fluid, amount)| find_cooler(&*host, fluid, *amount));
         let work = recipe.as_ref().and_then(|recipe| {
             let output = items
                 .get(COOLER_OUTPUT)
                 .and_then(Option::as_ref)
-                .map(|stack| (stack.item().id(host), count_of(stack)));
+                .map(|stack| (stack.item().id(&*host), count_of(stack)));
             cooler_output_fits(
                 output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 &recipe.result,
             )
             .then_some(Work {
                 id: &recipe.id,
-                time: cooler_ticks(recipe.time),
+                time: processing_ticks(recipe.time, speed),
             })
         });
-        step = saved.machine.tick(work);
+        step = saved.machine.tick_with(work, cost);
         if step == Step::Finished
             && let Some(recipe) = recipe.as_ref()
         {
-            finish_cooler(host, &mut saved, items, recipe);
+            finish_cooler(&*host, &mut saved, items, recipe);
+            // `CoolerBlockEntity.craftItem`'s chamber loop: another bucket of the
+            // same fluid and the 64 rule, then one more craft.
+            for _ in 0..addons.chambers {
+                let Some((fluid, amount)) = saved.tank.clone() else {
+                    break;
+                };
+                if !tank_matches(Some((fluid.as_str(), amount)), &recipe.fluid) {
+                    break;
+                }
+                let output = items
+                    .get(COOLER_OUTPUT)
+                    .and_then(Option::as_ref)
+                    .map(|stack| (stack.item().id(&*host), count_of(stack)));
+                if !cooler_output_fits(
+                    output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    &recipe.result,
+                ) {
+                    break;
+                }
+                finish_cooler(&*host, &mut saved, items, recipe);
+            }
         }
     }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
     store_cooler(nbt, &saved);
-    resized || step != Step::Idle || saved != before
+    store_burst(nbt, burst);
+    resized || step != Step::Idle || saved != before || burst != before_burst
 }
 
 /// `CoolerBlockEntity.processCraftInstance`: take the recipe's millibuckets out
@@ -774,24 +1039,31 @@ pub(crate) fn tick_lava_generator(
     pos: [i32; 3],
     nbt: &mut Compound,
 ) -> bool {
-    let before = lava_state(nbt);
+    let found = connected_addons(&*host, level, LAVA, pos);
+    let addons = gathered(&found);
+    let mut burst = burst_state(nbt).clamped(addons.burst_ticks);
+    let before_burst = burst;
+    let bonus = burst.bonus();
+    let speed = speed_multiplier(&addons, 1.0, bonus);
+    let efficiency = efficiency_multiplier(&addons, bonus);
+    let output = generator_output(LAVA_ENERGY_PER_TICK, speed, efficiency);
+    let capacity = addons.capacity(LAVA_CAPACITY);
+    let before = lava_state(nbt, capacity);
     let mut saved = before.clone();
-    recheck_core(host, level, pos, &mut saved.assembly);
+    recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut produced = 0;
     if saved.assembly.assembled {
         // `UpgradableGeneratorBlockEntity.serverTick`: `tryConsumeInput` runs
         // only while no burn is left and the buffer has room for one tick; the
         // recipe comes from the tank and its fluid leaves it at load time.
-        if saved.machine.wants_recipe() {
+        if saved.machine.wants_recipe_for(output) {
             let recipe = saved
                 .tank
                 .as_ref()
-                .and_then(|(fluid, amount)| find_lavagen(host, fluid, *amount));
+                .and_then(|(fluid, amount)| find_lavagen(&*host, fluid, *amount));
             if let Some(recipe) = recipe {
-                if saved
-                    .machine
-                    .load_recipe(lavagen_ticks(recipe.time), &recipe.id)
-                {
+                let ticks = generator_burn_ticks(recipe.time, speed, efficiency);
+                if saved.machine.load_recipe_for(ticks, &recipe.id, output) {
                     drain_tank(&mut saved.tank, &recipe.fluid);
                 }
             } else {
@@ -800,7 +1072,7 @@ pub(crate) fn tick_lava_generator(
                 saved.machine.recipe.clear();
             }
         }
-        produced = saved.machine.tick();
+        produced = saved.machine.tick_with(output);
         // `outputEnergy()` runs at the end of `serverTick`, burning or not, but
         // only while the machine is assembled: an inactive machine returns at
         // `isActive(state)` before it, so a controller whose core is gone stops
@@ -809,8 +1081,12 @@ pub(crate) fn tick_lava_generator(
             queue_push(level, pos);
         }
     }
+    // A generator never calls `useEnergy`, so upstream never drains its burst
+    // counter: a charged burst addon keeps a generator at 8x speed. Preserved.
+    burst.recharge(addons.burst_ticks);
     store_lava(nbt, &saved);
-    produced > 0 || saved != before
+    store_burst(nbt, burst);
+    produced > 0 || saved != before || burst != before_burst
 }
 
 /// `FluidMultiblockGeneratorBlockEntity.consumeFluidRecipeInput`: the recipe's
@@ -1204,8 +1480,17 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         }
         return Flow::Cancel;
     };
+    let held_id = held.item().id(&*server);
+    // `MachineAddonBlock.setPlacedBy`: upstream notices the machine next to a
+    // placed addon and asks it to scan. Here the machine's own click puts a held
+    // addon in its first open slot, which is the same world state as placing the
+    // block at that position.
+    if addon_settings(&held_id).is_some() {
+        let message = place_addon(server, level, pos, click.player, click.hand, &held, &name);
+        say(server, click.player, &message);
+        return Flow::Cancel;
+    }
     if is_multiblock {
-        let held_id = held.item().id(&*server);
         // `MultiblockMachineController.tryPlaceNextCore`: a core in the hand
         // fills the empty core position instead of the machine's own slots.
         if core_quality(&held_id).is_some()
@@ -1346,6 +1631,45 @@ fn place_core(
     format!("placed {id} at {target:?}; right-click the controller again to assemble")
 }
 
+/// `MachineAddonBlock.setPlacedBy` from the machine's side: put `held` in the
+/// machine's first open addon slot and take it out of the hand (a creative hand
+/// gives for free). Answers the line to print.
+fn place_addon(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    player: u128,
+    hand: mod_api::Hand,
+    held: &ItemStack,
+    block: &str,
+) -> String {
+    let held_id = held.item().id(&*host);
+    let target = addon_slots(block)
+        .iter()
+        .map(|offset| offset_pos(pos, *offset))
+        .find(|target| block_at(&*host, level, *target).is_none_or(|id| id == "minecraft:air"));
+    let Some(target) = target else {
+        return format!("{held_id} has no open addon slot on this machine");
+    };
+    let Some(state) = host.block_state_id(&held_id) else {
+        return format!("{held_id} is not a placeable block");
+    };
+    let place = ItemPlace::PlayerHand { player, hand };
+    let resource = ItemResource::of(held);
+    let taken = host
+        .transaction(|host, tx| -> Result<u32, ()> { Ok(place.extract(host, tx, &resource, 1)) })
+        .unwrap_or(0);
+    if taken == 0 {
+        return format!("nothing was taken to place {held_id}");
+    }
+    let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+    if level.set_block(&mut *host, target, state, flags) != Ok(true) {
+        return format!("could not place {held_id} at {target:?}");
+    }
+    let id = block_at(&*host, level, target).unwrap_or_default();
+    format!("placed {id} at {target:?} (the machine scans its slot on its next tick)")
+}
+
 /// `MultiblockMachineController.initMultiblock` on a click: the block at
 /// `offset` from the controller must be one of the seven machine cores; then the
 /// machine is assembled and the core recorded. Answers the line to print.
@@ -1473,7 +1797,11 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
             ))
         }
         PULVERIZER => {
-            let state = pulverizer_state(&nbt);
+            let found = connected_addons(&*host, level, PULVERIZER, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(PULVERIZER_CAPACITY);
+            let state = pulverizer_state(&nbt, capacity);
             let input = slot(INPUT_SLOT);
             let output_one = slot(OUTPUT_ONE);
             let output_two = slot(OUTPUT_TWO);
@@ -1482,10 +1810,21 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 output_one.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 output_two.as_ref().map(|(id, count)| (id.as_str(), *count)),
             ];
-            Some(pulverizer_line(pos, &state, slots, time))
+            Some(pulverizer_line(
+                pos,
+                &state,
+                slots,
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks),
+                time,
+            ))
         }
         FURNACE => {
-            let saved = furnace_state(&nbt);
+            let found = connected_addons(&*host, level, FURNACE, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(FURNACE_CAPACITY);
+            let saved = furnace_state(&nbt, capacity);
             // The core comes from the world, not from the saved offset, so a
             // line cannot name a core that is no longer there.
             let core = saved
@@ -1503,11 +1842,17 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     input: input.as_ref().map(|(id, count)| (id.as_str(), *count)),
                     output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks),
                 time,
             ))
         }
         COOLER => {
-            let saved = cooler_state(&nbt);
+            let found = connected_addons(&*host, level, COOLER, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(COOLER_CAPACITY);
+            let saved = cooler_state(&nbt, capacity);
             let core = saved
                 .assembly
                 .core
@@ -1521,11 +1866,17 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
                     output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks),
                 time,
             ))
         }
         LAVA => {
-            let saved = lava_state(&nbt);
+            let found = connected_addons(&*host, level, LAVA, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(LAVA_CAPACITY);
+            let saved = lava_state(&nbt, capacity);
             let core = saved
                 .assembly
                 .core
@@ -1537,6 +1888,8 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     saved: &saved,
                     core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
                 },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks),
                 time,
             ))
         }
@@ -1552,12 +1905,14 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
 pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) -> Option<String> {
     let level = host.level(host.dimension())?;
     let name = block_at(&*host, level, pos)?;
+    let found = connected_addons(&*host, level, &name, pos);
+    let addons = gathered(&found);
     let capacity = match name.as_str() {
         GENERATOR => GENERATOR_CAPACITY,
-        PULVERIZER => PULVERIZER_CAPACITY,
-        FURNACE => FURNACE_CAPACITY,
-        COOLER => COOLER_CAPACITY,
-        LAVA => LAVA_CAPACITY,
+        PULVERIZER => addons.capacity(PULVERIZER_CAPACITY),
+        FURNACE => addons.capacity(FURNACE_CAPACITY),
+        COOLER => addons.capacity(COOLER_CAPACITY),
+        LAVA => addons.capacity(LAVA_CAPACITY),
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -1663,6 +2018,8 @@ pub(crate) fn pulverizer_line(
     pos: [i32; 3],
     state: &Pulverizer,
     slots: [Option<(&str, u32)>; 3],
+    capacity: i32,
+    addons: &AddonView,
     t: i64,
 ) -> String {
     let recipe = if state.recipe.is_empty() {
@@ -1672,13 +2029,14 @@ pub(crate) fn pulverizer_line(
     };
     format!(
         "Pulverizer at {pos:?}: {}/{} FE, progress {} recipe {recipe}, input {}, out0 {}, \
-         out1 {}, t={t}",
+         out1 {}, {}, t={t}",
         state.energy,
-        PULVERIZER_CAPACITY,
+        capacity,
         state.progress,
         slot_text(slots[0]),
         slot_text(slots[1]),
         slot_text(slots[2]),
+        addons.text(),
     )
 }
 
@@ -1691,7 +2049,13 @@ fn slot_text(stack: Option<(&str, u32)>) -> String {
 
 /// The furnace's line: the multiblock state first (a machine that is not
 /// assembled does nothing), then the one smelt it is working on.
-pub(crate) fn furnace_line(pos: [i32; 3], view: &FurnaceView<'_>, t: i64) -> String {
+pub(crate) fn furnace_line(
+    pos: [i32; 3],
+    view: &FurnaceView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
     let saved = view.saved;
     let (core, quality) = view
         .core
@@ -1703,9 +2067,9 @@ pub(crate) fn furnace_line(pos: [i32; 3], view: &FurnaceView<'_>, t: i64) -> Str
     };
     format!(
         "Powered Furnace at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
-         progress {} recipe {recipe}, input {}, out {}, t={t}",
+         progress {} recipe {recipe}, input {}, out {}, {}, t={t}",
         saved.machine.energy,
-        FURNACE_CAPACITY,
+        capacity,
         if saved.assembly.assembled {
             "yes"
         } else {
@@ -1714,6 +2078,7 @@ pub(crate) fn furnace_line(pos: [i32; 3], view: &FurnaceView<'_>, t: i64) -> Str
         saved.machine.progress,
         slot_text(view.input),
         slot_text(view.output),
+        addons.text(),
     )
 }
 
@@ -1727,7 +2092,13 @@ fn tank_text(tank: Option<(&str, i32)>, capacity: i32) -> String {
 }
 
 /// The chiller's line: the assembly first, then the tank and the one craft.
-pub(crate) fn cooler_line(pos: [i32; 3], view: &CoolerView<'_>, t: i64) -> String {
+pub(crate) fn cooler_line(
+    pos: [i32; 3],
+    view: &CoolerView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
     let saved = view.saved;
     let (core, quality) = view
         .core
@@ -1739,9 +2110,9 @@ pub(crate) fn cooler_line(pos: [i32; 3], view: &CoolerView<'_>, t: i64) -> Strin
     };
     format!(
         "Industrial Chiller at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
-         progress {} recipe {recipe}, tank {}, out {}, t={t}",
+         progress {} recipe {recipe}, tank {}, out {}, {}, t={t}",
         saved.machine.energy,
-        COOLER_CAPACITY,
+        capacity,
         if saved.assembly.assembled {
             "yes"
         } else {
@@ -1756,12 +2127,19 @@ pub(crate) fn cooler_line(pos: [i32; 3], view: &CoolerView<'_>, t: i64) -> Strin
             COOLER_TANK,
         ),
         slot_text(view.output),
+        addons.text(),
     )
 }
 
 /// The lava generator's line: the assembly first (a machine that is not
 /// assembled burns nothing), then the burn and the tank.
-pub(crate) fn lava_line(pos: [i32; 3], view: &LavaView<'_>, t: i64) -> String {
+pub(crate) fn lava_line(
+    pos: [i32; 3],
+    view: &LavaView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
     let saved = view.saved;
     let (core, quality) = view
         .core
@@ -1773,9 +2151,9 @@ pub(crate) fn lava_line(pos: [i32; 3], view: &LavaView<'_>, t: i64) -> String {
     };
     format!(
         "Lava Generator at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
-         burning {}/{} ticks recipe {recipe}, tank {}, t={t}",
+         burning {}/{} ticks recipe {recipe}, tank {}, {}, t={t}",
         saved.machine.energy,
-        LAVA_CAPACITY,
+        capacity,
         if saved.assembly.assembled {
             "yes"
         } else {
@@ -1790,6 +2168,7 @@ pub(crate) fn lava_line(pos: [i32; 3], view: &LavaView<'_>, t: i64) -> String {
                 .map(|(fluid, amount)| (fluid.as_str(), *amount)),
             LAVA_TANK,
         ),
+        addons.text(),
     )
 }
 
@@ -1909,7 +2288,7 @@ mod tests {
             recipe: "oritech:pulverizer/bone".to_owned(),
         };
         store_pulverizer(&mut nbt, &pulverizer);
-        assert_eq!(pulverizer_state(&nbt), pulverizer);
+        assert_eq!(pulverizer_state(&nbt, PULVERIZER_CAPACITY), pulverizer);
         assert_eq!(
             nbt.get(&KEY_RECIPE.into()),
             Some(&Tag::String("oritech:pulverizer/bone".into())),
@@ -1949,10 +2328,12 @@ mod tests {
                 [4, 100, 0],
                 &pulverizer,
                 [None, Some(("minecraft:bone_meal", 6)), None],
+                PULVERIZER_CAPACITY,
+                &AddonView::none(),
                 563
             ),
             "Pulverizer at [4, 100, 0]: 6800/25000 FE, progress 0 recipe none, input empty, \
-             out0 minecraft:bone_meal x6, out1 empty, t=563"
+             out0 minecraft:bone_meal x6, out1 empty, addons none, t=563"
         );
     }
 
@@ -1968,10 +2349,13 @@ mod tests {
                 [4, 100, 0],
                 &pulverizer,
                 [Some(("minecraft:bone", 1)), None, None],
+                PULVERIZER_CAPACITY,
+                &AddonView::none(),
                 424
             ),
             "Pulverizer at [4, 100, 0]: 9648/25000 FE, progress 11 recipe \
-             oritech:pulverizer/bone, input minecraft:bone x1, out0 empty, out1 empty, t=424"
+             oritech:pulverizer/bone, input minecraft:bone x1, out0 empty, out1 empty, \
+             addons none, t=424"
         );
     }
 
@@ -2007,7 +2391,7 @@ mod tests {
     fn the_furnace_s_state_reads_back_from_the_compound_it_wrote() {
         let mut nbt = Compound::new();
         assert_eq!(
-            furnace_state(&nbt),
+            furnace_state(&nbt, FURNACE_CAPACITY),
             FurnaceSaved::default(),
             "a fresh furnace is empty and unassembled"
         );
@@ -2024,7 +2408,7 @@ mod tests {
             },
         };
         store_furnace(&mut nbt, &saved);
-        assert_eq!(furnace_state(&nbt), saved);
+        assert_eq!(furnace_state(&nbt, FURNACE_CAPACITY), saved);
         assert_eq!(
             nbt.get(&KEY_ENERGY.into()),
             Some(&Tag::Int(6_800)),
@@ -2051,7 +2435,10 @@ mod tests {
         );
         // Overwriting with an unassembled furnace clears the core again.
         store_furnace(&mut nbt, &FurnaceSaved::default());
-        assert_eq!(furnace_state(&nbt), FurnaceSaved::default());
+        assert_eq!(
+            furnace_state(&nbt, FURNACE_CAPACITY),
+            FurnaceSaved::default()
+        );
         assert_eq!(nbt.get(&KEY_CORES.into()), Some(&Tag::List(Vec::new())));
     }
 
@@ -2059,9 +2446,12 @@ mod tests {
     fn a_furnace_buffer_above_its_capacity_is_clamped() {
         let mut nbt = Compound::new();
         nbt.insert(KEY_ENERGY.into(), Tag::Int(FURNACE_CAPACITY + 5));
-        assert_eq!(furnace_state(&nbt).machine.energy, FURNACE_CAPACITY);
+        assert_eq!(
+            furnace_state(&nbt, FURNACE_CAPACITY).machine.energy,
+            FURNACE_CAPACITY
+        );
         nbt.insert(KEY_ENERGY.into(), Tag::Int(-5));
-        assert_eq!(furnace_state(&nbt).machine.energy, 0);
+        assert_eq!(furnace_state(&nbt, FURNACE_CAPACITY).machine.energy, 0);
     }
 
     #[test]
@@ -2087,12 +2477,14 @@ mod tests {
                     input: Some(("minecraft:iron_ore", 1)),
                     output: None,
                 },
+                FURNACE_CAPACITY,
+                &AddonView::none(),
                 424
             ),
             "Powered Furnace at [8, 100, 0]: 3200/10000 FE, assembled yes core \
              oritech:machine_core_2 quality 2, progress 11 recipe \
              minecraft:iron_ingot_from_smelting_iron_ore, input minecraft:iron_ore x1, out empty, \
-             t=424"
+             addons none, t=424"
         );
 
         let idle = FurnaceSaved::default();
@@ -2105,10 +2497,12 @@ mod tests {
                     input: None,
                     output: Some(("minecraft:iron_ingot", 1)),
                 },
+                FURNACE_CAPACITY,
+                &AddonView::none(),
                 7
             ),
             "Powered Furnace at [8, 100, 0]: 0/10000 FE, assembled no core empty quality 0, \
-             progress 0 recipe none, input empty, out minecraft:iron_ingot x1, t=7"
+             progress 0 recipe none, input empty, out minecraft:iron_ingot x1, addons none, t=7"
         );
     }
 
@@ -2196,7 +2590,7 @@ mod tests {
     fn the_cooler_s_state_reads_back_from_the_compound_it_wrote() {
         let mut nbt = Compound::new();
         assert_eq!(
-            cooler_state(&nbt),
+            cooler_state(&nbt, COOLER_CAPACITY),
             CoolerSaved::default(),
             "a fresh chiller is empty, unassembled and has an empty tank"
         );
@@ -2214,7 +2608,7 @@ mod tests {
             tank: Some(("minecraft:water".to_owned(), 1_000)),
         };
         store_cooler(&mut nbt, &saved);
-        assert_eq!(cooler_state(&nbt), saved);
+        assert_eq!(cooler_state(&nbt, COOLER_CAPACITY), saved);
         assert_eq!(
             nbt.get(&KEY_ENERGY.into()),
             Some(&Tag::Int(43_600)),
@@ -2299,11 +2693,13 @@ mod tests {
                     core: Some(("oritech:machine_core_2", 2)),
                     output: None,
                 },
+                COOLER_CAPACITY,
+                &AddonView::none(),
                 424
             ),
             "Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core \
              oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank \
-             minecraft:water 1000/4000 mB, out empty, t=424"
+             minecraft:water 1000/4000 mB, out empty, addons none, t=424"
         );
 
         let idle = CoolerSaved::default();
@@ -2315,10 +2711,12 @@ mod tests {
                     core: None,
                     output: Some(("minecraft:ice", 3)),
                 },
+                COOLER_CAPACITY,
+                &AddonView::none(),
                 7
             ),
             "Industrial Chiller at [12, 100, 0]: 0/50000 FE, assembled no core empty quality 0, \
-             progress 0 recipe none, tank empty 0/4000 mB, out minecraft:ice x3, t=7"
+             progress 0 recipe none, tank empty 0/4000 mB, out minecraft:ice x3, addons none, t=7"
         );
     }
 
@@ -2394,7 +2792,7 @@ mod tests {
     fn the_lava_generator_s_state_reads_back_from_the_compound_it_wrote() {
         let mut nbt = Compound::new();
         assert_eq!(
-            lava_state(&nbt),
+            lava_state(&nbt, LAVA_CAPACITY),
             LavaSaved::default(),
             "a fresh lava generator is empty, unassembled and has an empty tank"
         );
@@ -2413,7 +2811,7 @@ mod tests {
             tank: None,
         };
         store_lava(&mut nbt, &saved);
-        assert_eq!(lava_state(&nbt), saved);
+        assert_eq!(lava_state(&nbt, LAVA_CAPACITY), saved);
         assert_eq!(
             nbt.get(&KEY_ENERGY.into()),
             Some(&Tag::Int(7_680)),
@@ -2447,7 +2845,7 @@ mod tests {
             ..saved
         };
         store_lava(&mut nbt, &filled);
-        assert_eq!(lava_state(&nbt).tank, filled.tank);
+        assert_eq!(lava_state(&nbt, LAVA_CAPACITY).tank, filled.tank);
     }
 
     #[test]
@@ -2485,11 +2883,13 @@ mod tests {
                     saved: &burning,
                     core: Some(("oritech:machine_core_2", 2)),
                 },
+                LAVA_CAPACITY,
+                &AddonView::none(),
                 424
             ),
             "Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core \
              oritech:machine_core_2 quality 2, burning 60/120 ticks recipe \
-             oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424"
+             oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, addons none, t=424"
         );
 
         let idle = LavaSaved::default();
@@ -2500,10 +2900,12 @@ mod tests {
                     saved: &idle,
                     core: None,
                 },
+                LAVA_CAPACITY,
+                &AddonView::none(),
                 7
             ),
             "Lava Generator at [20, 100, 4]: 0/100000 FE, assembled no core empty quality 0, \
-             burning 0/0 ticks recipe none, tank empty 0/4000 mB, t=7"
+             burning 0/0 ticks recipe none, tank empty 0/4000 mB, addons none, t=7"
         );
     }
 
@@ -2551,5 +2953,85 @@ mod tests {
             "a machine that spends FE is not a source"
         );
         assert!(push_plan("minecraft:stone").is_none());
+    }
+
+    // -- slice 5: the addon system --------------------------------------------
+
+    #[test]
+    fn the_burst_counter_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        assert_eq!(burst_state(&nbt), Burst::default(), "a fresh machine");
+        store_burst(&mut nbt, Burst { remaining: 227 });
+        assert_eq!(burst_state(&nbt).remaining, 227);
+        assert_eq!(
+            nbt.get(&KEY_BURST.into()),
+            Some(&Tag::Int(227)),
+            "the counter is a saved int"
+        );
+        assert_eq!(
+            burst_state(&nbt).clamped(0).remaining,
+            0,
+            "removing the burst addon clamps the stored counter"
+        );
+    }
+
+    #[test]
+    fn a_capacitor_keeps_a_buffer_above_the_machines_own_capacity() {
+        let mut nbt = Compound::new();
+        nbt.insert(KEY_ENERGY.into(), Tag::Int(1_000_000));
+        assert_eq!(
+            pulverizer_state(&nbt, PULVERIZER_CAPACITY).energy,
+            PULVERIZER_CAPACITY,
+            "without the addon the saved value is clamped as before"
+        );
+        let addons = Addons::gather(&["oritech:machine_capacitor_addon"], ADDON_MODE);
+        assert_eq!(
+            pulverizer_state(&nbt, addons.capacity(PULVERIZER_CAPACITY)).energy,
+            1_000_000,
+            "the capacitor's room is what the reader clamps against"
+        );
+    }
+
+    #[test]
+    fn the_readout_names_a_machines_addons_and_its_burst_counter() {
+        let state = Pulverizer {
+            energy: 100,
+            progress: 0,
+            recipe: String::new(),
+        };
+        let capacitor = AddonView {
+            names: "speed+capacitor".to_owned(),
+            burst: 0,
+            burst_max: 0,
+        };
+        assert_eq!(
+            pulverizer_line(
+                [4, 100, 0],
+                &state,
+                [None, None, None],
+                2_025_000,
+                &capacitor,
+                9
+            ),
+            "Pulverizer at [4, 100, 0]: 100/2025000 FE, progress 0 recipe none, input empty, \
+             out0 empty, out1 empty, addons speed+capacitor, t=9"
+        );
+        let bursting = AddonView {
+            names: "burst".to_owned(),
+            burst: 227,
+            burst_max: 240,
+        };
+        assert_eq!(
+            pulverizer_line(
+                [4, 100, 0],
+                &state,
+                [None, None, None],
+                PULVERIZER_CAPACITY,
+                &bursting,
+                9
+            ),
+            "Pulverizer at [4, 100, 0]: 100/25000 FE, progress 0 recipe none, input empty, \
+             out0 empty, out1 empty, addons burst burst 227/240, t=9"
+        );
     }
 }

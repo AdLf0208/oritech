@@ -1,0 +1,7 @@
+{
+  "item": true,
+  "properties": {
+    "occludes": false
+  },
+  "template": "minecraft:iron_block"
+}

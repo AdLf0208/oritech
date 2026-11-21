@@ -1,9 +1,9 @@
-# Oritech for Horizon — slices 1 to 4
+# Oritech for Horizon — slices 1 to 5
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
-Chiller** and the **Lava Generator** of [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0),
-rewritten in Rust for Horizon at the campaign pin
-`0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
+Chiller**, the **Lava Generator** and the **machine addon system** of
+[Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for Horizon at the
+campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
 One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the five block-entity
 Parts and the rules in `src/runtime.rs`, beside the carried `assets/` and `data/` (blocks, items,
@@ -46,10 +46,18 @@ models, textures, recipes, loot, lang, tags).
   tick) into a **100,000 FE** buffer that accepts no inserts. It pushes that FE
   to upstream's ten targets — the four sides, each repeated one block up, the
   block below and two above — so a machine beside it runs.
+- **The six default addons** (`oritech:machine_{speed,efficiency,ultimate,processing,capacitor,burst}_addon`)
+  — each machine scans its own `getAddonSlots` positions every tick: the speed addon makes a craft
+  1.5× faster for 20% more FE, the efficiency addon makes it cheaper, the Synergy Matrix both, the
+  Auxiliary Processing Chamber runs one extra craft a completion, the capacitor adds 2,000,000 FE of
+  buffer and 2,000 insert, and a charged burst addon runs a machine eight times as fast for a while.
+  Additive stacking, the jar's shipped default.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
-  read it. `/oritech info <x> <y> <z>`, `/oritech energy <x> <y> <z> <amount>`
+  read it; right-click a machine with an addon block in the hand to put it in
+  the machine's first open slot.
+  `/oritech info <x> <y> <z>`, `/oritech energy <x> <y> <z> <amount>`
   and `/oritech fluid <x> <y> <z> <amount> <fluid>` (op) read, prime and fill a
   machine.
 
@@ -57,7 +65,8 @@ models, textures, recipes, loot, lang, tags).
 
 No GUI, no GeckoLib models (the machines are drawn as a full cube of their own
 texture), no crafting recipe for the blocks (they need Oritech components that
-are not in these slices — use `/give`), no addons, no energy or item pipes, no
+are not in these slices — use `/give`), no special addons (redstone, fluid,
+inventory proxy, acceptor, extender, combi, quarry), no energy or item pipes, no
 redstone control, no comparator output, no cold-biome speed bonus on the chiller
 (the pin has no biome read), no bucket input *slots* on the lava generator (a
 bucket in the hand fills it), no other multiblock (assembler, atomic forge,
@@ -69,7 +78,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules: 73 tests (runtime + glue)
+cargo test --offline                       # the rules: 91 tests (runtime + glue)
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod
@@ -81,12 +90,14 @@ cargo horizon-mod fits oritech.hmod --build 0b14f8a   # a different build: the p
 `cargo horizon-mod` fetches the pinned SDK into `.horizon/sdk/` (gitignored,
 never packed); the tree here already carries a copy of the campaign cache. The
 package's one registry dependency is `serde_json` (the carried rules module
-parses the recipe JSON), so its `Cargo.lock` travels **inside** the package.
+parses the recipe JSON); `cargo horizon-mod build` packs no `Cargo.lock`, while
+the launcher's `native-build` needs one — it is generated from the launcher's
+cargo home for the in-game leg and removed afterwards (see `notes.md`).
 
 The in-game leg needs a game the launcher built with this package (`../tools/launcher-game.sh build
 oritech`), because a native `.hmod` cannot load on an unmodded build. `tools/e2e.sh` is the scenario
-and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1`, `SELFTEST_COOLER=1`
-and `SELFTEST_LAVA=1` must fail.
+and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1`, `SELFTEST_COOLER=1`,
+`SELFTEST_LAVA=1` and `SELFTEST_ADDONS=1` must fail.
 
 Every build/test step goes through `../tools/build-slot.sh` in the campaign tree (`BUILD_LOCAL=1`,
 since the far box has no copy of this port). Pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`, mixins

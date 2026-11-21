@@ -83,6 +83,30 @@ CORE_ASSETS = [
 ]
 CARRIED += CORE_ASSETS
 
+# Slice 5: the six default addon blocks. Their blockstate is authored (the jar's
+# has 24 `face`/`facing`/`addon_used` variants, states this port's declaration
+# does not model), but the block model, the item model and the `_off` texture are
+# the jar's own, and every model names `machine_particle_texture` as its
+# particle texture.
+ADDON_NAMES = {
+    "machine_speed_addon": "Speed Addon",
+    "machine_efficiency_addon": "Efficiency Addon",
+    "machine_processing_addon": "Auxiliary Processing Chamber Addon",
+    "machine_capacitor_addon": "Capacitor Addon",
+    "machine_burst_addon": "Burst Addon",
+    "machine_ultimate_addon": "Synergy Matrix Addon",
+}
+ADDON_ASSETS = [
+    f"assets/oritech/{kind}/{path}"
+    for block in ADDON_NAMES
+    for kind, path in (
+        ("models/block", f"{block}.json"),
+        ("models/item", f"{block}.json"),
+        ("textures/block", f"{block}_off.png"),
+    )
+] + ["assets/oritech/textures/block/machine_particle_texture.png"]
+CARRIED += ADDON_ASSETS
+
 # --- authored files ----------------------------------------------------------
 
 BLOCKS = {
@@ -125,6 +149,10 @@ CORE_NAMES = [
 ]
 for tier, name in enumerate(CORE_NAMES, start=1):
     BLOCKS[f"machine_core_{tier}"] = {"name": name, "carry_assets": True}
+# Slice 5: the addon blocks carry their models and textures; only the blockstate
+# is authored, because the jar's has states this port does not declare.
+for block, name in ADDON_NAMES.items():
+    BLOCKS[block] = {"name": name, "carry_model": True}
 
 def authored() -> dict[str, str]:
     """The files written from the jar's facts, keyed by their path in the package."""
@@ -142,14 +170,16 @@ def authored() -> dict[str, str]:
     put(f"assets/{NS}/lang/en_us.json", lang)
 
     for block, data in BLOCKS.items():
+        # The blockstate is authored unless the jar's own is usable as it stands
+        # (the cores: one variant, vanilla states only).
         if not data.get("carry_assets"):
-            # The jar's blockstate is a GeckoLib placeholder (`machine_speed_addon`);
-            # a full cube of the machine's own texture is the closest a renderer
-            # without GeckoLib can show. CONTENT.md records the deviation.
             put(
                 f"assets/{NS}/blockstates/{block}.json",
                 {"variants": {"": {"model": f"{NS}:block/{block}"}}},
             )
+        # The block model and item model are carried for the cores and the six
+        # addons; the machines' GeckoLib placeholder is replaced by a full cube.
+        if not data.get("carry_assets") and not data.get("carry_model"):
             put(
                 f"assets/{NS}/models/block/{block}.json",
                 {

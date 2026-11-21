@@ -11,6 +11,12 @@
     "oritech:machine_core_4",
     "oritech:machine_core_5",
     "oritech:machine_core_6",
-    "oritech:machine_core_7"
+    "oritech:machine_core_7",
+    "oritech:machine_speed_addon",
+    "oritech:machine_efficiency_addon",
+    "oritech:machine_processing_addon",
+    "oritech:machine_capacitor_addon",
+    "oritech:machine_burst_addon",
+    "oritech:machine_ultimate_addon"
   ]
 }

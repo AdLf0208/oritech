@@ -150,12 +150,17 @@ impl Pulverizer {
     /// One server tick. `work` is `None` when the input has no matching recipe
     /// or its results do not fit the output slots.
     pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
+        self.tick_with(work, MACHINE_ENERGY_PER_TICK)
+    }
+
+    /// One server tick at an addon's per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
         advance(
             &mut self.energy,
             &mut self.progress,
             &mut self.recipe,
             work,
-            MACHINE_ENERGY_PER_TICK,
+            cost,
         )
     }
 }
@@ -442,12 +447,17 @@ impl Furnace {
     /// One server tick. `work` is `None` when the input has no smelting recipe,
     /// its output does not fit, or the machine is not assembled.
     pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
+        self.tick_with(work, furnace_energy_usage())
+    }
+
+    /// One server tick at an addon's per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
         advance(
             &mut self.energy,
             &mut self.progress,
             &mut self.recipe,
             work,
-            furnace_energy_usage(),
+            cost,
         )
     }
 }
@@ -772,12 +782,17 @@ impl Cooler {
     /// One server tick. `work` is `None` when the tank does not hold a recipe's
     /// fluid, its output does not fit, or the machine is not assembled.
     pub fn tick(&mut self, work: Option<Work<'_>>) -> Step {
+        self.tick_with(work, cooler_energy_usage())
+    }
+
+    /// One server tick at an addon's per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
         advance(
             &mut self.energy,
             &mut self.progress,
             &mut self.recipe,
             work,
-            cooler_energy_usage(),
+            cost,
         )
     }
 }
@@ -884,20 +899,37 @@ impl LavaGenerator {
     /// production tick.
     #[must_use]
     pub fn can_fit(&self) -> bool {
-        self.room() >= LAVA_ENERGY_PER_TICK
+        self.can_fit_amount(LAVA_ENERGY_PER_TICK)
+    }
+
+    /// `canFitEnergy` with an addon's own per-tick production.
+    #[must_use]
+    pub fn can_fit_amount(&self, amount: i32) -> bool {
+        self.room() >= amount
     }
 
     /// Upstream's gate for `tryConsumeInput`: no burn left and room to make FE.
     /// Only then does the tank's recipe load (and its fluid leave the tank).
     #[must_use]
     pub fn wants_recipe(&self) -> bool {
-        self.progress <= 0 && self.can_fit()
+        self.wants_recipe_for(LAVA_ENERGY_PER_TICK)
+    }
+
+    /// `wants_recipe` with an addon's own per-tick production.
+    #[must_use]
+    pub fn wants_recipe_for(&self, amount: i32) -> bool {
+        self.progress <= 0 && self.can_fit_amount(amount)
     }
 
     /// `FluidMultiblockGeneratorBlockEntity.consumeFluidRecipeInput`: the recipe's
     /// time becomes the burn left. False when no burn is wanted.
     pub fn load_recipe(&mut self, ticks: u32, recipe: &str) -> bool {
-        if !self.wants_recipe() || ticks == 0 {
+        self.load_recipe_for(ticks, recipe, LAVA_ENERGY_PER_TICK)
+    }
+
+    /// `load_recipe` with an addon's own per-tick production.
+    pub fn load_recipe_for(&mut self, ticks: u32, recipe: &str, amount: i32) -> bool {
+        if !self.wants_recipe_for(amount) || ticks == 0 {
             return false;
         }
         self.progress = i32::try_from(ticks).unwrap_or(i32::MAX);
@@ -910,12 +942,17 @@ impl LavaGenerator {
     /// One burning tick: the FE added (`0` when not burning or the buffer is
     /// full).
     pub fn tick(&mut self) -> i32 {
-        if self.progress <= 0 || !self.can_fit() {
+        self.tick_with(LAVA_ENERGY_PER_TICK)
+    }
+
+    /// One burning tick at an addon's own per-tick production.
+    pub fn tick_with(&mut self, amount: i32) -> i32 {
+        if self.progress <= 0 || !self.can_fit_amount(amount) {
             return 0;
         }
         self.progress -= 1;
-        self.energy += LAVA_ENERGY_PER_TICK;
-        LAVA_ENERGY_PER_TICK
+        self.energy += amount;
+        amount
     }
 }
 
@@ -975,6 +1012,381 @@ impl LavaGenRecipe {
             fluid,
             time: u32::try_from(time).unwrap_or(u32::MAX),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The machine addon system (slice 5)
+// ---------------------------------------------------------------------------
+
+/// `BlockContent.MACHINE_SPEED_ADDON`: speed ×0.5, efficiency ×1.2 upstream,
+/// turned into this port's effective multipliers by [`Addons::gather`].
+pub const SPEED_ADDON: &str = "oritech:machine_speed_addon";
+/// `BlockContent.MACHINE_EFFICIENCY_ADDON`: efficiency ×0.8.
+pub const EFFICIENCY_ADDON: &str = "oritech:machine_efficiency_addon";
+/// `BlockContent.MACHINE_PROCESSING_ADDON`: efficiency ×1.5 and one extra
+/// chamber.
+pub const PROCESSING_ADDON: &str = "oritech:machine_processing_addon";
+/// `BlockContent.MACHINE_CAPACITOR_ADDON`: +2,000,000 FE and +2,000 insert.
+pub const CAPACITOR_ADDON: &str = "oritech:machine_capacitor_addon";
+/// `BlockContent.MACHINE_BURST_ADDON`: 240 burst ticks.
+pub const BURST_ADDON: &str = "oritech:machine_burst_addon";
+/// `BlockContent.MACHINE_ULTIMATE_ADDON`: speed ×0.25, efficiency ×1.1.
+pub const ULTIMATE_ADDON: &str = "oritech:machine_ultimate_addon";
+
+/// The six default addon blocks, in the order the readout names them.
+pub const ADDON_BLOCKS: [&str; 6] = [
+    SPEED_ADDON,
+    EFFICIENCY_ADDON,
+    PROCESSING_ADDON,
+    CAPACITOR_ADDON,
+    BURST_ADDON,
+    ULTIMATE_ADDON,
+];
+
+/// `OritechConfig.addonConfig.burstAddonSpeedMultiplier`: a charged burst addon
+/// divides the duration by this.
+pub const BURST_SPEED_MULTIPLIER: f32 = 8.0;
+/// ...`.burstAddonThrottleMultiplier`: an exhausted one multiplies it by this.
+pub const BURST_THROTTLE_MULTIPLIER: f32 = 1.2;
+
+/// `MachineAddonBlock.AddonSettings`: what one addon block contributes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AddonSettings {
+    /// `speedMultiplier` — lower is faster.
+    pub speed: f32,
+    /// `efficiencyMultiplier` — lower is cheaper.
+    pub efficiency: f32,
+    /// `addedCapacity`.
+    pub capacity_bonus: i32,
+    /// `addedInsert`.
+    pub insert_bonus: i32,
+    /// `chamberCount`.
+    pub chambers: u32,
+    /// `burstTicks`.
+    pub burst_ticks: i32,
+}
+
+/// The settings of one of the six default addon blocks, `None` for any other
+/// block (the other addon kinds belong to machine families this port does not
+/// carry).
+#[must_use]
+pub fn addon_settings(block: &str) -> Option<AddonSettings> {
+    /// `AddonSettings.getDefaultSettings`' neutral entry.
+    const PLAIN: AddonSettings = AddonSettings {
+        speed: 1.0,
+        efficiency: 1.0,
+        capacity_bonus: 0,
+        insert_bonus: 0,
+        chambers: 0,
+        burst_ticks: 0,
+    };
+    let settings = match block {
+        // `withSpeedMultiplier(speedAddonSpeed)` / `withEfficiencyMultiplier(speedAddonEfficiency)`.
+        SPEED_ADDON => AddonSettings {
+            speed: 0.5,
+            efficiency: 1.2,
+            ..PLAIN
+        },
+        // `withEfficiencyMultiplier(efficiencyAddonEfficiency)`.
+        EFFICIENCY_ADDON => AddonSettings {
+            efficiency: 0.8,
+            ..PLAIN
+        },
+        // `withEfficiencyMultiplier(chamberAddonEfficiency).withChambers(1)`.
+        PROCESSING_ADDON => AddonSettings {
+            efficiency: 1.5,
+            chambers: 1,
+            ..PLAIN
+        },
+        // `withAddedCapacity(2_000_000).withAddedInsert(2_000)`.
+        CAPACITOR_ADDON => AddonSettings {
+            capacity_bonus: 2_000_000,
+            insert_bonus: 2_000,
+            ..PLAIN
+        },
+        // `withBurstTicks(burstAddonTicks)`.
+        BURST_ADDON => AddonSettings {
+            burst_ticks: 240,
+            ..PLAIN
+        },
+        // `withSpeedMultiplier(ultimateAddonSpeed).withEfficiencyMultiplier(ultimateAddonEfficiency)`.
+        ULTIMATE_ADDON => AddonSettings {
+            speed: 0.25,
+            efficiency: 1.1,
+            ..PLAIN
+        },
+        _ => return None,
+    };
+    Some(settings)
+}
+
+/// `OritechConfig.additiveAddons`' two branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddonMode {
+    /// The shipped default: each addon's *bonus* is added, then converted back
+    /// to a multiplier.
+    Additive,
+    /// `additiveAddons = false`: the settings multiply each other directly.
+    Multiplicative,
+}
+
+/// The jar's shipped default (`OritechConfig.additiveAddons`, `.define(…, true)`).
+pub const ADDON_MODE: AddonMode = AddonMode::Additive;
+
+/// `BaseAddonData`: the effective multipliers and bonuses one machine gathered
+/// from its connected addons.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Addons {
+    /// The effective speed multiplier (lower is faster).
+    pub speed: f32,
+    /// The effective efficiency multiplier (lower is cheaper).
+    pub efficiency: f32,
+    /// `energyBonusCapacity`.
+    pub capacity_bonus: i32,
+    /// `energyBonusTransfer`.
+    pub insert_bonus: i32,
+    /// `extraChambers`.
+    pub chambers: u32,
+    /// `maxBurstTicks`.
+    pub burst_ticks: i32,
+}
+
+impl Default for Addons {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            efficiency: 1.0,
+            capacity_bonus: 0,
+            insert_bonus: 0,
+            chambers: 0,
+            burst_ticks: 0,
+        }
+    }
+}
+
+impl Addons {
+    /// `MachineAddonController.gatherAddonStats`: the six default blocks'
+    /// settings, combined the way the jar's config picks.
+    #[must_use]
+    pub fn gather(blocks: &[&str], mode: AddonMode) -> Self {
+        let mut gathered = Self::default();
+        let mut speed = 1.0_f32;
+        let mut efficiency = 1.0_f32;
+        for block in blocks {
+            let Some(settings) = addon_settings(block) else {
+                continue;
+            };
+            match mode {
+                AddonMode::Additive => {
+                    speed += 1.0 - settings.speed;
+                    efficiency += 1.0 - settings.efficiency;
+                }
+                AddonMode::Multiplicative => {
+                    speed *= settings.speed;
+                    efficiency *= settings.efficiency;
+                }
+            }
+            gathered.capacity_bonus = gathered
+                .capacity_bonus
+                .saturating_add(settings.capacity_bonus);
+            gathered.insert_bonus = gathered.insert_bonus.saturating_add(settings.insert_bonus);
+            gathered.chambers = gathered.chambers.saturating_add(settings.chambers);
+            gathered.burst_ticks = gathered.burst_ticks.saturating_add(settings.burst_ticks);
+        }
+        if mode == AddonMode::Additive {
+            // The conversion back to a multiplier. A non-positive accumulator
+            // would divide by zero, which no shipped settings reach; the guard
+            // keeps a bad config from producing NaN.
+            let efficiency_change = efficiency - 1.0;
+            speed = if speed > 0.0 { 1.0 / speed } else { f32::MAX };
+            efficiency = if efficiency > 0.0 {
+                1.0 / efficiency
+            } else {
+                f32::MAX
+            };
+            if efficiency_change < 0.0 {
+                efficiency = 1.0 + efficiency_change.abs();
+            }
+        }
+        Self {
+            speed,
+            efficiency,
+            ..gathered
+        }
+    }
+
+    /// `getDefaultCapacity() + energyBonusCapacity`.
+    #[must_use]
+    pub fn capacity(&self, base: i32) -> i32 {
+        base.saturating_add(self.capacity_bonus)
+    }
+
+    /// `getDefaultInsertRate() + energyBonusTransfer`.
+    #[must_use]
+    pub fn insert(&self, base: i32) -> i32 {
+        base.saturating_add(self.insert_bonus)
+    }
+}
+
+/// The addon positions of one machine: `getAddonSlots` (world offsets, not
+/// rotated by a facing this port does not model). The basic generator has none.
+#[must_use]
+pub fn addon_slots(block: &str) -> &'static [[i32; 3]] {
+    match block {
+        "oritech:pulverizer_block" => &[[1, 0, 0]],
+        "oritech:powered_furnace_block" => &[[0, -1, 0]],
+        "oritech:cooler_block" => &[[0, 0, -2]],
+        "oritech:lava_generator_block" => &[[1, 0, 0], [1, 1, 0]],
+        _ => &[],
+    }
+}
+
+/// The readout's addon field: `none`, or the connected blocks' short names in
+/// [`ADDON_BLOCKS`] order (`speed+capacitor`).
+#[must_use]
+pub fn addon_names(blocks: &[&str]) -> String {
+    let short = [
+        "speed",
+        "efficiency",
+        "processing",
+        "capacitor",
+        "burst",
+        "ultimate",
+    ];
+    let names: Vec<&str> = ADDON_BLOCKS
+        .iter()
+        .zip(short)
+        .filter(|(block, _)| blocks.contains(block))
+        .map(|(_, name)| name)
+        .collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join("+")
+    }
+}
+
+/// `MachineBlockEntity.calculateEnergyUsage`: `base * efficiency * (1/speed)`,
+/// divided by the machine's own factor (the furnace's 2). The burst bonus
+/// multiplies the speed *and* the efficiency, so it cancels here and only moves
+/// the duration; [`speed_multiplier`] and [`efficiency_multiplier`] both apply
+/// it, which is what makes the cancellation hold. Rounded up: the buffer is a
+/// whole number of FE.
+#[must_use]
+pub fn energy_usage(base: i32, divisor: f64, speed: f32, efficiency: f32) -> i32 {
+    if speed <= 0.0 {
+        return i32::MAX;
+    }
+    // The jar subtracts the float from a long buffer, which for a whole-number
+    // buffer takes `ceil(usage)` off it every tick: `x - 57.6` truncates to
+    // `x - 58`. Written as the jar's formula so a config change moves one place.
+    let usage = f64::from(base) * f64::from(efficiency) * (1.0 / f64::from(speed)) / divisor;
+    if !usage.is_finite() || usage >= f64::from(i32::MAX) {
+        return i32::MAX;
+    }
+    (usage.ceil().max(0.0)) as i32
+}
+
+/// `UpgradableMachineBlockEntity.getSpeedMultiplier`: the machine's own base
+/// speed (the furnace's 0.5, 1 everywhere else) times the addons, times the
+/// burst bonus.
+#[must_use]
+pub fn speed_multiplier(addons: &Addons, base_speed: f32, burst_bonus: f32) -> f32 {
+    base_speed * addons.speed * burst_bonus
+}
+
+/// `UpgradableMachineBlockEntity.getEfficiencyMultiplier`: the addons times the
+/// burst bonus (the burst bonus cancels against the speed in the usage, and is
+/// what lets a burst shorten the duration without changing the FE a tick).
+#[must_use]
+pub fn efficiency_multiplier(addons: &Addons, burst_bonus: f32) -> f32 {
+    addons.efficiency * burst_bonus
+}
+
+/// The ticks `checkCraftingFinished` asks for: `progress >= time * speed`, the
+/// speed already carrying the base and the burst bonus. Never below one tick.
+#[must_use]
+pub fn processing_ticks(time: u32, speed: f32) -> u32 {
+    if speed <= 0.0 {
+        return 1;
+    }
+    let ticks = (f64::from(time) * f64::from(speed)).ceil();
+    if !ticks.is_finite() || ticks >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    (ticks.max(1.0)) as u32
+}
+
+/// `UpgradableGeneratorBlockEntity.tryConsumeInput`'s burn time:
+/// `(int)(time * speed * (1/efficiency))`, never below one tick.
+#[must_use]
+pub fn generator_burn_ticks(time: u32, speed: f32, efficiency: f32) -> u32 {
+    if speed <= 0.0 || efficiency <= 0.0 {
+        return 1;
+    }
+    // `(int)` on a positive float truncates, which is the floor.
+    let ticks = (f64::from(time) * f64::from(speed) / f64::from(efficiency)).floor();
+    if !ticks.is_finite() || ticks >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    (ticks.max(1.0)) as u32
+}
+
+/// `UpgradableGeneratorBlockEntity.calculateEnergyUsage` for a generator:
+/// `base * efficiency / speed`, truncated as the jar's long buffer truncates the
+/// float it adds.
+#[must_use]
+pub fn generator_output(base: i32, speed: f32, efficiency: f32) -> i32 {
+    if speed <= 0.0 {
+        return i32::MAX;
+    }
+    let output = (f64::from(base) * f64::from(efficiency) / f64::from(speed)).floor();
+    if !output.is_finite() || output >= f64::from(i32::MAX) {
+        return i32::MAX;
+    }
+    (output.max(0.0)) as i32
+}
+
+/// `UpgradableMachineBlockEntity`'s burst accumulator: +1 a server tick up to
+/// the addons' `maxBurstTicks`, −2 on every working tick, floored at the
+/// negative of that maximum.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Burst {
+    /// `remainingBurstTicks`.
+    pub remaining: i32,
+}
+
+impl Burst {
+    /// The bonus `getBurstBonus` applies to the speed and efficiency.
+    #[must_use]
+    pub fn bonus(&self) -> f32 {
+        if self.remaining > 0 {
+            1.0 / BURST_SPEED_MULTIPLIER
+        } else if self.remaining < 0 {
+            BURST_THROTTLE_MULTIPLIER
+        } else {
+            1.0
+        }
+    }
+
+    /// `addBurstTicks`: +1, capped at `max`.
+    pub fn recharge(&mut self, max: i32) {
+        self.remaining = self.remaining.saturating_add(1).min(max.max(0));
+    }
+
+    /// `consumeBurstTicks`: −2, floored at `-max`.
+    pub fn spend(&mut self, max: i32) {
+        self.remaining = self.remaining.saturating_sub(2).max(-max.max(0));
+    }
+
+    /// A stored counter brought inside a (possibly new) addon's range.
+    #[must_use]
+    pub fn clamped(self, max: i32) -> Self {
+        let max = max.max(0);
+        Self {
+            remaining: self.remaining.clamp(-max, max),
+        }
     }
 }
 
@@ -2079,5 +2491,338 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), 10, "no target is listed twice");
+    }
+
+    // --- slice 5: the addon system -------------------------------------------
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn the_six_default_addon_blocks_carry_the_jars_settings() {
+        // `BlockContent`'s six declarations and `OritechStartupConfig`'s defaults.
+        let speed = addon_settings(SPEED_ADDON).expect("the speed addon");
+        assert!(close(speed.speed, 0.5), "speedAddonSpeed");
+        assert!(close(speed.efficiency, 1.2), "speedAddonEfficiency");
+        assert_eq!((speed.capacity_bonus, speed.insert_bonus), (0, 0));
+        assert_eq!((speed.chambers, speed.burst_ticks), (0, 0));
+
+        let efficiency = addon_settings(EFFICIENCY_ADDON).expect("the efficiency addon");
+        assert!(close(efficiency.speed, 1.0));
+        assert!(
+            close(efficiency.efficiency, 0.8),
+            "efficiencyAddonEfficiency"
+        );
+
+        let ultimate = addon_settings(ULTIMATE_ADDON).expect("the ultimate addon");
+        assert!(close(ultimate.speed, 0.25), "ultimateAddonSpeed");
+        assert!(close(ultimate.efficiency, 1.1), "ultimateAddonEfficiency");
+
+        let processing = addon_settings(PROCESSING_ADDON).expect("the processing addon");
+        assert!(close(processing.efficiency, 1.5), "chamberAddonEfficiency");
+        assert_eq!(processing.chambers, 1, "withChambers(1)");
+
+        let capacitor = addon_settings(CAPACITOR_ADDON).expect("the capacitor addon");
+        assert_eq!(capacitor.capacity_bonus, 2_000_000);
+        assert_eq!(capacitor.insert_bonus, 2_000);
+
+        let burst = addon_settings(BURST_ADDON).expect("the burst addon");
+        assert_eq!(burst.burst_ticks, 240, "burstAddonTicks");
+
+        assert!(
+            addon_settings("oritech:machine_acceptor_addon").is_none(),
+            "the other addon kinds belong to machine families this port does not carry"
+        );
+        assert!(addon_settings("minecraft:iron_block").is_none());
+    }
+
+    #[test]
+    fn additive_addons_convert_the_jars_settings_back_to_multipliers() {
+        // `OritechConfig.additiveAddons` defaults to true: add the bonus, then
+        // invert the accumulator (`gatherAddonStats`).
+        let speed = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        assert!(close(speed.speed, 2.0 / 3.0), "1 / (1 + 0.5)");
+        assert!(close(speed.efficiency, 1.2), "1 / 0.8, then 1 + 0.2");
+
+        let efficiency = Addons::gather(&[EFFICIENCY_ADDON], ADDON_MODE);
+        assert!(close(efficiency.speed, 1.0));
+        assert!(close(efficiency.efficiency, 1.0 / 1.2));
+
+        let ultimate = Addons::gather(&[ULTIMATE_ADDON], ADDON_MODE);
+        assert!(close(ultimate.speed, 1.0 / 1.75));
+        assert!(close(ultimate.efficiency, 1.1));
+
+        let processing = Addons::gather(&[PROCESSING_ADDON], ADDON_MODE);
+        assert!(close(processing.efficiency, 1.5));
+        assert_eq!(processing.chambers, 1);
+
+        let mixed = Addons::gather(&[SPEED_ADDON, EFFICIENCY_ADDON], ADDON_MODE);
+        assert!(close(mixed.speed, 2.0 / 3.0));
+        assert!(
+            close(mixed.efficiency, 1.0),
+            "the two efficiency bonuses cancel"
+        );
+
+        assert_eq!(Addons::gather(&[], ADDON_MODE), Addons::default());
+    }
+
+    #[test]
+    fn two_speed_addons_stack_additively_and_the_other_mode_multiplies() {
+        let additive = Addons::gather(&[SPEED_ADDON, SPEED_ADDON], AddonMode::Additive);
+        assert!(close(additive.speed, 0.5), "1 / (1 + 0.5 + 0.5)");
+        assert!(close(additive.efficiency, 1.4), "0.6 -> 1/0.6 -> 1 + 0.4");
+
+        let multiplied = Addons::gather(&[SPEED_ADDON, SPEED_ADDON], AddonMode::Multiplicative);
+        assert!(close(multiplied.speed, 0.25));
+        assert!(close(multiplied.efficiency, 1.44));
+    }
+
+    #[test]
+    fn a_capacitor_adds_its_capacity_and_insert_to_the_machines_own() {
+        let addons = Addons::gather(&[CAPACITOR_ADDON], ADDON_MODE);
+        assert_eq!(addons.capacity(PULVERIZER_CAPACITY), 2_025_000);
+        assert_eq!(addons.insert(PULVERIZER_MAX_INSERT), 2_256);
+        assert_eq!(
+            Addons::default().capacity(PULVERIZER_CAPACITY),
+            PULVERIZER_CAPACITY
+        );
+    }
+
+    #[test]
+    fn every_machine_names_the_addon_slots_the_jar_gives_it() {
+        assert_eq!(addon_slots("oritech:pulverizer_block"), &[[1, 0, 0]]);
+        assert_eq!(addon_slots("oritech:powered_furnace_block"), &[[0, -1, 0]]);
+        assert_eq!(addon_slots("oritech:cooler_block"), &[[0, 0, -2]]);
+        assert_eq!(
+            addon_slots("oritech:lava_generator_block"),
+            &[[1, 0, 0], [1, 1, 0]]
+        );
+        assert!(
+            addon_slots("oritech:basic_generator_block").is_empty(),
+            "`BasicGeneratorEntity.getAddonSlots` is empty"
+        );
+        assert!(addon_slots("minecraft:stone").is_empty());
+    }
+
+    #[test]
+    fn the_readout_names_the_connected_addons_in_the_jars_order() {
+        assert_eq!(addon_names(&[]), "none");
+        assert_eq!(addon_names(&[SPEED_ADDON]), "speed");
+        assert_eq!(
+            addon_names(&[CAPACITOR_ADDON, SPEED_ADDON]),
+            "speed+capacitor"
+        );
+        assert_eq!(addon_names(&[SPEED_ADDON, "minecraft:stone"]), "speed");
+    }
+
+    #[test]
+    fn a_pulverizer_speed_addon_finishes_a_bone_in_67_ticks_for_3886_fe() {
+        let addons = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        let bonus = Burst::default().bonus();
+        let speed = speed_multiplier(&addons, 1.0, bonus);
+        assert!(close(speed, 2.0 / 3.0));
+        let cost = energy_usage(
+            MACHINE_ENERGY_PER_TICK,
+            1.0,
+            speed,
+            efficiency_multiplier(&addons, bonus),
+        );
+        assert_eq!(cost, 58, "32 x 1.2 / 0.6667 = 57.6, rounded up");
+        let ticks = processing_ticks(100, speed);
+        assert_eq!(ticks, 67, "100 x 0.6667");
+
+        let mut machine = Pulverizer {
+            energy: 10_000,
+            ..Pulverizer::new()
+        };
+        let step_work = work("oritech:pulverizer/bone", ticks);
+        for tick in 1..ticks {
+            assert_eq!(
+                machine.tick_with(step_work, cost),
+                Step::Working,
+                "tick {tick}"
+            );
+        }
+        assert_eq!(machine.tick_with(step_work, cost), Step::Finished);
+        assert_eq!(machine.progress, 0);
+        assert_eq!(10_000 - machine.energy, 3_886);
+    }
+
+    #[test]
+    fn an_efficiency_addon_makes_the_same_craft_cost_2700_fe() {
+        let addons = Addons::gather(&[EFFICIENCY_ADDON], ADDON_MODE);
+        let speed = speed_multiplier(&addons, 1.0, 1.0);
+        let cost = energy_usage(
+            MACHINE_ENERGY_PER_TICK,
+            1.0,
+            speed,
+            efficiency_multiplier(&addons, 1.0),
+        );
+        assert_eq!(cost, 27, "32 x 0.8333 = 26.67, rounded up");
+        assert_eq!(processing_ticks(100, speed), 100);
+        assert_eq!(cost * 100, 2_700);
+    }
+
+    #[test]
+    fn a_processing_addon_costs_4800_and_asks_for_a_second_chamber() {
+        let addons = Addons::gather(&[PROCESSING_ADDON], ADDON_MODE);
+        assert_eq!(addons.chambers, 1);
+        let speed = speed_multiplier(&addons, 1.0, 1.0);
+        let cost = energy_usage(
+            MACHINE_ENERGY_PER_TICK,
+            1.0,
+            speed,
+            efficiency_multiplier(&addons, 1.0),
+        );
+        assert_eq!(cost, 48, "32 x 1.5");
+        assert_eq!(processing_ticks(100, speed), 100);
+        assert_eq!(cost * 100, 4_800);
+    }
+
+    #[test]
+    fn a_charged_burst_addon_runs_eight_times_as_fast_for_the_same_fe_a_tick() {
+        let addons = Addons::gather(&[BURST_ADDON], ADDON_MODE);
+        assert_eq!(addons.burst_ticks, 240);
+        let mut burst = Burst::default();
+        for _ in 0..240 {
+            burst.recharge(addons.burst_ticks);
+        }
+        assert_eq!(burst.remaining, 240);
+        let bonus = burst.bonus();
+        assert!(close(bonus, 1.0 / 8.0));
+        let speed = speed_multiplier(&addons, 1.0, bonus);
+        assert_eq!(processing_ticks(100, speed), 13, "100 x 0.125");
+        let cost = energy_usage(
+            MACHINE_ENERGY_PER_TICK,
+            1.0,
+            speed,
+            efficiency_multiplier(&addons, bonus),
+        );
+        assert_eq!(
+            cost, MACHINE_ENERGY_PER_TICK,
+            "the burst bonus cancels in the usage"
+        );
+    }
+
+    #[test]
+    fn a_burst_counter_charges_one_a_tick_drains_two_a_work_tick_and_throttles() {
+        let mut burst = Burst::default();
+        burst.recharge(240);
+        assert_eq!(burst.remaining, 1);
+        for _ in 0..240 {
+            burst.recharge(240);
+        }
+        assert_eq!(burst.remaining, 240, "capped at the addon's ticks");
+        burst.spend(240);
+        burst.spend(240);
+        assert_eq!(burst.remaining, 236);
+
+        let throttled = Burst { remaining: -240 };
+        assert!(close(throttled.bonus(), 1.2));
+        let mut floored = Burst { remaining: -240 };
+        floored.spend(240);
+        assert_eq!(floored.remaining, -240, "floored at -max");
+
+        assert_eq!(Burst { remaining: 500 }.clamped(240).remaining, 240);
+        assert_eq!(Burst { remaining: -500 }.clamped(240).remaining, -240);
+        assert_eq!(Burst { remaining: 900 }.clamped(0).remaining, 0);
+    }
+
+    #[test]
+    fn a_furnace_speed_addon_smelts_in_67_ticks_for_3886_fe() {
+        let addons = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        let speed = speed_multiplier(&addons, FURNACE_SPEED as f32, 1.0);
+        assert!(close(speed, (2.0 / 3.0) * 0.5));
+        let cost = energy_usage(
+            FURNACE_ENERGY_PER_TICK,
+            2.0,
+            speed,
+            efficiency_multiplier(&addons, 1.0),
+        );
+        assert_eq!(cost, 58, "32 x 1.2 x (1 / 0.3333) / 2");
+        let ticks = processing_ticks(200, speed);
+        assert_eq!(ticks, 67);
+
+        let mut machine = Furnace {
+            energy: 10_000,
+            ..Furnace::new()
+        };
+        let step_work = work("minecraft:iron_ingot_from_smelting_iron_ore", ticks);
+        for _ in 1..ticks {
+            assert_eq!(machine.tick_with(step_work, cost), Step::Working);
+        }
+        assert_eq!(machine.tick_with(step_work, cost), Step::Finished);
+        assert_eq!(10_000 - machine.energy, 3_886);
+    }
+
+    #[test]
+    fn a_chiller_speed_addon_takes_134_ticks_for_7772_fe() {
+        let addons = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        let speed = speed_multiplier(&addons, 1.0, 1.0);
+        let cost = energy_usage(
+            COOLER_ENERGY_PER_TICK,
+            1.0,
+            speed,
+            efficiency_multiplier(&addons, 1.0),
+        );
+        assert_eq!(cost, 58);
+        let ticks = processing_ticks(200, speed);
+        assert_eq!(ticks, 134, "200 x 0.6667");
+        assert_eq!(i32::try_from(ticks).unwrap() * cost, 7_772);
+    }
+
+    #[test]
+    fn a_lava_generator_speed_addon_burns_66_ticks_at_115_fe() {
+        let addons = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        let speed = speed_multiplier(&addons, 1.0, 1.0);
+        let efficiency = efficiency_multiplier(&addons, 1.0);
+        let ticks = generator_burn_ticks(120, speed, efficiency);
+        assert_eq!(ticks, 66, "(int)(120 x 0.6667 / 1.2)");
+        let output = generator_output(LAVA_ENERGY_PER_TICK, speed, efficiency);
+        assert_eq!(output, 115, "64 x 1.2 / 0.6667 = 115.2, truncated");
+        assert_eq!(i32::try_from(ticks).unwrap() * output, 7_590);
+
+        let mut machine = LavaGenerator::new();
+        assert!(machine.load_recipe_for(ticks, "oritech:lavagen/lava", output));
+        let mut made = 0;
+        for _ in 0..ticks {
+            made += machine.tick_with(output);
+        }
+        assert_eq!(made, 7_590);
+        assert_eq!(machine.energy, 7_590);
+    }
+
+    #[test]
+    fn no_addon_keeps_every_machines_own_numbers() {
+        let addons = Addons::default();
+        assert_eq!(
+            energy_usage(
+                MACHINE_ENERGY_PER_TICK,
+                1.0,
+                speed_multiplier(&addons, 1.0, 1.0),
+                efficiency_multiplier(&addons, 1.0),
+            ),
+            32
+        );
+        assert_eq!(
+            energy_usage(
+                FURNACE_ENERGY_PER_TICK,
+                2.0,
+                speed_multiplier(&addons, FURNACE_SPEED as f32, 1.0),
+                efficiency_multiplier(&addons, 1.0),
+            ),
+            32
+        );
+        assert_eq!(
+            processing_ticks(100, speed_multiplier(&addons, 1.0, 1.0)),
+            100
+        );
+        assert_eq!(
+            processing_ticks(200, speed_multiplier(&addons, FURNACE_SPEED as f32, 1.0)),
+            100
+        );
+        assert_eq!(generator_output(LAVA_ENERGY_PER_TICK, 1.0, 1.0), 64);
+        assert_eq!(generator_burn_ticks(120, 1.0, 1.0), 120);
     }
 }

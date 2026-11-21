@@ -5,6 +5,32 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.7 — slice 5, the machine addon system (pin `0a875da`, 2026-11-21)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline'` (new bodies `todo!()`) | **73 passed, 15 failed** — every addon rule is red first (`panicked … not yet implemented`) | `slice5-test-red.log` |
+| 2 | same, implemented | **91 passed, 0 failed** | `sdk-test.log` |
+| 3 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `sdk-clippy.log` |
+| 4 | `cd ports/oritech && rm -f Cargo.lock && cargo horizon-mod build` (twice, `Cargo.lock` removed and artifact deleted between) | **149,358 B**, sha256 `f1232e32e10c0d139d0e2681c06a970190f9ef6314b4bf736e73d4c5077c3753`, `cmp` identical, 150 entries, no packed `Cargo.lock` | `slice5-build.log` |
+| 5 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.7 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` | `sdk-check.log` |
+| 6 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (delivered file, sha `f1232e32…`) | `sdk-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `sdk-fits.log` |
+| 8 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 9 | `python3 tools/carry_content.py --check` | `141 files, 0 differ` | stdout |
+| 10 | `ports/tools/launcher-game.sh build oritech` (manifest bumped to 0.2.7 so it recompiles) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows `' has no open addon slot on this machine` and `oritech:machine_speed_addon` | `slice5-launcher-build.log` |
+| 11 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` | `e2e-slice5.log` |
+| 12 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no generator item and its generator, furnace, core, chiller, lava generator and both addon ids stay air | `e2e-slice5-differential.log` |
+| 13 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice5-control.log` |
+| 14 | same with `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` | `e2e-slice5-selftest.log` |
+| 15 | same with `SELFTEST_ADDONS=1` (one tick too much primed) | **EXIT:1** — `ENERGY is '58', expected '0'` | `e2e-slice5-selftest-addons.log` |
+| 16 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 22 logs, 22 ok, 0 bad | stdout |
+| 17 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 18 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game assertions and what each can fail on are listed in `notes.md` → *Slice 5* → *Verification*
+and *In-game transcript*.
+
 ## 0.2.6 — slice 4, the Lava Generator (pin `0a875da`, 2026-11-21)
 
 | # | Command (from the campaign root) | Verdict | Log |

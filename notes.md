@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -16,9 +16,10 @@ campaign pin from 2026-11-21; slice 1 and the 0.2.1 review ran at `0b14f8a`, and
 Status: **ported-partial** — slice 1 (the fuel generator, the pulverizer, their
 energy link, the recipe reader and the content carry), slice 2 (the Powered
 Furnace multiblock and the seven machine cores), slice 3 (the Industrial
-Chiller, the mod's first fluid machine) and slice 4 (the Lava Generator, a
-fluid-burning generator) are implemented and verified in game. The gap list
-below is the rest of the mod.
+Chiller, the mod's first fluid machine), slice 4 (the Lava Generator, a
+fluid-burning generator) and slice 5 (the machine addon system: the six default
+addon blocks and the scan that applies them) are implemented and verified in
+game. The gap list below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
 `precheck-mod.py oritech` offers (`DISPATCHABLE`, jar licence CC0-1.0, no
@@ -1042,7 +1043,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
 | `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
 | `command` | tested | `/oritech info` (every phase), `/oritech energy` (D, H, R, S, T), `/oritech fluid` (P, T, U) |
-| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the addons, the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, cooler's reactor kin, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above |
+| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (redstone, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5) |
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
 mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
@@ -1223,5 +1224,187 @@ while the burn still has ticks left — upstream's own order.
 `## Upstream defects fixed` (slice 4): none found. The water-refusal and the bucket slots are
 recorded deviations (the pin cannot express the filter, and the port has no GUI), not defects; the
 `sheolfire` recipe is a coverable gap, not a broken behaviour.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+
+
+## Slice 5 — the machine addon system, the six default addon blocks (0.2.7, 2026-11-21)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **9**,
+verbatim: "Redstone control and addons do nothing. The basic generator has no addon slots upstream; the
+pulverizer's one addon slot, the addon items, the speed and efficiency multipliers and the burst ticks
+are all fixed at 1 here (`BaseAddonData.DEFAULT_ADDON_DATA`)." The slice-4 report's `## Next slice`
+named it. It is the **shared system** every delivered machine binds to, not one more machine: the six
+default addon blocks, the machine's own `getAddonSlots` scan, and the speed/efficiency/burst/chamber
+effects that change the tick every machine already has.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the
+**machines** shape this slice needs (a real machine tick, a per-machine saved counter, six blocks with
+their models and textures). No renderer, no GUI, no dimension, no energy network.
+
+### The TDD question the brief asked: additive or multiplicative?
+
+`OritechConfig.additiveAddons` is a **server config whose shipped default is `true`**
+(`init/OritechConfig.java:24-27`, `.define("additiveAddons", true)`). In additive mode
+`MachineAddonController.gatherAddonStats` (lines 215-265) accumulates `speed += 1 - settings.speed`
+and `efficiency += 1 - settings.efficiency`, then converts back: `speed = 1/acc`, `efficiency = 1/acc`,
+or `1 + |acc - 1|` when the efficiency accumulator was below 1. So the jar's shipped numbers for one
+addon of each kind are **not** its raw settings:
+
+| Addon block (`BlockContent`) | Settings (`OritechStartupConfig` default) | Additive speed | Additive efficiency |
+|---|---|---|---|
+| `machine_speed_addon` | speed 0.5, efficiency 1.2 | 1 / 1.5 = **2/3** | **1.2** |
+| `machine_efficiency_addon` | efficiency 0.8 | 1 | 1 / 1.2 = **0.8333** |
+| `machine_ultimate_addon` | speed 0.25, efficiency 1.1 | 1 / 1.75 = **0.5714** | **1.1** |
+| `machine_processing_addon` | efficiency 1.5 | 1 | **1.5**, +1 chamber |
+| `machine_capacitor_addon` | — | 1 | 1, +2,000,000 FE, +2,000 insert |
+| `machine_burst_addon` | — | ×8 / ×1.2 | (cancels) |
+
+The brief's proposed assertion (a bone in 50 ticks for 3,850 FE) is the **multiplicative-mode** figure
+(speed 0.5, `32 × 1.2 / 0.5 = 76.8`). The jar's default is additive, so this slice implements additive
+and asserts its figures: a bone in **67 ticks** (100 × 2/3) at `ceil(32 × 1.2 × 3/2) = 58` FE a tick =
+**3,886 FE**. The multiplicative branch is implemented too (`AddonMode::Multiplicative`, selected by the
+same config upstream) and unit-tested (`two_speed_addons_stack_additively_and_the_other_mode_multiplies`),
+so a future config read can switch without rewriting a rule.
+
+### The jar's numbers carried into this port
+
+| Value | Upstream | This port |
+|---|---|---|
+| speed addon | `withSpeedMultiplier(speedAddonSpeed = 0.5).withEfficiencyMultiplier(speedAddonEfficiency = 1.2)` | `addon_settings(SPEED_ADDON)` |
+| efficiency addon | `withEfficiencyMultiplier(efficiencyAddonEfficiency = 0.8)` | `EFFICIENCY_ADDON` |
+| Synergy Matrix | `withSpeedMultiplier(ultimateAddonSpeed = 0.25).withEfficiencyMultiplier(ultimateAddonEfficiency = 1.1)` | `ULTIMATE_ADDON` |
+| Auxiliary Processing Chamber | `withEfficiencyMultiplier(chamberAddonEfficiency = 1.5).withChambers(1)` | `PROCESSING_ADDON` |
+| capacitor | `withAddedCapacity(2_000_000).withAddedInsert(2_000)` | `CAPACITOR_ADDON` |
+| burst | `withBurstTicks(burstAddonTicks = 240)` | `BURST_ADDON`, `Burst` |
+| usage | `energyPerTick * efficiency * (1/speed)`; the furnace adds `(1/0.5)/2`; the effective cost a whole-FE buffer loses is `ceil` of it | `energy_usage` |
+| processing duration | `progress >= time * speed` | `processing_ticks` |
+| generator burn/output | `(int)(time * speed / efficiency)`, `energyPerTick * efficiency / speed` truncated by the long buffer | `generator_burn_ticks`, `generator_output` |
+| burst cycle | +1 a server tick to 240, −2 a working tick, floored at −240; ×8 while positive, ×1.2 while negative | `Burst::{recharge,spend,bonus}` |
+| addon slots | `getAddonSlots`: pulverizer `(1,0,0)`, furnace `(0,-1,0)`, chiller `(0,0,-2)`, lava generator `(1,0,0)` and `(1,1,0)`, basic generator none | `addon_slots` |
+| chambers | `UpgradableMachineBlockEntity.craftItem` repeats the craft while another input and its output room remain | the chamber loop in each tick |
+
+### What was added
+
+- **`src/runtime.rs`** (pure, unit-tested): `SPEED_ADDON` … `ULTIMATE_ADDON`, `ADDON_BLOCKS`,
+  `AddonSettings` + `addon_settings`, `AddonMode` + `ADDON_MODE`, `Addons` (+ `gather`, `capacity`,
+  `insert`), `addon_slots`, `addon_names`, `energy_usage`, `speed_multiplier`,
+  `efficiency_multiplier`, `processing_ticks`, `generator_burn_ticks`, `generator_output`, `Burst`, and
+  `tick_with` on `Pulverizer`/`Furnace`/`Cooler` plus `LavaGenerator::{tick_with, can_fit_amount,
+  wants_recipe_for, load_recipe_for}`. The no-addon arms are the same numbers as before
+  (`no_addon_keeps_every_machines_own_numbers`).
+- **`src/support.rs`**: `connected_addons` (the live scan of the machine's own slots), `gathered`,
+  `AddonView` (the readout's `addons`/`burst` fields), `burst_state`/`store_burst`
+  (`oritech.addon_burst`), `MachineProfile` (base energy, base speed, divisor per machine),
+  `addon_tick`, the chamber loops (pulverizer, furnace, chiller), the addon-aware lava burn, the
+  addon-aware capacity in every state reader and in `/oritech energy`, and `place_addon` (a held addon
+  block goes into the first open slot on a right click). Every own readout gained `addons <names>` and,
+  with a burst addon, `burst <n>/<max>`.
+- **Content**: the six blocks — the jar's block model, item model and `_off` texture carried byte for
+  byte (`machine_particle_texture.png` too), an authored blockstate (one variant: the jar's own has 24
+  `face`/`facing` states this port does not declare), the 26.3 item definition, the block declaration,
+  the loot table, the six lang names, the machines tab and both tool tags. `assets/` + `data/` are now
+  **141 files** (`tools/carry_content.py --check` → `141 files, 0 differ`).
+- **`tools/parse_info.py`**: `ADDONS`, `BURST`, `BURST_MAX` on all four upgradable-machine lines.
+  **`tools/e2e.sh`**: `count_in`, `drain`, and phases AA–AJ; `SELFTEST_ADDONS=1`; the control leg now
+  checks the addon ids too. **`PLAN-slice5.md`** is the slice's plan.
+
+### Deviations (slice 5)
+
+1. **The slot is not rotated by the machine's facing.** Upstream offsets a slot with
+   `Geometry.offsetToWorldPosition(getFacingForAddon(), …)`; this port has no `facing` state (recorded
+   since slice 1), so the offsets are the unrotated `getAddonSlots` values.
+2. **No `ADDON_USED` blockstate and no addon block entity.** Upstream marks a connected addon used and
+   gives it to one controller; here each machine scans its own slot positions every tick, so two
+   machines whose slots name the same position would both read one addon. The addon block shows its
+   `_off` model (the look upstream has until an addon is claimed).
+3. **The declared FE capability keeps its base capacity.** `Registrar::block_energy` is a
+   declaration-time constant at this pin, so a capacitor raises the port's own buffer, its clamp and its
+   readout (which is what phase AE asserts) but a foreign cable still sees the base figure.
+4. **The burst counter is saved** (`oritech.addon_burst`); upstream keeps it as a sync field.
+5. **A generator's burst never drains.** `UpgradableGeneratorBlockEntity` never calls `useEnergy`, so
+   upstream's `consumeBurstTicks` never runs on a generator: a charged burst addon keeps a lava generator
+   at 8× speed. Preserved, and the tick's comment says so.
+6. **`addon_settings` refuses the other addon kinds** (`machine_acceptor_addon`, `machine_fluid_addon`,
+   the redstone/proxy/extender/combi families): they belong to machine families this port does not
+   carry, and a block whose effect is inert would be dead data.
+
+### Verification (0.2.7)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline`, the new bodies `todo!()` | **73 passed, 15 failed**, every failure `panicked at src/runtime.rs:…: not yet implemented` (`slice5-test-red.log`) |
+| tests (green) | `cargo test --offline` | **91 passed**, 0 failed (`sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| `runtime.rs` slice-1 part | `head -333 src/runtime.rs \| sha256sum` before/after `cargo fmt` | `74ee2dbc…f3b4` both times |
+| package | `cargo horizon-mod build` twice, the artifact and `Cargo.lock` removed between | **149,358 B**, sha256 `f1232e32e10c0d139d0e2681c06a970190f9ef6314b4bf736e73d4c5077c3753`, `cmp` identical, **150 entries**, no packed `Cargo.lock` (`slice5-build.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.7 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `149358 bytes … unsigned`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (`sdk-fits.log`, on the delivered file, sha `f1232e32…`) |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `141 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.7 ⇒ a real recompile) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows `' has no open addon slot on this machine` and `oritech:machine_speed_addon` |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice5.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package the generator item is absent and the generator, furnace, core, chiller, lava generator and **both addon** ids stay `minecraft:air` (`e2e-slice5-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice5-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` (`e2e-slice5-selftest.log`) |
+| fail-capability, addons | `SELFTEST_ADDONS=1` (one tick too much primed) | **EXIT:1** — `ENERGY is '58', expected '0'` (`e2e-slice5-selftest-addons.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 22 logs, 22 ok, 0 bad |
+
+The addon legs are fail-capable by construction: each primes **exactly** the operation's whole cost, so a
+cheaper tick leaves FE behind, a dearer one starves mid-progress, and a duration that is too long never
+finishes inside the wait. The in-run differentials are phase AC (the same machine, same bone, addon
+removed: 100 ticks and 3,200 FE while AB took 67 and 3,886) and phase AE (the capacitor removed clamps
+the readout back to `/25000`).
+
+### In-game transcript (quoted from `e2e-slice5.log`)
+
+```
+  all six addon blocks placed and read back; an undeclared addon id was refused
+  info(4,100,0): Pulverizer at [4, 100, 0]: 0/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x6, out1 empty, addons speed, t=5698
+  info(4,100,0): Pulverizer at [4, 100, 0]: 0/25000 FE, progress 0 recipe oritech:pulverizer/bone, input minecraft:bone x1, out0 minecraft:bone_meal x6, out1 empty, addons speed, t=5757
+  info(4,100,0): Pulverizer at [4, 100, 0]: 0/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x12, out1 empty, addons speed, t=5858
+  67 ticks at 58 FE (2/3 speed, 1.2 efficiency) finished for exactly 3886 FE, minecraft:bone_meal x12
+  without the addon: exactly 3200 FE, minecraft:bone_meal x18 (the speed-addon leg is not a constant)
+  100 ticks at 27 FE (1 / 1.2 efficiency) cost exactly 2700 FE
+  capacitor: 25,000/2,025,000 and 1,000,000/2,025,000 held; without it 25,000 again
+  burst 240/240: 13 ticks at 32 FE (the bonus cancels) finished for 416 FE
+  without the burst addon the counter is neither printed nor kept
+  two bones -> 12 bone meal in one completion for exactly 4800 FE (1.5 efficiency)
+  furnace: 200 x 2/3 x 0.5 = 67 ticks, 58 FE a tick = exactly 3886 FE, minecraft:iron_ingot x4
+  chiller: 200 x 2/3 = 134 ticks at 58 FE = exactly 7772 FE, minecraft:ice x6
+  lava: (int)(120 x 2/3 / 1.2) = 66 ticks at (int)(64 x 1.2 x 3/2) = 115 FE = 7590 FE
+```
+
+The capacitor's two writes are the brief's assertion: `/oritech energy 4 100 0 1000000` reads back
+`1000000/2025000 FE`, and the 25,000 write reads `25000/2025000` too; with the addon broken the same read
+is `25000/25000`, so the capacity really moved.
+
+### What slice 5 covered, and by which phase
+
+| Family | Status | Evidence |
+|---|---|---|
+| `oritech:machine_speed_addon` | tested | AA places and reads it back; AB the 67-tick/3,886 FE craft; AH the furnace; AI the chiller; AJ the lava generator |
+| `oritech:machine_efficiency_addon` | tested | AA; AD the 2,700 FE craft |
+| `oritech:machine_processing_addon` | tested | AA; AG two bones → 12 bone meal in one completion for 4,800 FE |
+| `oritech:machine_capacitor_addon` | tested | AA; AE 2,025,000 FE of capacity, a 25,000 and a 1,000,000 write held, clamped back when removed |
+| `oritech:machine_burst_addon` | tested | AA; AF charges to `burst 240/240` and crafts in 13 ticks for 416 FE |
+| `oritech:machine_ultimate_addon` | tested | AA places and reads it back (its speed/efficiency figures are unit-tested, `additive_addons_convert_the_jars_settings_back_to_multipliers`) |
+| `block_entity` | tested | the addon scan itself: the `addons` field of every readout in AA–AJ, and AC proves the field follows the block |
+| `loot_table` | tested | W rolls all six addon tables into the inventory; an unknown table gives nothing |
+| `*` | not ported | the special addon kinds — acceptor, fluid, inventory proxy, redstone, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter — belong to machine families this port does not carry |
+
+The burst counter's own drain is unit-tested
+(`a_burst_counter_charges_one_a_tick_drains_two_a_work_tick_and_throttles`) rather than asserted in
+game: a chat read lands after the craft and the idle recharge has already clamped the counter back, so
+the in-game leg asserts the effect (13 ticks) and the maximum (`burst 240/240`), not the drain.
+
+`## Upstream defects fixed` (slice 5): none found. The generator's non-draining burst counter and the
+unrotated addon slots are recorded deviations, not defects; the config's additive mode is a design
+choice, and the port follows the shipped default.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

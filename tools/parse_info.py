@@ -41,8 +41,15 @@ FIELDS = (
     "ASKED",
     "ACCEPTED",
     "NAME",
+    "ADDONS",
+    "BURST",
+    "BURST_MAX",
     "T",
 )
+
+# Slice 5: every upgradable machine's line ends `addons <names>` and, only when a
+# burst addon sets a maximum, `burst <remaining>/<max>`.
+ADDON_FIELD = r"addons (?P<ADDONS>[^\s,]+?)(?: burst (?P<BURST>-?\d+)/(?P<BURST_MAX>\d+))?, t=(?P<T>\d+)$"
 
 GENERATOR = re.compile(
     r"^Basic Generator at \[(?P<POS>[^\]]+)\]: "
@@ -55,7 +62,7 @@ PULVERIZER = re.compile(
     r"^Pulverizer at \[(?P<POS>[^\]]+)\]: "
     r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
     r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
-    r"input (?P<INPUT>.+?), out0 (?P<OUT0>.+?), out1 (?P<OUT1>.+?), t=(?P<T>\d+)$"
+    r"input (?P<INPUT>.+?), out0 (?P<OUT0>.+?), out1 (?P<OUT1>.+?), " + ADDON_FIELD
 )
 
 FURNACE = re.compile(
@@ -63,7 +70,7 @@ FURNACE = re.compile(
     r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
     r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
     r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
-    r"input (?P<INPUT>.+?), out (?P<OUT0>.+?), t=(?P<T>\d+)$"
+    r"input (?P<INPUT>.+?), out (?P<OUT0>.+?), " + ADDON_FIELD
 )
 
 COOLER = re.compile(
@@ -72,7 +79,7 @@ COOLER = re.compile(
     r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
     r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
     r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, "
-    r"out (?P<OUT0>.+?), t=(?P<T>\d+)$"
+    r"out (?P<OUT0>.+?), " + ADDON_FIELD
 )
 
 FLUID = re.compile(
@@ -86,7 +93,7 @@ LAVA = re.compile(
     r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
     r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
     r"burning (?P<BURN>-?\d+)/(?P<MAXBURN>\d+) ticks recipe (?P<RECIPE>.+?), "
-    r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, t=(?P<T>\d+)$"
+    r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, " + ADDON_FIELD
 )
 
 
@@ -104,7 +111,9 @@ def main(argv: list[str]) -> int:
         if not match:
             continue
         out = {"ok": 1, "KIND": kind}
-        out.update({key: value for key, value in match.groupdict().items()})
+        out.update(
+            {key: value for key, value in match.groupdict().items() if value is not None}
+        )
         if kind == "generator":
             out.setdefault("INPUT", out["FUEL"])
         for field in FIELDS:
