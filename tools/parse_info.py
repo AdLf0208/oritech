@@ -7,6 +7,7 @@ The lines are (see `src/support.rs`, the readout section):
     Pulverizer at [1, 100, 0]: 3600/25000 FE, progress 9 recipe oritech:pulverizer/bone, input minecraft:bone x1, out0 empty, out1 empty, t=488
     Powered Furnace at [8, 100, 0]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe …, input …, out …, t=424
     Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=424
+    Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 60/120 ticks recipe oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
 
 Usage: `eval "$(python3 tools/parse_info.py "$line")"`; `ok=1` when it parsed.
@@ -80,6 +81,14 @@ FLUID = re.compile(
     r"\(asked (?P<ASKED>-?\d+), accepted (?P<ACCEPTED>-?\d+)\)$"
 )
 
+LAVA = re.compile(
+    r"^Lava Generator at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"burning (?P<BURN>-?\d+)/(?P<MAXBURN>\d+) ticks recipe (?P<RECIPE>.+?), "
+    r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, t=(?P<T>\d+)$"
+)
+
 
 def main(argv: list[str]) -> int:
     line = " ".join(argv).strip()
@@ -88,6 +97,7 @@ def main(argv: list[str]) -> int:
         ("pulverizer", PULVERIZER),
         ("furnace", FURNACE),
         ("cooler", COOLER),
+        ("lava", LAVA),
         ("fluid", FLUID),
     ):
         match = pattern.match(line)

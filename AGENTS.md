@@ -24,10 +24,11 @@ Keep every gameplay rule and number in `src/runtime.rs` with its test; the glue 
 calls `runtime`, and writes the result back. `src/runtime.rs`'s **slice-1 part** is byte-identical to the
 retired port's file up to and including `after_consuming` — do not "tidy" it; slice 2 appended the
 Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `core_quality`,
-`furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use) and slice
+`furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use), slice
 3 the Industrial Chiller's (`COOLER_*`, `FluidInput`, `tank_matches`, `cooler_output_fits`,
-`after_draining`, `CoolerRecipe`, `Cooler`, on the same `advance`). A declaration or readout test
-belongs next to its code in `src/support.rs`.
+`after_draining`, `CoolerRecipe`, `Cooler`, on the same `advance`) and slice 4 the Lava Generator's
+(`LAVA_*`, `EnergyTarget`, `lava_output_targets`, `lavagen_ticks`, `LavaGenerator`, `LavaGenRecipe`,
+`parse_fluid_input`). A declaration or readout test belongs next to its code in `src/support.rs`.
 
 Validate, in this order, each inside a lease:
 

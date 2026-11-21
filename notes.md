@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -14,9 +14,11 @@ campaign pin from 2026-11-21; slice 1 and the 0.2.1 review ran at `0b14f8a`, and
 0.2.2 package declares the new pin and reports `0b14f8a  fits` (see *Slice 2*).
 
 Status: **ported-partial** — slice 1 (the fuel generator, the pulverizer, their
-energy link, the recipe reader and the content carry) and slice 2 (the Powered
-Furnace multiblock and the seven machine cores) are implemented and verified in
-game. The gap list below is the rest of the mod.
+energy link, the recipe reader and the content carry), slice 2 (the Powered
+Furnace multiblock and the seven machine cores), slice 3 (the Industrial
+Chiller, the mod's first fluid machine) and slice 4 (the Lava Generator, a
+fluid-burning generator) are implemented and verified in game. The gap list
+below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
 `precheck-mod.py oritech` offers (`DISPATCHABLE`, jar licence CC0-1.0, no
@@ -996,6 +998,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `oritech:pulverizer_block` | tested | B (no power, keeps its bone), D (100 ticks, 3,200 FE), E (the adjacent generator drives it), N (tag recipe) |
 | `oritech:powered_furnace_block` | tested | H (no core), H2 (unassembled), I (core + assembly), J (100 ticks, 3,200 FE), L (core broken, progress kept) |
 | `oritech:cooler_block` | tested | P (no core), Q (core north), R (10 ticks), S (3 ice, exactly 6,400 FE, tank emptied), T (lava), V (item given) |
+| `oritech:lava_generator_block` | tested | X (place, 100 mB through the declared tank, core above, assembled), Y (120 ticks, exactly 7,680 FE at 64 a tick, tank emptied at load), Y2 (the ten-target push hands it all to a pulverizer), Y3 (that pulverizer spends it), Y4 (unassembled, 5,000 FE stay; re-assembled, they move), Z (empty tank, 0 FE for 200 ticks), Z2 (a tank of water, 0 FE), V (item given) |
 | `oritech:machine_core_1` | tested | M places and reads it back; Q assembles the chiller with core 3 |
 | `oritech:machine_core_2` | tested | M; I assembles the furnace with core 2; T assembles the second chiller |
 | `oritech:machine_core_3` | tested | M; Q assembles the chiller with core 3 |
@@ -1007,6 +1010,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `oritech:blocks/pulverizer_block` | tested | W |
 | `oritech:blocks/powered_furnace_block` | tested | W |
 | `oritech:blocks/cooler_block` | tested | W |
+| `oritech:blocks/lava_generator_block` | tested | X places it; W rolls its carried loot table into the inventory |
 | `oritech:blocks/machine_core_1` | tested | W |
 | `oritech:blocks/machine_core_2` | tested | W |
 | `oritech:blocks/machine_core_3` | tested | W |
@@ -1015,7 +1019,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `oritech:blocks/machine_core_6` | tested | W |
 | `oritech:blocks/machine_core_7` | tested | W |
 | `multiblock` | tested | furnace I/L (core above), chiller Q (core north) |
-| `block_entity` | tested | every machine read through `/oritech info` after a relaunch (G) and across a core break (L) |
+| `block_entity` | tested | every machine read through `/oritech info` after a relaunch (G) and across a core break (L); the chiller's and the lava generator's saved shapes are unit-tested (`the_*_s_state_reads_back_from_the_compound_it_wrote`) rather than relaunched in the leg |
 | `oritech:pulverizer/bone` | tested | D (100 ticks, 3,200 FE) and O |
 | `oritech:pulverizer/blaze` | tested | O: crafted, output id and count asserted, input consumed |
 | `oritech:pulverizer/dripstone` | tested | O |
@@ -1026,9 +1030,12 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `oritech:cooler/ice` | tested | R (10 ticks) and S (3 ice, exactly 6,400 FE, tank emptied) |
 | `oritech:cooler/obsidian` | tested | T (2 obsidian, exactly 6,400 FE) |
 | `oritech:cooler/snow` | blocked(fluid-whitelist: oritech:still_steam) | U measures the refusal (`accepted 0`); the fluid does not exist in this pack |
+| `oritech:lavagen/lava` | tested | X (100 mB through the tank), Y (a 120-tick burn: exactly 7,680 FE at 64 a tick, the tank emptied at load) |
+| `oritech:lavagen/sheolfire` | blocked(fluid-whitelist: oritech:still_sheol_fire) | Y1 measures the refusal (`accepted 0`); the fluid does not exist in this pack |
 | `recipe:oritech:pulverizer` | not ported | the other 117 need Oritech dusts/clumps/gems this port does not carry (gap 6) |
 | `recipe:oritech:cooler` | not ported | `compat/pneumaticcraft/plastic` needs PneumaticCraft (gap 4) and `snow` is blocked above |
-| `recipe:*` | not ported | assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel/lava generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting/crafting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
+| `recipe:oritech:lava_generator` | not ported | `sheolfire` is blocked above; `lava` is carried and tested |
+| `recipe:*` | not ported | assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting/crafting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
 | `tag:block` | not ported | 14 block tags (`frame_support`, `laser_accelerated`, …) belong to families outside this slice |
 | `tag:item` | not ported | 21 item tags (`biomatter`, `feeder_blacklist`, …) — same |
 | `tag:entity_type` | not ported | `spawner_blacklist` — the spawner family is not ported |
@@ -1039,5 +1046,182 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
 mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Slice 4 — the Lava Generator (`oritech:lava_generator_block`), the fluid-burning generator (0.2.6, 2026-11-21)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **13**,
+verbatim: "Not carried: the powered furnace (a multiblock machine that needs its core assembled), the
+assembler, atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the
+augment stations, the jetpack and equipment, the resource-node worldgen and the ores. All later
+slices." The slice-3 report's `## Next slice` named the lava generator, and it is the next machine whose
+whole process runs on vanilla content: the jar's `data/oritech/recipe/lavagen/lava.json` burns **100 mB
+of `minecraft:lava`** for **120 ticks**, and its only other recipe (`sheolfire.json`) takes
+`oritech:still_sheol_fire`, which this package does not declare — the same measured gap as the chiller's
+`snow.json`, recorded rather than shipped as dead data.
+
+It is also the first machine that **makes** FE from a fluid rather than spending it, so it reuses
+slice 1's generator tick (`progress` = burning ticks left, `canFitEnergy` gate) and slice 3's declared
+tank, `tank_matches` and `/oritech fluid`, and it generalises the multiblock assembly slice 2 built with
+the furnace's `(0, 1, 0)` core offset. Class + tier unchanged: class `content`, tier `deep`
+(`ports/ledger.csv`), delivered in the machines shape (a block entity, a declared FE buffer, a declared
+fluid tank, one recipe family, a multiblock assembly, the ten-target energy push). No renderer, no GUI,
+no dimension, no accelerator.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| capacity 100,000 FE | `OritechConfig.generators.lavaGeneratorData` (`init/OritechConfig.java:385`) | `LAVA_CAPACITY` |
+| insert 0 / extract 512 FE (`64 * 8`) | same `BasicMachineConfig(…, 100_000, 0, 64 * 8, 64)` | `battery(LAVA)` |
+| 64 FE a burning tick | same `energyPerTick`; `calculateEnergyUsage` = `energyPerTick / speed(1)` | `lava_energy_usage()` |
+| 120 ticks a burn | `data/oritech/recipe/lavagen/lava.json` `time: 120`; `progress = recipeTime` | `lavagen_ticks(time)` |
+| 100 mB a burn | the same file's `fluidInput.amount` | `FluidInput::amount` |
+| tank 4 buckets | `FluidMultiblockGeneratorBlockEntity.fluidStorage = new SimpleFluidStorage(4 * bucketAmount())` | `LAVA_TANK = 4000` |
+| core at **(0, 1, 0)** | `LavaGeneratorEntity.getCorePositions` | `LAVA_CORE_OFFSET` (the furnace's, not the chiller's) |
+| 10 output targets | `LavaGeneratorEntity.getOutputTargets` | `LAVA_OUTPUT_TARGETS` / `lava_output_targets()` |
+| slots `(0, 1, 1, 1)`, inventory 2 (bucket in, empty out) | `getSlotAssignments` / `getInventorySize` | **not declared** — the bucket path is the engine's `fluid_util` interaction (deviation 1) |
+| the tank refuses water at insert | the `fluidStorage.insert` override | `blocked(no-tank-filter)` — the declaration has no fluid filter (deviation 2) |
+| the burn loads its recipe only with room | `UpgradableGeneratorBlockEntity.serverTick`'s `progress == 0 && canFitEnergy()` | `LavaGenerator::wants_recipe` |
+
+### What was added
+
+- `src/runtime.rs`: `LAVA_*`, `EnergyTarget`, `lava_energy_usage`, `lavagen_ticks`, `LavaGenerator`
+  (energy / progress / max_burn / recipe, `room`, `can_fit`, `wants_recipe`, `load_recipe`, `tick`),
+  `LavaGenRecipe::parse` / `LavaGenError`, `LAVA_OUTPUT_TARGETS` / `lava_output_targets`, and one
+  shared `parse_fluid_input` (the cooler's parser now calls it too, so the two files cannot drift).
+  Ten new tests.
+- `src/support.rs`: `LAVA`/`LAVA_TYPE`/`LAVA_RECIPE`, the `battery` and tank arms, `tank_capacity`,
+  `LavaSaved` + `lava_state`/`store_lava`, `tick_lava_generator` (assembly gate, the tank's recipe,
+  drain-then-burn, and `outputEnergy` behind the gate), the `oritech:lava_generator` cache, `push_plan` (the basic generator's 6 faces and
+  the lava generator's 10 targets, **the capability is now the filter** instead of a pulverizer-only
+  block check), `direction`, the bucket right click through `fluid_util::interact_with_fluid_handler`,
+  the `set_energy`/`set_fluid`/`info_line` arms, and the `lava_line` readout. `tank_state`,
+  `store_tank` and `tank_text` take the block's capacity now, so the chiller and the lava generator
+  share one shape. Seven new tests.
+- `src/lib.rs`: `LavaPart`, the fifth block-entity type, the `oritech:lava_generator` recipe type and
+  its raw serializer.
+- Content: `oritech:lava_generator_block` (blockstate, block and item models, its own texture, 26.3
+  item definition, block declaration, loot, lang `Lava Generator`, the machines tab, the pickaxe and
+  stone-tool tags) and the jar's `lavagen/lava.json`. `assets/` + `data/` are now **98 files**
+  (`tools/carry_content.py --check` → `98 files, 0 differ`).
+- `tools/parse_info.py` learned the lava generator's line; `tools/e2e.sh` gained phases X, Y, Y1, Y2,
+  Y3, Y4, Z, Z2; `tools/slice4-glue-counterfactual.py` is the glue's fail-capability; `PLAN-slice4.md` is
+  the slice's plan; `VALIDATION.md` is the ladder.
+
+### The command surface
+
+`/oritech info` now answers the lava generator, and `/oritech energy`/`/oritech fluid` reach its
+100,000 FE buffer and its 4,000 mB tank (the tank's capacity is read from the block, so the chiller's
+line still says `…/4000 mB`):
+
+```
+Lava Generator at [0, 100, 6]: 2816/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 76/120 ticks recipe oritech:lavagen/lava, tank empty 0/4000 mB, t=4355
+oritech:lava_generator_block at [0, 100, 6]: tank minecraft:lava 100/4000 mB (asked 100, accepted 100)
+```
+
+### Deviations (slice 4)
+
+1. **The two bucket slots are not declared.** Upstream drains slot 0 into the tank on the server tick
+   and moves the empty container to slot 1. This port has no GUI and no item automation, so an inert
+   input slot would be dead data; the player's path is the engine's own
+   `fluid_util::interact_with_fluid_handler` on the right click (a held lava bucket fills the tank and
+   is replaced by the bucket), which is the same action for the player. Nothing depends on the slots.
+2. **The tank's water refusal cannot be expressed** — `blocked(no-tank-filter)`. `ModFluidTanks`
+   declares capacity, faces and which tanks fill/drain, with no fluid filter, so water can enter the
+   tank; it then matches no lava recipe and the machine makes 0 FE, which is exactly what phase Z2
+   asserts. Upstream returns 0 from `insert` for water instead.
+3. **`sheolfire.json` is not carried** — `blocked(fluid-whitelist: oritech:still_sheol_fire)`. The
+   fluid is the mod's own and this package does not declare it, so the recipe could never match; phase
+   Y1 measures the engine refusing the id (`accepted 0`), as slice 3 did for `snow.json`.
+4. **The energy push is capability-driven.** Slice 1 pushed the basic generator's FE only into a block
+   whose id is `oritech:pulverizer_block`; upstream's `outputEnergy` builds a cache on each target and
+   moves into whatever `ENERGY` handler answers. `push_plan` now names only the targets and the
+   generator's own extraction rate, and the capability lookup is the filter, so the basic generator
+   also charges a furnace or a chiller beside it. The lava generator walks its own ten upstream
+   targets (including the `(0, 2, 0)` and the four `+1` positions), which is why its FE reaches a
+   consumer the basic generator would not.
+5. **No GUI, no `lit` state, no GeckoLib render, no addons, no redstone** — the same recorded gaps as
+   slices 1–3. The lava generator's two addon slots at (1, 0, 0) and (1, 1, 0) are not ported (no
+   addon system).
+
+### Verification (0.2.6)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline`, the new bodies `todo!()` | **57 passed, 9 failed** — every failure `panicked at src/runtime.rs:…: not yet implemented` (`slice4-test-red.log`; the tenth new test, `the_tank_must_hold_a_lava_recipes_own_fluid_and_amount`, pins the shared `tank_matches` and passed at once — reported as such) |
+| glue red | same, the new declarations/readout/saved-state bodies `todo!()` | **68 passed, 5 failed** (`slice4-glue-red.log`) |
+| glue fail-capability (counterfactual) | six targeted mutations of the declarations/saved state/push/readout, then the tests | **68 passed, 5 failed**, one per new glue test; the file restored byte-identically afterwards (`slice4-glue-red-counterfactual.log`, `tools/slice4-glue-counterfactual.py`) |
+| tests (green) | `cargo test --offline` | **73 passed**, 0 failed (`sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| package | `cargo horizon-mod build` twice, `Cargo.lock` removed before each and the artifact deleted between | **105,595 B**, sha256 `a42999768aba2e3083422a006c28da3154b93256bc98d6fd691cf1c607f06cac`, `cmp` identical, **107 entries**, no packed `Cargo.lock` (`sdk-build.log`, `sdk-build-second.log`, `sdk-sha256.txt`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.6 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `105595 bytes … unsigned`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (`sdk-fits.log`, on the delivered file, sha `a4299976…`) |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `98 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.6 ⇒ a real recompile) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows `Lava Generator at `, `oritech:lava_generator` and the bucket refusal |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice4.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package the generator item is absent and the generator, furnace, core, chiller and **lava generator** ids all stay `minecraft:air` (`e2e-slice4-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME` | **EXIT:1** — `the generator did not place` (`e2e-slice4-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` (`e2e-slice4-selftest.log`) |
+| fail-capability, lava generator | `SELFTEST_LAVA=1` | **EXIT:1** — `a 120-tick lava burn makes exactly 7680 FE, so the buffer should hold 7744, not 7680` (`e2e-slice4-selftest-lava.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 17 logs, 17 ok, 0 bad |
+| coverage | `check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+The lava leg is fail-capable six ways: the **no-core** phase (100 mB of lava and no assembly does
+nothing), the **per-tick rate** (the buffer must be exactly 64 × the ticks burned), the **exact burn**
+(120 ticks must leave exactly 7,680 FE; a slower machine leaves less, a faster one more), the
+**empty-tank** control (0 FE for 200 ticks) and the **wrong-fluid** control (a tank of water makes 0 FE),
+plus `SELFTEST_LAVA=1`, which flips the exact-FE figure and exits 1, and **Y4** is a
+within-scenario differential for the output gate. Y2/Y3 add a conservation
+assertion the machine cannot fake: the generator ends at 0 FE and the adjacent pulverizer holds exactly
+7,680, then spends exactly 3,200 of it on a bone.
+
+### In-game transcript (quoted from `e2e-slice4.log`)
+
+```
+  info(0,100,6): Lava Generator at [0, 100, 6]: 0/100000 FE, assembled no core empty quality 0, burning 0/0 ticks recipe none, tank empty 0/4000 mB, t=4301
+  fluid(0,100,6): oritech:lava_generator_block at [0, 100, 6]: tank minecraft:lava 100/4000 mB (asked 100, accepted 100)
+  unassembled, with 100 mB of lava: still 0 FE, burn 0, tank minecraft:lava 100
+  core click: {"ok":true,"block":"oritech:lava_generator_block"}
+  block(0,101,6) = oritech:machine_core_2
+  info(0,100,6): Lava Generator at [0, 100, 6]: 2240/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 85/120 ticks recipe oritech:lavagen/lava, tank empty 0/4000 mB, t=4470
+  info(0,100,6): Lava Generator at [0, 100, 6]: 2816/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 76/120 ticks recipe oritech:lavagen/lava, tank empty 0/4000 mB, t=4479
+  burning 76/120: 44 ticks made exactly 2816 FE, tank emptied at load
+  info(0,100,6): Lava Generator at [0, 100, 6]: 7680/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 0/120 ticks recipe none, tank empty 0/4000 mB, t=4639
+  one lava burn: exactly 7680 FE in the buffer, tank empty, no recipe left
+  fluid(0,100,6): oritech:lava_generator_block at [0, 100, 6]: tank empty 0/4000 mB (asked 1000, accepted 0)
+  oritech:still_sheol_fire: accepted 0 of 1000 mB, tank empty (the jar's sheolfire recipe is recorded as a gap)
+  info(0,100,7): Pulverizer at [0, 100, 7]: 7680/25000 FE, progress 0 recipe none, input empty, out0 empty, out1 empty, t=4727
+  the lava generator pushed its 7680 FE one block south into the pulverizer
+  info(0,100,7): Pulverizer at [0, 100, 7]: 4480/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x6, out1 empty, t=4948
+  the consumer turned the lava generator's FE into minecraft:bone_meal x6: 7680 -> 4480 FE
+  info(0,100,6): Lava Generator at [0, 100, 6]: 5000/100000 FE, assembled no core empty quality 0, burning 0/120 ticks recipe none, tank empty 0/4000 mB, t=5013
+  info(0,100,7): Pulverizer at [0, 100, 7]: 4480/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x6, out1 empty, t=5021
+  unassembled with 5,000 FE: the buffer kept all of it and the pulverizer stayed at 4480
+  info(0,100,6): Lava Generator at [0, 100, 6]: 0/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 0/120 ticks recipe none, tank empty 0/4000 mB, t=5127
+  info(0,100,7): Pulverizer at [0, 100, 7]: 9480/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x6, out1 empty, t=5140
+  reassembled: the 5,000 FE left the generator, the pulverizer rose 4480 -> 9480
+  info(4,100,6): Lava Generator at [4, 100, 6]: 0/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 0/0 ticks recipe none, tank empty 0/4000 mB, t=5209
+  assembled with an empty tank: 0 FE after 200 ticks, burn 0, tank empty
+  fluid(4,100,6): oritech:lava_generator_block at [4, 100, 6]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
+  info(4,100,6): Lava Generator at [4, 100, 6]: 0/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 0/0 ticks recipe none, tank minecraft:water 1000/4000 mB, t=5432
+  a tank of water: 0 FE after 200 ticks, still minecraft:water 1000, no recipe
+```
+
+The burn's arithmetic: 120 ticks × 64 FE = **7,680 FE**, the jar's `time: 120` at its own
+`energyPerTick: 64`; the mid-read lands 44 ticks in and sees exactly `44 × 64 = 2,816`. The tank's
+100 mB leaves at load time (`consumeFluidRecipeInput`), so the tank reads empty from the first tick
+while the burn still has ticks left — upstream's own order.
+
+`## Upstream defects fixed` (slice 4): none found. The water-refusal and the bucket slots are
+recorded deviations (the pin cannot express the filter, and the port has no GUI), not defects; the
+`sheolfire` recipe is a coverable gap, not a broken behaviour.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

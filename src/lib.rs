@@ -1,12 +1,13 @@
-//! Oritech for Horizon — slice 1, the Basic Generator and the Pulverizer.
+//! Oritech for Horizon — slices 1 to 4: the Basic Generator, the Pulverizer, the
+//! Powered Furnace, the Industrial Chiller and the Lava Generator.
 //!
 //! One flat SDK package (mod API 0.2): the carried machines, their models,
 //! textures, lang, loot tables, recipes, tags and creative tab are this
 //! package's `assets/` and `data/`, and the behaviour is the one
-//! `impl mod_api::Hooks` plus its two block-entity Parts. The rules themselves
+//! `impl mod_api::Hooks` plus its block-entity Parts. The rules themselves
 //! live in [`runtime`], byte-identical to the retired `.hnmod` bundle's
-//! `runtime.rs`; [`support`] is the glue that reads the game, calls them and
-//! writes the result back.
+//! `runtime.rs` up to slice 1; [`support`] is the glue that reads the game,
+//! calls them and writes the result back.
 //!
 //! What the retired bundle expressed as eleven injected helpers and two support
 //! modules is here three shapes: each machine's block entity is a **Part**
@@ -50,11 +51,16 @@ impl Hooks for Mod {
         // parser for the same reason: a 26.3 loader knows nothing of this mod's recipe kind.
         registrar.register_recipe_type(support::COOLER_RECIPE);
         registrar.register_raw_recipe_serializer(support::COOLER_RECIPE, support::COOLER_RECIPE);
+        // The lava generator's one carried recipe names `oritech:lava_generator`, with the same
+        // reason (and the same startup failure without it).
+        registrar.register_recipe_type(support::LAVA_RECIPE);
+        registrar.register_raw_recipe_serializer(support::LAVA_RECIPE, support::LAVA_RECIPE);
         for block in [
             support::GENERATOR,
             support::PULVERIZER,
             support::FURNACE,
             support::COOLER,
+            support::LAVA,
         ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
@@ -83,6 +89,10 @@ impl Hooks for Mod {
             .block_entity_type(support::COOLER_TYPE)
             .blocks(&[support::COOLER])
             .build();
+        let lava = registrar
+            .block_entity_type(support::LAVA_TYPE)
+            .blocks(&[support::LAVA])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -93,6 +103,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&cooler, CoolerPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&lava, LavaPart) {
             context.refuse(&error.to_string());
         }
     }
@@ -205,6 +218,8 @@ struct PulverizerPart;
 struct FurnacePart;
 /// The Industrial Chiller's block entity.
 struct CoolerPart;
+/// The Lava Generator's block entity.
+struct LavaPart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -335,6 +350,39 @@ impl BlockEntityPart for CoolerPart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_cooler(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for LavaPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for LavaPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the multiblock gate, then one lava burn from the tank —
+    /// 64 FE a tick into a 100,000 FE buffer that only gives energy out.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_lava_generator(host, level, pos, &mut nbt);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

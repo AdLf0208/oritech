@@ -14,22 +14,26 @@ use mod_api::{
     BlockUpdateFlags, Compound, Direction, ENERGY, FLUIDS, Flow, FluidResource, FluidStack, Host,
     HostSide, HostTransaction, Identifier, Ingredient, InteractionResult, ItemPlace, ItemResource,
     ItemStack, LevelRef, ModContainer, ModEnergyBuffer, ModFluidTanks, RightClickBlockEvent,
-    ServerHost, Tag, Text, move_energy,
+    ServerHost, Tag, Text, fluid_util, move_energy,
 };
 
 use crate::runtime::{
     COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler,
-    CoolerRecipe, FURNACE_CAPACITY, FURNACE_MAX_INSERT, Furnace, GENERATOR_CAPACITY,
-    GENERATOR_MAX_EXTRACT, Generator, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
-    PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work, after_consuming, after_draining,
-    can_output, clamp_energy, cooler_output_fits, cooler_ticks, core_quality, furnace_ticks,
-    is_fuel, output_fits, tank_matches,
+    CoolerRecipe, EnergyTarget, FURNACE_CAPACITY, FURNACE_MAX_INSERT, FluidInput, Furnace,
+    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
+    LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator, PULVERIZER_CAPACITY,
+    PULVERIZER_MAX_INSERT, Pulverizer, PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work,
+    after_consuming, after_draining, can_output, clamp_energy, cooler_output_fits, cooler_ticks,
+    core_quality, furnace_ticks, is_fuel, lava_output_targets, lavagen_ticks, output_fits,
+    tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
 pub(crate) const FURNACE: &str = "oritech:powered_furnace_block";
 /// The Industrial Chiller (`BlockContent.COOLER_BLOCK`) — slice 3.
 pub(crate) const COOLER: &str = "oritech:cooler_block";
+/// The Lava Generator (`BlockContent.LAVA_GENERATOR_BLOCK`) — slice 4.
+pub(crate) const LAVA: &str = "oritech:lava_generator_block";
 /// The vanilla recipe table the furnace reads (upstream's
 /// `RecipeType.SMELTING`); nothing is registered, the game already has it.
 pub(crate) const SMELTING_RECIPE: &str = "minecraft:smelting";
@@ -42,6 +46,8 @@ pub(crate) const PULVERIZER: &str = "oritech:pulverizer_block";
 pub(crate) const PULVERIZER_RECIPE: &str = "oritech:pulverizer";
 /// The recipe type the jar's `data/oritech/recipe/cooler/*.json` names.
 pub(crate) const COOLER_RECIPE: &str = "oritech:cooler";
+/// The recipe type the jar's `data/oritech/recipe/lavagen/*.json` names.
+pub(crate) const LAVA_RECIPE: &str = "oritech:lava_generator";
 
 /// The block entity type names, in this mod's namespace; the block ids are the
 /// types' own `.blocks(…)` lists.
@@ -49,6 +55,7 @@ pub(crate) const GENERATOR_TYPE: &str = "basic_generator";
 pub(crate) const PULVERIZER_TYPE: &str = "pulverizer";
 pub(crate) const FURNACE_TYPE: &str = "powered_furnace";
 pub(crate) const COOLER_TYPE: &str = "cooler";
+pub(crate) const LAVA_TYPE: &str = "lava_generator";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -187,14 +194,16 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
 
 /// The FE buffers: the generator's `BasicMachineConfig(50_000, 0, 256, 32)`,
 /// the pulverizer's `(25_000, 256, 0, 32)`, the furnace's
-/// `FurnaceConfig(10_000, 256, —, 32)` and the cooler's
-/// `BasicMachineConfig(50_000, 256, 0, 32)`.
+/// `FurnaceConfig(10_000, 256, —, 32)`, the cooler's
+/// `BasicMachineConfig(50_000, 256, 0, 32)` and the lava generator's
+/// `(100_000, 0, 512, 64)`.
 pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
     let (capacity, max_insert, max_extract) = match block {
         GENERATOR => (GENERATOR_CAPACITY, 0, GENERATOR_MAX_EXTRACT),
         PULVERIZER => (PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, 0),
         FURNACE => (FURNACE_CAPACITY, FURNACE_MAX_INSERT, 0),
         COOLER => (COOLER_CAPACITY, COOLER_MAX_INSERT, 0),
+        LAVA => (LAVA_CAPACITY, 0, LAVA_MAX_EXTRACT),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -206,20 +215,27 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
     })
 }
 
-/// The fluid tanks a block declares through `Registrar::block_fluids`: the
-/// chiller's one four-bucket tank, reachable from every face, fillable and not
-/// drainable (`CoolerBlockEntity.fluidStorage` is a `SimpleFluidStorage` the
-/// machine only takes from). The amount lives in the entity's saved `fluids`
-/// list, in the shape the game reads (`Fluid` + `Amount`, millibuckets).
-pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
-    if block != COOLER {
-        return None;
+/// The capacity of the one tank a block declares, in millibuckets.
+pub(crate) fn tank_capacity(block: &str) -> Option<i32> {
+    match block {
+        COOLER => Some(COOLER_TANK),
+        LAVA => Some(LAVA_TANK),
+        _ => None,
     }
+}
+
+/// The fluid tanks a block declares through `Registrar::block_fluids`: the
+/// chiller's and the lava generator's one four-bucket tank, reachable from every
+/// face, fillable and not drainable (upstream's `SimpleFluidStorage` the machine
+/// only takes from). The amount lives in the entity's saved `fluids` list, in
+/// the shape the game reads (`Fluid` + `Amount`, millibuckets).
+pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
+    let capacity = tank_capacity(block)?;
     let all = vec![0usize];
     // `ModFluidTanks` is `#[non_exhaustive]`: it is built from its default and
     // filled in, the way `rangedpumps` declares its tank.
     let mut tanks = ModFluidTanks::default();
-    tanks.tanks = vec![COOLER_TANK];
+    tanks.tanks = vec![capacity];
     tanks.faces = [
         all.clone(),
         all.clone(),
@@ -402,7 +418,7 @@ pub(crate) fn cooler_state(nbt: &Compound) -> CoolerSaved {
             recipe: read_string(nbt, KEY_RECIPE),
         },
         assembly: multiblock_state(nbt),
-        tank: tank_state(nbt),
+        tank: tank_state(nbt, COOLER_TANK),
     }
 }
 
@@ -418,6 +434,51 @@ pub(crate) fn store_cooler(nbt: &mut Compound, saved: &CoolerSaved) {
             .tank
             .as_ref()
             .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+        COOLER_TANK,
+    );
+}
+
+/// The Lava Generator saved in a block entity's compound: the machine's four
+/// values, the multiblock facts, and the one tank.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct LavaSaved {
+    /// The buffer, burn and recipe the pure state machine keeps.
+    pub(crate) machine: LavaGenerator,
+    /// The assembly: assembled flag, core offset, core quality.
+    pub(crate) assembly: Assembly,
+    /// The tank: its fluid and its amount in millibuckets; `None` when empty.
+    pub(crate) tank: Option<(String, i32)>,
+}
+
+/// The lava generator saved in a block entity's compound; a fresh one is empty.
+pub(crate) fn lava_state(nbt: &Compound) -> LavaSaved {
+    LavaSaved {
+        machine: LavaGenerator {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), LAVA_CAPACITY),
+            progress: read_int(nbt, KEY_PROGRESS).max(0),
+            max_burn: read_int(nbt, KEY_STORED_BURN).max(0),
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+        tank: tank_state(nbt, LAVA_TANK),
+    }
+}
+
+/// Write the lava generator's tick result back: the same keys the basic
+/// generator and the multiblocks use.
+pub(crate) fn store_lava(nbt: &mut Compound, saved: &LavaSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress);
+    write_int(nbt, KEY_STORED_BURN, saved.machine.max_burn);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, saved.assembly);
+    store_tank(
+        nbt,
+        saved
+            .tank
+            .as_ref()
+            .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+        LAVA_TANK,
     );
 }
 
@@ -425,7 +486,7 @@ pub(crate) fn store_cooler(nbt: &mut Compound, saved: &CoolerSaved) {
 /// of `{Fluid, Amount}` compounds, an empty tank `minecraft:empty` with 0. This
 /// is the shape `native_fluids.rs` reads and writes, so a foreign insert lands
 /// where this reads it.
-pub(crate) fn tank_state(nbt: &Compound) -> Option<(String, i32)> {
+pub(crate) fn tank_state(nbt: &Compound, capacity: i32) -> Option<(String, i32)> {
     let Some(Tag::List(entries)) = nbt.get(&"fluids".into()) else {
         return None;
     };
@@ -442,15 +503,15 @@ pub(crate) fn tank_state(nbt: &Compound) -> Option<(String, i32)> {
         Some(Tag::Int(amount)) => *amount,
         _ => 0,
     };
-    let amount = amount.clamp(0, COOLER_TANK);
+    let amount = amount.clamp(0, capacity);
     (amount > 0).then_some((fluid, amount))
 }
 
 /// Write the tank back in the game's shape, keeping the one entry so the tank
 /// number stays in place.
-fn store_tank(nbt: &mut Compound, tank: Option<(&str, i32)>) {
+fn store_tank(nbt: &mut Compound, tank: Option<(&str, i32)>, capacity: i32) {
     let (fluid, amount) = match tank {
-        Some((fluid, amount)) if amount > 0 => (fluid, amount.clamp(0, COOLER_TANK)),
+        Some((fluid, amount)) if amount > 0 => (fluid, amount.clamp(0, capacity)),
         _ => ("minecraft:empty", 0),
     };
     let entry = Tag::compound([
@@ -466,6 +527,14 @@ pub(crate) struct CoolerView<'a> {
     pub(crate) saved: &'a CoolerSaved,
     pub(crate) core: Option<(&'a str, i32)>,
     pub(crate) output: Option<(&'a str, u32)>,
+}
+
+/// What the readout prints about a lava generator: its saved state plus what the
+/// world says about its core (resolved from the block, so the line cannot name a
+/// core that is gone).
+pub(crate) struct LavaView<'a> {
+    pub(crate) saved: &'a LavaSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +763,92 @@ fn finish_cooler(
     saved.tank = after_draining(amount, recipe.fluid.amount).map(|left| (fluid, left));
 }
 
+/// One server tick of the Lava Generator: the same assembly gate as the other
+/// multiblocks, then one `oritech:lava_generator` burn from the fluid in the
+/// tank. A loaded recipe takes its millibuckets out of the tank immediately
+/// (`consumeFluidRecipeInput`) and its `time` becomes the burn left; each
+/// burning tick makes 64 FE until the buffer has no room for one.
+pub(crate) fn tick_lava_generator(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+) -> bool {
+    let before = lava_state(nbt);
+    let mut saved = before.clone();
+    recheck_core(host, level, pos, &mut saved.assembly);
+    let mut produced = 0;
+    if saved.assembly.assembled {
+        // `UpgradableGeneratorBlockEntity.serverTick`: `tryConsumeInput` runs
+        // only while no burn is left and the buffer has room for one tick; the
+        // recipe comes from the tank and its fluid leaves it at load time.
+        if saved.machine.wants_recipe() {
+            let recipe = saved
+                .tank
+                .as_ref()
+                .and_then(|(fluid, amount)| find_lavagen(host, fluid, *amount));
+            if let Some(recipe) = recipe {
+                if saved
+                    .machine
+                    .load_recipe(lavagen_ticks(recipe.time), &recipe.id)
+                {
+                    drain_tank(&mut saved.tank, &recipe.fluid);
+                }
+            } else {
+                // `currentRecipe = OritechRecipe.DUMMY`: with no matching
+                // recipe there is nothing to burn, and the readout says so.
+                saved.machine.recipe.clear();
+            }
+        }
+        produced = saved.machine.tick();
+        // `outputEnergy()` runs at the end of `serverTick`, burning or not, but
+        // only while the machine is assembled: an inactive machine returns at
+        // `isActive(state)` before it, so a controller whose core is gone stops
+        // pushing its stored FE.
+        if saved.machine.energy > 0 {
+            queue_push(level, pos);
+        }
+    }
+    store_lava(nbt, &saved);
+    produced > 0 || saved != before
+}
+
+/// `FluidMultiblockGeneratorBlockEntity.consumeFluidRecipeInput`: the recipe's
+/// millibuckets leave the tank when the burn starts, `minecraft:empty` when the
+/// last of it goes. The recipe was chosen because the tank holds it, so the
+/// match is a re-check of the same rule, not a second one.
+fn drain_tank(tank: &mut Option<(String, i32)>, input: &FluidInput) {
+    let Some((fluid, amount)) = tank.clone() else {
+        return;
+    };
+    if !tank_matches(Some((fluid.as_str(), amount)), input) {
+        return;
+    }
+    *tank = after_draining(amount, input.amount).map(|left| (fluid, left));
+}
+
+/// `LavaGeneratorEntity.outputEnergy`'s plan for a generator block: the most one
+/// call may take out of it (`maxEnergyExtraction`) and the positions it pushes
+/// to, each with the face the target's handler is queried from. The basic
+/// generator walks its six neighbours; the lava generator has its own ten;
+/// anything else is not a generator.
+fn push_plan(block: &str) -> Option<(i32, Vec<EnergyTarget>)> {
+    match block {
+        GENERATOR => Some((
+            GENERATOR_MAX_EXTRACT,
+            Direction::ALL
+                .iter()
+                .map(|side| {
+                    let [x, y, z] = side.normal();
+                    ([x, y, z], [-x, -y, -z])
+                })
+                .collect(),
+        )),
+        LAVA => Some((LAVA_MAX_EXTRACT, lava_output_targets().to_vec())),
+        _ => None,
+    }
+}
+
 /// `MachineBlockEntity.craftItem`: every result into its own output slot, then
 /// one item out of the input slot.
 fn finish_operation(host: &dyn Host, items: &mut [Option<ItemStack>], recipe: &PulverizerRecipe) {
@@ -785,8 +940,10 @@ struct Resolved<T> {
 static PULVERIZER_RECIPES: Mutex<Option<Vec<Resolved<PulverizerRecipe>>>> = Mutex::new(None);
 static SMELTING_RECIPES: Mutex<Option<Vec<Resolved<SmeltingRecipe>>>> = Mutex::new(None);
 /// The cooler's recipes have no item ingredient, so they match a tank rather
-/// than an `Ingredient` and are cached as parsed recipes only.
+/// than an `Ingredient` and are cached as parsed recipes only. So are the lava
+/// generator's.
 static COOLER_RECIPES: Mutex<Option<Vec<CoolerRecipe>>> = Mutex::new(None);
+static LAVA_RECIPES: Mutex<Option<Vec<LavaGenRecipe>>> = Mutex::new(None);
 static RECIPE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// The first recipe of `kind` whose ingredient takes `input`: the pin's
@@ -886,6 +1043,31 @@ fn find_cooler(host: &dyn Host, fluid: &str, amount: i32) -> Option<CoolerRecipe
         .cloned()
 }
 
+/// The `oritech:lava_generator` recipe a tank's contents start: the first whose
+/// fluid input the tank holds (`FluidMultiblockGeneratorBlockEntity.getRecipe`).
+/// No ingredient is resolved, because the recipe has no item input.
+fn find_lavagen(host: &dyn Host, fluid: &str, amount: i32) -> Option<LavaGenRecipe> {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = LAVA_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let parsed = host
+            .recipes_of_type(LAVA_RECIPE)
+            .iter()
+            .filter_map(|recipe| LavaGenRecipe::parse(&recipe.id, &recipe.json.to_string()).ok())
+            .collect();
+        *cache = Some(parsed);
+    }
+    let recipes = cache.as_ref()?;
+    recipes
+        .iter()
+        .find(|recipe| tank_matches(Some((fluid, amount)), &recipe.fluid))
+        .cloned()
+}
+
 // ---------------------------------------------------------------------------
 // The generator's energy push
 // ---------------------------------------------------------------------------
@@ -905,11 +1087,23 @@ fn queue_push(level: LevelRef, pos: [i32; 3]) {
     }
 }
 
-/// After a level's tick: move the queued generator energy into adjacent
-/// pulverizers through the engine's energy handlers (`move_energy`, the
+/// The `Direction` a face normal names.
+fn direction(normal: [i32; 3]) -> Option<Direction> {
+    Direction::ALL
+        .into_iter()
+        .find(|side| side.normal() == normal)
+}
+
+/// After a level's tick: move the queued generators' energy into their targets
+/// through the engine's energy handlers (`move_energy`, the
 /// `EnergyHandlerUtil.move` counterpart of the retired `native_move_energy`).
-/// The generator gives at most 256 FE a call (upstream's `maxEnergyExtraction`)
-/// and the pulverizer takes at most 256 (its `maxEnergyInsertion`).
+///
+/// Upstream's `outputEnergy` builds a cache on each `getOutputTargets` position
+/// and moves into whatever handler answers, so the capability is the filter
+/// here: a block with no `ENERGY` handler is skipped whatever its id, and a
+/// generator gives at most its own `maxEnergyExtraction` a call (the basic
+/// generator 256, the lava generator 512). The target's own `maxEnergyInsertion`
+/// limits what lands.
 pub(crate) fn on_level_tick_post(host: &mut dyn ServerHost, level: LevelRef) {
     let queued = {
         let mut queue = PUSH.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -924,23 +1118,30 @@ pub(crate) fn on_level_tick_post(host: &mut dyn ServerHost, level: LevelRef) {
             later.push((queued_level, generator));
             continue;
         }
-        if block_at(host, level, generator).as_deref() != Some(GENERATOR) {
+        let Some(block) = block_at(host, level, generator) else {
             continue;
-        }
-        for side in Direction::ALL {
-            let [dx, dy, dz] = side.normal();
-            let neighbour = [generator[0] + dx, generator[1] + dy, generator[2] + dz];
-            if block_at(host, level, neighbour).as_deref() != Some(PULVERIZER) {
+        };
+        let Some((extract, targets)) = push_plan(&block) else {
+            continue;
+        };
+        let max = u32::try_from(extract.max(0)).unwrap_or(0);
+        for (offset, face) in targets {
+            let neighbour = [
+                generator[0] + offset[0],
+                generator[1] + offset[1],
+                generator[2] + offset[2],
+            ];
+            let Some(target_face) = direction(face) else {
                 continue;
-            }
-            let max = u32::try_from(GENERATOR_MAX_EXTRACT.max(0)).unwrap_or(0);
+            };
+            let source_face = target_face.opposite();
             let _ = host.transaction(|host, tx| -> Result<u32, ()> {
-                let Some(from) = level.capability(&mut *host, &ENERGY, generator, Some(side))
+                let Some(from) =
+                    level.capability(&mut *host, &ENERGY, generator, Some(source_face))
                 else {
                     return Ok(0);
                 };
-                let Some(to) =
-                    level.capability(&mut *host, &ENERGY, neighbour, Some(side.opposite()))
+                let Some(to) = level.capability(&mut *host, &ENERGY, neighbour, Some(target_face))
                 else {
                     return Ok(0);
                 };
@@ -980,7 +1181,7 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     let Some(name) = block_at(&*server, level, pos) else {
         return Flow::Continue;
     };
-    let is_multiblock = name == FURNACE || name == COOLER;
+    let is_multiblock = name == FURNACE || name == COOLER || name == LAVA;
     if !is_multiblock && name != GENERATOR && name != PULVERIZER {
         return Flow::Continue;
     }
@@ -1014,6 +1215,39 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
             say(server, click.player, &message);
             return Flow::Cancel;
         }
+    }
+    if name == LAVA {
+        // The lava generator's input is its tank, and a held fluid container is
+        // the player's way in: the engine's own `FluidUtil` interaction empties
+        // it into the block's declared tank (and would fill it from a container
+        // if the tank were drainable — it is not). The two bucket slots upstream
+        // adds are not declared here (PLAN-slice4.md, deviation 1).
+        let held_id = held.item().id(&*server);
+        let moved = match server.player(click.player) {
+            Some(player) => {
+                let side = direction(click.hit.face);
+                fluid_util::interact_with_fluid_handler(
+                    &mut *server,
+                    player,
+                    click.hand,
+                    level,
+                    pos,
+                    side,
+                )
+            }
+            None => false,
+        };
+        if moved {
+            if let Some(line) = info_line(server, pos) {
+                say(server, click.player, &line);
+            }
+        } else {
+            let message = format!(
+                "{held_id} has nowhere to go: the lava generator's tank takes a fluid container"
+            );
+            say(server, click.player, &message);
+        }
+        return Flow::Cancel;
     }
     if name == COOLER {
         // No input slot: the chiller's input is its fluid tank, which a pipe or
@@ -1068,6 +1302,7 @@ fn core_offset_for(block: &str) -> Option<[i32; 3]> {
     match block {
         FURNACE => Some(CORE_OFFSET),
         COOLER => Some(COOLER_CORE_OFFSET),
+        LAVA => Some(LAVA_CORE_OFFSET),
         _ => None,
     }
 }
@@ -1289,6 +1524,22 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 time,
             ))
         }
+        LAVA => {
+            let saved = lava_state(&nbt);
+            let core = saved
+                .assembly
+                .core
+                .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
+                .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
+            Some(lava_line(
+                pos,
+                &LavaView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                },
+                time,
+            ))
+        }
         other => Some(format!("{pos:?} is a {other}, not an Oritech machine.")),
     }
 }
@@ -1306,6 +1557,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         PULVERIZER => PULVERIZER_CAPACITY,
         FURNACE => FURNACE_CAPACITY,
         COOLER => COOLER_CAPACITY,
+        LAVA => LAVA_CAPACITY,
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -1333,7 +1585,7 @@ pub(crate) fn set_fluid(
 ) -> Option<String> {
     let level = host.level(host.dimension())?;
     let name = block_at(&*host, level, pos)?;
-    fluids(&name)?;
+    let capacity = tank_capacity(&name)?;
     let asked = amount.max(0);
     // Through the engine's own `horizon:fluids` handler for this block: the game
     // builds it from the tanks the block *declared*, so a block that declared
@@ -1351,7 +1603,8 @@ pub(crate) fn set_fluid(
     });
     let entity = host.block_entity(level, pos)?;
     let nbt = entity.data(&*host)?;
-    let (tank_fluid, tank_amount) = tank_state(&nbt).unwrap_or_else(|| ("empty".to_owned(), 0));
+    let (tank_fluid, tank_amount) =
+        tank_state(&nbt, capacity).unwrap_or_else(|| ("empty".to_owned(), 0));
     Some(fluid_line(
         &name,
         pos,
@@ -1359,6 +1612,7 @@ pub(crate) fn set_fluid(
         tank_amount,
         asked,
         i32::try_from(accepted).unwrap_or(i32::MAX),
+        capacity,
     ))
 }
 
@@ -1372,6 +1626,9 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *COOLER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *LAVA_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     RECIPE_TICKS.store(0, Ordering::Relaxed);
@@ -1460,12 +1717,12 @@ pub(crate) fn furnace_line(pos: [i32; 3], view: &FurnaceView<'_>, t: i64) -> Str
     )
 }
 
-/// A tank as a line prints it: the fluid and its amount against the declared
-/// capacity, or `empty`.
-fn tank_text(tank: Option<(&str, i32)>) -> String {
+/// A tank as a line prints it: the fluid and its amount against the block's
+/// declared capacity, or `empty`.
+fn tank_text(tank: Option<(&str, i32)>, capacity: i32) -> String {
     match tank {
-        Some((fluid, amount)) => format!("{fluid} {amount}/{COOLER_TANK} mB"),
-        None => format!("empty 0/{COOLER_TANK} mB"),
+        Some((fluid, amount)) => format!("{fluid} {amount}/{capacity} mB"),
+        None => format!("empty 0/{capacity} mB"),
     }
 }
 
@@ -1495,9 +1752,44 @@ pub(crate) fn cooler_line(pos: [i32; 3], view: &CoolerView<'_>, t: i64) -> Strin
             saved
                 .tank
                 .as_ref()
-                .map(|(fluid, amount)| (fluid.as_str(), *amount))
+                .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+            COOLER_TANK,
         ),
         slot_text(view.output),
+    )
+}
+
+/// The lava generator's line: the assembly first (a machine that is not
+/// assembled burns nothing), then the burn and the tank.
+pub(crate) fn lava_line(pos: [i32; 3], view: &LavaView<'_>, t: i64) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    format!(
+        "Lava Generator at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         burning {}/{} ticks recipe {recipe}, tank {}, t={t}",
+        saved.machine.energy,
+        LAVA_CAPACITY,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress.max(0),
+        saved.machine.max_burn,
+        tank_text(
+            saved
+                .tank
+                .as_ref()
+                .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+            LAVA_TANK,
+        ),
     )
 }
 
@@ -1510,6 +1802,7 @@ pub(crate) fn fluid_line(
     amount: i32,
     asked: i32,
     accepted: i32,
+    capacity: i32,
 ) -> String {
     let tank = match fluid {
         "empty" => None,
@@ -1517,7 +1810,7 @@ pub(crate) fn fluid_line(
     };
     format!(
         "{name} at {pos:?}: tank {} (asked {asked}, accepted {accepted})",
-        tank_text(tank)
+        tank_text(tank, capacity)
     )
 }
 
@@ -1948,7 +2241,11 @@ mod tests {
                 ..saved
             },
         );
-        assert_eq!(tank_state(&nbt), None, "an empty tank is no tank");
+        assert_eq!(
+            tank_state(&nbt, COOLER_TANK),
+            None,
+            "an empty tank is no tank"
+        );
         assert_eq!(
             nbt.get(&"fluids".into()),
             Some(&Tag::List(vec![Tag::compound([
@@ -1962,13 +2259,21 @@ mod tests {
     #[test]
     fn a_cooler_tank_above_its_capacity_is_clamped() {
         let mut nbt = Compound::new();
-        store_tank(&mut nbt, Some(("minecraft:water", COOLER_TANK + 5)));
+        store_tank(
+            &mut nbt,
+            Some(("minecraft:water", COOLER_TANK + 5)),
+            COOLER_TANK,
+        );
         assert_eq!(
-            tank_state(&nbt),
+            tank_state(&nbt, COOLER_TANK),
             Some(("minecraft:water".to_owned(), COOLER_TANK))
         );
-        store_tank(&mut nbt, Some(("minecraft:water", -5)));
-        assert_eq!(tank_state(&nbt), None, "a negative amount is an empty tank");
+        store_tank(&mut nbt, Some(("minecraft:water", -5)), COOLER_TANK);
+        assert_eq!(
+            tank_state(&nbt, COOLER_TANK),
+            None,
+            "a negative amount is an empty tank"
+        );
     }
 
     #[test]
@@ -2020,13 +2325,231 @@ mod tests {
     #[test]
     fn the_fluid_command_line_is_the_one_the_e2e_asserts() {
         assert_eq!(
-            fluid_line(COOLER, [12, 100, 0], "minecraft:water", 1_000, 1_000, 1_000),
+            fluid_line(
+                COOLER,
+                [12, 100, 0],
+                "minecraft:water",
+                1_000,
+                1_000,
+                1_000,
+                COOLER_TANK
+            ),
             "oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB \
              (asked 1000, accepted 1000)"
         );
         assert_eq!(
-            fluid_line(COOLER, [12, 100, 0], "empty", 0, 1_000, 0),
+            fluid_line(COOLER, [12, 100, 0], "empty", 0, 1_000, 0, COOLER_TANK),
             "oritech:cooler_block at [12, 100, 0]: tank empty 0/4000 mB (asked 1000, accepted 0)"
         );
+    }
+
+    #[test]
+    fn the_lava_generator_declares_an_output_only_buffer_and_one_tank() {
+        // OritechConfig.generators.lavaGeneratorData:
+        // `BasicMachineConfig(b, "lavaGeneratorData", 100_000, 0, 64 * 8, 64)`.
+        let buffer = battery(LAVA).expect("the lava generator has a buffer");
+        assert_eq!(buffer.capacity, 100_000, "energyCapacity");
+        assert_eq!(buffer.max_insert, 0, "it gives energy, it does not take it");
+        assert_eq!(buffer.max_extract, 512, "maxEnergyExtraction = 64 * 8");
+        assert_eq!(
+            buffer.insert_faces, [false; 6],
+            "no face takes a fill: nothing can charge a generator"
+        );
+        assert_eq!(buffer.extract_faces, [true; 6], "a cable may drain it");
+        // `FluidMultiblockGeneratorBlockEntity.fluidStorage`.
+        let tanks = fluids(LAVA).expect("the lava generator has a tank");
+        assert_eq!(tanks.tanks, vec![LAVA_TANK], "one four-bucket tank");
+        assert_eq!(tanks.inputs, vec![0], "a bucket or a pipe may fill it");
+        assert_eq!(
+            tanks.outputs,
+            Vec::<usize>::new(),
+            "the machine only takes fluid: nothing may drain it"
+        );
+        assert_eq!(
+            tanks.faces,
+            std::array::from_fn(|_| vec![0]),
+            "every face reaches the tank"
+        );
+        assert!(
+            container(LAVA).is_none(),
+            "no item slots are declared: the bucket path is the engine's fluid interaction \
+             (PLAN-slice4.md, deviation 1)"
+        );
+    }
+
+    #[test]
+    fn the_tank_capacity_is_per_block() {
+        assert_eq!(tank_capacity(COOLER), Some(COOLER_TANK));
+        assert_eq!(tank_capacity(LAVA), Some(LAVA_TANK));
+        assert_eq!(
+            tank_capacity(FURNACE),
+            None,
+            "the furnace's input is an item, not a fluid"
+        );
+        assert_eq!(tank_capacity("minecraft:stone"), None);
+        assert!(fluids(LAVA).is_some() && fluids(COOLER).is_some());
+    }
+
+    #[test]
+    fn the_lava_generator_s_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        assert_eq!(
+            lava_state(&nbt),
+            LavaSaved::default(),
+            "a fresh lava generator is empty, unassembled and has an empty tank"
+        );
+        let saved = LavaSaved {
+            machine: LavaGenerator {
+                energy: 7_680,
+                progress: 0,
+                max_burn: 120,
+                recipe: "oritech:lavagen/lava".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                core: Some(LAVA_CORE_OFFSET),
+                quality: 2.0,
+            },
+            tank: None,
+        };
+        store_lava(&mut nbt, &saved);
+        assert_eq!(lava_state(&nbt), saved);
+        assert_eq!(
+            nbt.get(&KEY_ENERGY.into()),
+            Some(&Tag::Int(7_680)),
+            "the buffer is the int `energy` the energy capability reads"
+        );
+        assert_eq!(
+            nbt.get(&KEY_STORED_BURN.into()),
+            Some(&Tag::Int(120)),
+            "storedBurn is the same key the basic generator writes"
+        );
+        assert_eq!(
+            nbt.get(&KEY_RECIPE.into()),
+            Some(&Tag::String("oritech:lavagen/lava".into())),
+            "the recipe is saved, so a reload continues the burn"
+        );
+        assert_eq!(
+            nbt.get(&KEY_ASSEMBLED.into()),
+            Some(&Tag::Byte(1)),
+            "the assembled flag is the multiblock's own byte"
+        );
+        assert_eq!(
+            nbt.get(&"fluids".into()),
+            Some(&Tag::List(vec![Tag::compound([
+                ("Fluid", Tag::String("minecraft:empty".into())),
+                ("Amount", Tag::Int(0)),
+            ])])),
+            "an emptied tank keeps its entry, in the game's own `fluids` shape"
+        );
+        let filled = LavaSaved {
+            tank: Some(("minecraft:lava".to_owned(), 100)),
+            ..saved
+        };
+        store_lava(&mut nbt, &filled);
+        assert_eq!(lava_state(&nbt).tank, filled.tank);
+    }
+
+    #[test]
+    fn a_lava_tank_above_its_capacity_is_clamped() {
+        let mut nbt = Compound::new();
+        store_tank(&mut nbt, Some(("minecraft:lava", LAVA_TANK + 5)), LAVA_TANK);
+        assert_eq!(
+            tank_state(&nbt, LAVA_TANK),
+            Some(("minecraft:lava".to_owned(), LAVA_TANK))
+        );
+        store_tank(&mut nbt, Some(("minecraft:lava", -5)), LAVA_TANK);
+        assert_eq!(tank_state(&nbt, LAVA_TANK), None);
+    }
+
+    #[test]
+    fn the_lava_generator_line_is_the_one_the_e2e_asserts() {
+        let burning = LavaSaved {
+            machine: LavaGenerator {
+                energy: 3_840,
+                progress: 60,
+                max_burn: 120,
+                recipe: "oritech:lavagen/lava".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                core: Some(LAVA_CORE_OFFSET),
+                quality: 2.0,
+            },
+            tank: Some(("minecraft:lava".to_owned(), 100)),
+        };
+        assert_eq!(
+            lava_line(
+                [20, 100, 4],
+                &LavaView {
+                    saved: &burning,
+                    core: Some(("oritech:machine_core_2", 2)),
+                },
+                424
+            ),
+            "Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core \
+             oritech:machine_core_2 quality 2, burning 60/120 ticks recipe \
+             oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424"
+        );
+
+        let idle = LavaSaved::default();
+        assert_eq!(
+            lava_line(
+                [20, 100, 4],
+                &LavaView {
+                    saved: &idle,
+                    core: None,
+                },
+                7
+            ),
+            "Lava Generator at [20, 100, 4]: 0/100000 FE, assembled no core empty quality 0, \
+             burning 0/0 ticks recipe none, tank empty 0/4000 mB, t=7"
+        );
+    }
+
+    #[test]
+    fn the_fuel_command_line_is_the_lava_generators_own_capacity() {
+        assert_eq!(
+            fluid_line(
+                LAVA,
+                [20, 100, 4],
+                "minecraft:lava",
+                100,
+                100,
+                100,
+                LAVA_TANK
+            ),
+            "oritech:lava_generator_block at [20, 100, 4]: tank minecraft:lava 100/4000 mB \
+             (asked 100, accepted 100)"
+        );
+    }
+
+    #[test]
+    fn the_energy_push_plan_is_per_generator() {
+        let (extract, targets) = push_plan(GENERATOR).expect("the basic generator pushes");
+        assert_eq!(extract, 256, "basicGeneratorData.maxEnergyExtraction");
+        assert_eq!(targets.len(), 6, "its six neighbours");
+        for side in Direction::ALL {
+            let [x, y, z] = side.normal();
+            assert!(
+                targets.contains(&([x, y, z], [-x, -y, -z])),
+                "the basic generator pushes {side:?}"
+            );
+        }
+        let (extract, targets) = push_plan(LAVA).expect("the lava generator pushes");
+        assert_eq!(
+            extract, 512,
+            "lavaGeneratorData.maxEnergyExtraction = 64 * 8"
+        );
+        assert_eq!(
+            targets,
+            lava_output_targets(),
+            "its ten targets are the pure rule's list"
+        );
+        assert!(
+            push_plan(PULVERIZER).is_none(),
+            "a machine that spends FE is not a source"
+        );
+        assert!(push_plan("minecraft:stone").is_none());
     }
 }

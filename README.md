@@ -1,10 +1,11 @@
-# Oritech for Horizon — slices 1 to 3
+# Oritech for Horizon — slices 1 to 4
 
-The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock and the **Industrial
-Chiller** of [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for
-Horizon at the campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
+The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
+Chiller** and the **Lava Generator** of [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0),
+rewritten in Rust for Horizon at the campaign pin
+`0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
-One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the four block-entity
+One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the five block-entity
 Parts and the rules in `src/runtime.rs`, beside the carried `assets/` and `data/` (blocks, items,
 models, textures, recipes, loot, lang, tags).
 
@@ -38,6 +39,13 @@ models, textures, recipes, loot, lang, tags).
   obsidian**, in **200 ticks** for exactly **6,400 FE** (32 FE a tick) into a
   **50,000 FE** buffer. The tank is a real `horizon:fluids` handler, so another
   mod's pipe can fill it.
+- **Lava Generator** (`oritech:lava_generator_block`) — the first generator
+  that burns a fluid: a controller plus a core **one block above**, a
+  **four-bucket tank** a bucket (or `/oritech fluid`) fills, and **100 mB of
+  `minecraft:lava`** burnt over **120 ticks** for exactly **7,680 FE** (64 FE a
+  tick) into a **100,000 FE** buffer that accepts no inserts. It pushes that FE
+  to upstream's ten targets — the four sides, each repeated one block up, the
+  block below and two above — so a machine beside it runs.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
@@ -51,7 +59,8 @@ No GUI, no GeckoLib models (the machines are drawn as a full cube of their own
 texture), no crafting recipe for the blocks (they need Oritech components that
 are not in these slices — use `/give`), no addons, no energy or item pipes, no
 redstone control, no comparator output, no cold-biome speed bonus on the chiller
-(the pin has no biome read), no other multiblock (assembler, atomic forge,
+(the pin has no biome read), no bucket input *slots* on the lava generator (a
+bucket in the hand fills it), no other multiblock (assembler, atomic forge,
 foundry, refinery, centrifuge), no augment stations, no accelerator ring or
 reactor, no ore processing chain and no ores. `notes.md` lists every gate and
 deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
@@ -60,7 +69,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules: 38 runtime tests, 18 glue tests
+cargo test --offline                       # the rules: 73 tests (runtime + glue)
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod
@@ -76,8 +85,8 @@ parses the recipe JSON), so its `Cargo.lock` travels **inside** the package.
 
 The in-game leg needs a game the launcher built with this package (`../tools/launcher-game.sh build
 oritech`), because a native `.hmod` cannot load on an unmodded build. `tools/e2e.sh` is the scenario
-and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1` and `SELFTEST_COOLER=1`
-must fail.
+and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1`, `SELFTEST_COOLER=1`
+and `SELFTEST_LAVA=1` must fail.
 
 Every build/test step goes through `../tools/build-slot.sh` in the campaign tree (`BUILD_LOCAL=1`,
 since the far box has no copy of this port). Pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`, mixins

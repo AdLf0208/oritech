@@ -35,6 +35,8 @@ CARRIED = [
     # Slice 3's chiller: same shape again (`blockstates/cooler_block.json` names
     # the `machine_speed_addon` placeholder, the look is the `.geo` model).
     "assets/oritech/textures/block/models/cooler_block.png",
+    # Slice 4's lava generator: the same placeholder blockstate and `.geo` model.
+    "assets/oritech/textures/block/models/lava_generator_block.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -58,6 +60,11 @@ REWRITTEN_RECIPES = [
     # carried: a recipe that can never match is dead data (notes.md, gap).
     "data/oritech/recipe/cooler/ice.json",
     "data/oritech/recipe/cooler/obsidian.json",
+    # Slice 4: the lava generator's one recipe this package can run — 100 mB of
+    # `minecraft:lava` for 120 ticks. Its `sheolfire.json` takes
+    # `oritech:still_sheol_fire`, another fluid this package does not declare, so
+    # it is the same recorded gap as `snow.json`.
+    "data/oritech/recipe/lavagen/lava.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -99,6 +106,12 @@ BLOCKS = {
     "cooler_block": {
         "name": "Industrial Chiller",
         "texture": "oritech:block/models/cooler_block",
+    },
+    # Slice 4: the Lava Generator (`block.oritech.lava_generator_block` is
+    # "Lava Generator" in the jar's lang).
+    "lava_generator_block": {
+        "name": "Lava Generator",
+        "texture": "oritech:block/models/lava_generator_block",
     },
 }
 CORE_NAMES = [

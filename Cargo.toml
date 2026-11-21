@@ -6,10 +6,10 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "oritech"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 license = "CC0-1.0"
-description = "Oritech for Horizon, slices 1 to 3: the Basic Generator, the Pulverizer, the Powered Furnace and the Industrial Chiller"
+description = "Oritech for Horizon, slices 1 to 4: the Basic Generator, the Pulverizer, the Powered Furnace, the Industrial Chiller and the Lava Generator"
 publish = false
 
 [dependencies]

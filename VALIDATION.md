@@ -5,6 +5,34 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.6 — slice 4, the Lava Generator (pin `0a875da`, 2026-11-21)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline'` (new bodies `todo!()`) | **57 passed, 9 failed** — the lava generator's rules are red first (the tenth test pins the shared `tank_matches` and passed at once) | `slice4-test-red.log` |
+| 2 | same, the new glue bodies `todo!()` | **68 passed, 5 failed** | `slice4-glue-red.log` |
+| 3 | six targeted mutations of the glue, then the tests (`tools/slice4-glue-counterfactual.py`) | **68 passed, 5 failed** — one per new glue test; the file restored byte-identically | `slice4-glue-red-counterfactual.log` |
+| 4 | same, implemented | **73 passed, 0 failed** | `sdk-test.log` |
+| 5 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `sdk-clippy.log` |
+| 6 | `cd ports/oritech && rm -f Cargo.lock && cargo horizon-mod build` (twice, `Cargo.lock` removed and artifact deleted between) | **105,595 B**, sha256 `a42999768aba2e3083422a006c28da3154b93256bc98d6fd691cf1c607f06cac`, `cmp` identical, 107 entries, no packed `Cargo.lock` | `sdk-build.log`, `sdk-build-second.log`, `sdk-sha256.txt` |
+| 7 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.6 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` | `sdk-check.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (delivered file, sha `a4299976…`) | `sdk-fits.log` |
+| 9 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `sdk-fits.log` |
+| 10 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 11 | `python3 tools/carry_content.py --check` | `98 files, 0 differ` | stdout |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest bumped to 0.2.6 so it recompiles) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows the lava generator's readout and ids | — |
+| 13 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` | `e2e-slice4.log` |
+| 14 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no generator item and its generator, furnace, core, chiller and lava generator ids stay air | `e2e-slice4-differential.log` |
+| 15 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice4-control.log` |
+| 16 | same with `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` | `e2e-slice4-selftest.log` |
+| 17 | same with `SELFTEST_LAVA=1` | **EXIT:1** — `a 120-tick lava burn makes exactly 7680 FE, so the buffer should hold 7744, not 7680` | `e2e-slice4-selftest-lava.log` |
+| 18 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 17 logs, 17 ok, 0 bad | stdout |
+| 19 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 20 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game assertions and what each can fail on are listed in `notes.md` → *Slice 4* → *Verification*
+and *In-game transcript*.
+
 ## 0.2.5 — slice 3, the Industrial Chiller (pin `0a875da`, 2026-11-21)
 
 | # | Command (from the campaign root) | Verdict | Log |

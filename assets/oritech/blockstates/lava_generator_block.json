@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "oritech:block/lava_generator_block"
+    }
+  }
+}

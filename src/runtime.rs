@@ -689,23 +689,8 @@ impl CoolerRecipe {
         }
         // `FluidIngredient.CODEC`: `fluid` is an id or `#tag`, and `amount`
         // defaults to one bucket when the file leaves it out.
-        let input = value
-            .get("fluidInput")
-            .ok_or(CoolerError::BadFluid)?
-            .as_object()
+        let fluid = parse_fluid_input(value.get("fluidInput").unwrap_or(&Value::Null))
             .ok_or(CoolerError::BadFluid)?;
-        let fluid = input
-            .get("fluid")
-            .and_then(Value::as_str)
-            .filter(|fluid| !fluid.is_empty())
-            .ok_or(CoolerError::BadFluid)?;
-        let amount = match input.get("amount") {
-            None => 1_000,
-            Some(amount) => amount
-                .as_i64()
-                .filter(|amount| *amount > 0)
-                .ok_or(CoolerError::BadFluid)?,
-        };
         // The cooler has one output slot: one result, or the recipe cannot run.
         let results = value
             .get("results")
@@ -731,10 +716,7 @@ impl CoolerRecipe {
             .ok_or(CoolerError::BadTime)?;
         Ok(Self {
             id: id.to_owned(),
-            fluid: FluidInput {
-                fluid: fluid.to_owned(),
-                amount: i32::try_from(amount).unwrap_or(i32::MAX),
-            },
+            fluid,
             result: RecipeResult {
                 item: item.to_owned(),
                 count: i32::try_from(count).unwrap_or(1),
@@ -742,6 +724,25 @@ impl CoolerRecipe {
             time: u32::try_from(time).unwrap_or(u32::MAX),
         })
     }
+}
+
+/// `FluidIngredient.CODEC`'s `{fluid, amount?}`: a fluid id or `#tag`, and the
+/// amount, a bucket when the file leaves it out. Shared by the cooler's and the
+/// lava generator's files, which name the same object.
+fn parse_fluid_input(input: &Value) -> Option<FluidInput> {
+    let input = input.as_object()?;
+    let fluid = input
+        .get("fluid")
+        .and_then(Value::as_str)
+        .filter(|fluid| !fluid.is_empty())?;
+    let amount = match input.get("amount") {
+        None => 1_000,
+        Some(amount) => amount.as_i64().filter(|amount| *amount > 0)?,
+    };
+    Some(FluidInput {
+        fluid: fluid.to_owned(),
+        amount: i32::try_from(amount).unwrap_or(i32::MAX),
+    })
 }
 
 /// The Industrial Chiller's state: the buffer, the progress toward the current
@@ -778,6 +779,202 @@ impl Cooler {
             work,
             cooler_energy_usage(),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4: the Lava Generator (`oritech:lava_generator_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.generators.lavaGeneratorData.energyCapacity`.
+pub const LAVA_CAPACITY: i32 = 100_000;
+/// ...`.maxEnergyExtraction` (`64 * 8`): the most one extraction moves.
+pub const LAVA_MAX_EXTRACT: i32 = 512;
+/// ...`.energyPerTick`: FE one burning tick produces.
+pub const LAVA_ENERGY_PER_TICK: i32 = 64;
+/// `FluidMultiblockGeneratorBlockEntity.fluidStorage` =
+/// `new SimpleFluidStorage(4 * bucketAmount())`: the machine's one tank.
+pub const LAVA_TANK: i32 = 4_000;
+/// `LavaGeneratorEntity.getCorePositions`: the one core, one block above the
+/// controller — the furnace's offset, not the chiller's.
+pub const LAVA_CORE_OFFSET: [i32; 3] = [0, 1, 0];
+
+/// One energy target: the offset from the generator and the face of the target
+/// whose handler is queried.
+pub type EnergyTarget = ([i32; 3], [i32; 3]);
+
+/// `LavaGeneratorEntity.getOutputTargets`, as (offset, the face the target's
+/// handler is queried from). It is not the six neighbours: the four horizontal
+/// positions are repeated one block up, the top target is two blocks up, and a
+/// target directly above is absent (upstream pushes there through the pair at
+/// `(0, 2, 0)` instead).
+pub const LAVA_OUTPUT_TARGETS: [EnergyTarget; 10] = [
+    // pos.above(2), DOWN
+    ([0, 2, 0], [0, -1, 0]),
+    // pos.below(), DOWN
+    ([0, -1, 0], [0, -1, 0]),
+    // pos.east(), WEST; pos.east().above(), WEST
+    ([1, 0, 0], [-1, 0, 0]),
+    ([1, 1, 0], [-1, 0, 0]),
+    // pos.south(), NORTH; pos.south().above(), NORTH
+    ([0, 0, 1], [0, 0, -1]),
+    ([0, 1, 1], [0, 0, -1]),
+    // pos.west(), EAST; pos.west().above(), EAST
+    ([-1, 0, 0], [1, 0, 0]),
+    ([-1, 1, 0], [1, 0, 0]),
+    // pos.north(), SOUTH; pos.north().above(), SOUTH
+    ([0, 0, -1], [0, 0, 1]),
+    ([0, 1, -1], [0, 0, 1]),
+];
+
+/// The targets `LavaGeneratorEntity.outputEnergy` walks, for the glue.
+#[must_use]
+pub fn lava_output_targets() -> &'static [EnergyTarget] {
+    &LAVA_OUTPUT_TARGETS
+}
+
+/// `UpgradableGeneratorBlockEntity.calculateEnergyUsage` for a generator:
+/// `energyPerTick * (1 / speedMultiplier)`. With no addon the speed is 1, so a
+/// burning tick makes the config's own 64 FE.
+#[must_use]
+pub fn lava_energy_usage() -> i32 {
+    LAVA_ENERGY_PER_TICK
+}
+
+/// The ticks one burn of `time` takes here: `progress = recipeTime`, never below
+/// one tick.
+#[must_use]
+pub fn lavagen_ticks(time: u32) -> u32 {
+    time.max(1)
+}
+
+/// The Lava Generator's saved state: the buffer, the burning ticks left
+/// (upstream's `progress`), the ticks the loaded recipe gave
+/// (`currentMaxBurnTime`, saved as `storedBurn`) and the recipe being burned.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LavaGenerator {
+    /// Stored FE.
+    pub energy: i32,
+    /// Burning ticks left (`progress`).
+    pub progress: i32,
+    /// Ticks the loaded recipe gave (`currentMaxBurnTime`).
+    pub max_burn: i32,
+    /// The recipe being burned; empty when none.
+    pub recipe: String,
+}
+
+impl LavaGenerator {
+    /// An empty, unlit lava generator.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The FE the buffer can still take.
+    #[must_use]
+    pub fn room(&self) -> i32 {
+        LAVA_CAPACITY.saturating_sub(self.energy).max(0)
+    }
+
+    /// `UpgradableGeneratorBlockEntity.canFitEnergy`: room for one whole
+    /// production tick.
+    #[must_use]
+    pub fn can_fit(&self) -> bool {
+        self.room() >= LAVA_ENERGY_PER_TICK
+    }
+
+    /// Upstream's gate for `tryConsumeInput`: no burn left and room to make FE.
+    /// Only then does the tank's recipe load (and its fluid leave the tank).
+    #[must_use]
+    pub fn wants_recipe(&self) -> bool {
+        self.progress <= 0 && self.can_fit()
+    }
+
+    /// `FluidMultiblockGeneratorBlockEntity.consumeFluidRecipeInput`: the recipe's
+    /// time becomes the burn left. False when no burn is wanted.
+    pub fn load_recipe(&mut self, ticks: u32, recipe: &str) -> bool {
+        if !self.wants_recipe() || ticks == 0 {
+            return false;
+        }
+        self.progress = i32::try_from(ticks).unwrap_or(i32::MAX);
+        self.max_burn = self.progress;
+        self.recipe.clear();
+        self.recipe.push_str(recipe);
+        true
+    }
+
+    /// One burning tick: the FE added (`0` when not burning or the buffer is
+    /// full).
+    pub fn tick(&mut self) -> i32 {
+        if self.progress <= 0 || !self.can_fit() {
+            return 0;
+        }
+        self.progress -= 1;
+        self.energy += LAVA_ENERGY_PER_TICK;
+        LAVA_ENERGY_PER_TICK
+    }
+}
+
+/// Why a `oritech:lava_generator` file was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LavaGenError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `fluidInput`, or a fluid input with no fluid id.
+    BadFluid,
+    /// No positive `time`.
+    BadTime,
+}
+
+impl std::fmt::Display for LavaGenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::BadFluid => "no fluid input",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for LavaGenError {}
+
+/// One `oritech:lava_generator` recipe: a fluid burnt for `time` ticks with no
+/// item input and no item result (`FuelGeneratorRecipe`, the jar's
+/// `lavagen/*.json`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LavaGenRecipe {
+    /// The recipe id.
+    pub id: String,
+    /// The fluid it burns.
+    pub fluid: FluidInput,
+    /// `time`, in ticks.
+    pub time: u32,
+}
+
+impl LavaGenRecipe {
+    /// Parse one `oritech:lava_generator` file:
+    /// `{type, fluidInput: {fluid, amount?}, ingredients: [], results: [], time}`.
+    pub fn parse(id: &str, json: &str) -> Result<Self, LavaGenError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| LavaGenError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(LavaGenError::Unreadable);
+        }
+        let fluid = parse_fluid_input(value.get("fluidInput").unwrap_or(&Value::Null))
+            .ok_or(LavaGenError::BadFluid)?;
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(LavaGenError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            fluid,
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
     }
 }
 
@@ -1647,5 +1844,240 @@ mod tests {
             "the last bucket empties the tank"
         );
         assert_eq!(after_draining(999, 1_000), None, "never negative");
+    }
+
+    #[test]
+    fn the_lava_generators_numbers_are_the_jars() {
+        // OritechConfig.generators.lavaGeneratorData:
+        // `new BasicMachineConfig(b, "lavaGeneratorData", 100_000, 0, 64 * 8, 64)`.
+        assert_eq!(LAVA_CAPACITY, 100_000, "energyCapacity");
+        assert_eq!(LAVA_MAX_EXTRACT, 512, "maxEnergyExtraction = 64 * 8");
+        assert_eq!(LAVA_ENERGY_PER_TICK, 64, "energyPerTick");
+        assert_eq!(LAVA_TANK, 4_000, "SimpleFluidStorage(4 * bucketAmount())");
+        assert_eq!(
+            LAVA_CORE_OFFSET, CORE_OFFSET,
+            "LavaGeneratorEntity.getCorePositions is the furnace's (0, 1, 0)"
+        );
+        assert_ne!(
+            LAVA_CORE_OFFSET, COOLER_CORE_OFFSET,
+            "the chiller's core is north, so the assembly cannot be hardcoded"
+        );
+        assert_eq!(lava_energy_usage(), 64, "energyPerTick * (1 / speed 1)");
+        assert_eq!(lavagen_ticks(120), 120, "progress = recipeTime");
+        assert_eq!(lavagen_ticks(0), 1, "a recipe is never zero ticks");
+    }
+
+    #[test]
+    fn a_lava_burn_tick_makes_64_fe_and_spends_one_tick() {
+        let mut generator = LavaGenerator {
+            energy: 0,
+            progress: 120,
+            max_burn: 120,
+            recipe: "oritech:lavagen/lava".to_owned(),
+        };
+        assert_eq!(generator.tick(), 64);
+        assert_eq!(generator.energy, 64);
+        assert_eq!(generator.progress, 119);
+        assert_eq!(
+            generator.max_burn, 120,
+            "the recipe's length is not consumed"
+        );
+    }
+
+    #[test]
+    fn a_whole_lava_burn_is_120_ticks_and_7680_fe() {
+        let mut generator = LavaGenerator {
+            energy: 0,
+            progress: 120,
+            max_burn: 120,
+            recipe: "oritech:lavagen/lava".to_owned(),
+        };
+        let mut made = 0;
+        for _ in 0..120 {
+            made += generator.tick();
+        }
+        assert_eq!(made, 7_680, "120 ticks x 64 FE");
+        assert_eq!(generator.energy, 7_680);
+        assert_eq!(generator.progress, 0, "the burn ended");
+        assert_eq!(generator.tick(), 0, "an ended burn makes nothing");
+        assert!(
+            generator.wants_recipe(),
+            "an ended burn wants the next recipe while the buffer has room"
+        );
+    }
+
+    #[test]
+    fn a_full_buffer_pauses_the_burn_and_keeps_the_rest() {
+        // canFitEnergy: capacity >= amount + produced, so a buffer with 32 FE of
+        // room cannot take a 64 FE tick and the burn waits for a drain.
+        let mut generator = LavaGenerator {
+            energy: LAVA_CAPACITY - 32,
+            progress: 7,
+            max_burn: 120,
+            recipe: "oritech:lavagen/lava".to_owned(),
+        };
+        assert!(!generator.can_fit());
+        assert_eq!(generator.tick(), 0);
+        assert_eq!(generator.progress, 7, "the rest of the burn is kept");
+        generator.energy = LAVA_CAPACITY - 64;
+        assert!(generator.can_fit(), "exactly one tick's room fits");
+        assert_eq!(generator.tick(), 64);
+        assert_eq!(generator.progress, 6);
+    }
+
+    #[test]
+    fn a_lava_recipe_only_loads_when_no_burn_is_left_and_the_buffer_has_room() {
+        let mut generator = LavaGenerator::default();
+        assert!(generator.wants_recipe(), "empty, so a recipe may load");
+        assert!(generator.load_recipe(120, "oritech:lavagen/lava"));
+        assert_eq!(generator.progress, 120);
+        assert_eq!(generator.max_burn, 120);
+        assert_eq!(generator.recipe, "oritech:lavagen/lava");
+        assert!(
+            !generator.load_recipe(800, "oritech:lavagen/sheolfire"),
+            "a burning machine does not load another recipe"
+        );
+        assert_eq!(generator.recipe, "oritech:lavagen/lava");
+        let mut full = LavaGenerator {
+            energy: LAVA_CAPACITY,
+            ..LavaGenerator::default()
+        };
+        assert!(!full.wants_recipe(), "a full buffer waits for a drain");
+        assert!(!full.load_recipe(120, "oritech:lavagen/lava"));
+        assert_eq!(full.progress, 0);
+    }
+
+    #[test]
+    fn a_lava_recipe_is_100_mb_of_lava_for_120_ticks() {
+        // The jar's data/oritech/recipe/lavagen/lava.json, verbatim.
+        let json = r#"{
+  "type": "oritech:lava_generator",
+  "fluidInput": {
+    "amount": 100,
+    "fluid": "minecraft:lava"
+  },
+  "ingredients": [],
+  "results": [],
+  "time": 120
+}"#;
+        let recipe = LavaGenRecipe::parse("oritech:lavagen/lava", json)
+            .expect("the jar's lava recipe parses");
+        assert_eq!(recipe.fluid.fluid, "minecraft:lava");
+        assert_eq!(recipe.fluid.amount, 100, "100 mB a burn");
+        assert_eq!(recipe.time, 120, "time: 120");
+        assert_eq!(lavagen_ticks(recipe.time), 120);
+        assert_eq!(lava_energy_usage() * 120, 7_680);
+    }
+
+    #[test]
+    fn the_sheolfire_recipe_names_a_fluid_this_pack_does_not_have() {
+        // data/oritech/recipe/lavagen/sheolfire.json: the second recipe is the
+        // same measured gap as the chiller's snow.json — the fluid is the mod's
+        // own `oritech:still_sheol_fire`, which this package does not declare, so
+        // the file is not carried and the recipe can never match here.
+        let json = r#"{
+  "type": "oritech:lava_generator",
+  "fluidInput": {
+    "amount": 100,
+    "fluid": "oritech:still_sheol_fire"
+  },
+  "ingredients": [],
+  "results": [],
+  "time": 800
+}"#;
+        let recipe = LavaGenRecipe::parse("oritech:lavagen/sheolfire", json)
+            .expect("the jar's sheolfire recipe parses");
+        assert_eq!(recipe.fluid.fluid, "oritech:still_sheol_fire");
+        assert_eq!(recipe.fluid.amount, 100);
+        assert_eq!(recipe.time, 800);
+        assert_ne!(
+            recipe.fluid.fluid, "minecraft:lava",
+            "only the lava recipe can run in this package"
+        );
+    }
+
+    #[test]
+    fn a_lava_recipe_reads_its_fluid_with_the_cooler_s_default_bucket() {
+        let bare = r#"{"type": "oritech:lava_generator", "fluidInput": {"fluid": "minecraft:lava"}, "ingredients": [], "results": [], "time": 120}"#;
+        let recipe = LavaGenRecipe::parse("r", bare).expect("a fluid id and a time are enough");
+        assert_eq!(
+            recipe.fluid.amount, 1_000,
+            "FluidIngredient defaults to a bucket"
+        );
+        for (json, want) in [
+            (
+                r#"{"type": "oritech:lava_generator", "time": 120}"#,
+                LavaGenError::BadFluid,
+            ),
+            (
+                r#"{"type": "oritech:lava_generator", "fluidInput": {"fluid": "minecraft:lava"}}"#,
+                LavaGenError::BadTime,
+            ),
+            (
+                r#"{"type": "oritech:lava_generator", "fluidInput": {"fluid": "minecraft:lava"}, "time": 0}"#,
+                LavaGenError::BadTime,
+            ),
+            (
+                r#"{"fluidInput": {"fluid": "minecraft:lava"}, "time": 120}"#,
+                LavaGenError::Unreadable,
+            ),
+            ("not json", LavaGenError::Unreadable),
+        ] {
+            assert_eq!(LavaGenRecipe::parse("r", json), Err(want), "{json}");
+        }
+    }
+
+    #[test]
+    fn the_tank_must_hold_a_lava_recipes_own_fluid_and_amount() {
+        // `FluidMultiblockGeneratorBlockEntity.getRecipe`: the tank's fluid must
+        // match and hold at least the recipe's amount. A tank of water is the
+        // wrong-fluid control: it matches no lava recipe, so nothing burns.
+        let lava = FluidInput {
+            fluid: "minecraft:lava".to_owned(),
+            amount: 100,
+        };
+        assert!(tank_matches(Some(("minecraft:lava", 100)), &lava));
+        assert!(tank_matches(Some(("minecraft:lava", 4_000)), &lava));
+        assert!(!tank_matches(Some(("minecraft:lava", 99)), &lava));
+        assert!(
+            !tank_matches(Some(("minecraft:water", 4_000)), &lava),
+            "water is not lava"
+        );
+        assert!(!tank_matches(None, &lava), "an empty tank holds nothing");
+    }
+
+    #[test]
+    fn the_lava_generator_pushes_to_the_jars_ten_targets() {
+        // LavaGeneratorEntity.getOutputTargets: above(2), below, east, east.above,
+        // south, south.above, west, west.above, north, north.above.
+        let targets = lava_output_targets();
+        assert_eq!(targets.len(), 10);
+        assert_eq!(
+            targets,
+            &LAVA_OUTPUT_TARGETS[..],
+            "the constant is what the push walks"
+        );
+        for want in [
+            ([0, 2, 0], [0, -1, 0]),
+            ([0, -1, 0], [0, -1, 0]),
+            ([1, 0, 0], [-1, 0, 0]),
+            ([1, 1, 0], [-1, 0, 0]),
+            ([0, 0, 1], [0, 0, -1]),
+            ([0, 1, 1], [0, 0, -1]),
+            ([-1, 0, 0], [1, 0, 0]),
+            ([-1, 1, 0], [1, 0, 0]),
+            ([0, 0, -1], [0, 0, 1]),
+            ([0, 1, -1], [0, 0, 1]),
+        ] {
+            assert!(targets.contains(&want), "missing target {want:?}");
+        }
+        assert!(
+            !targets.iter().any(|(offset, _)| *offset == [0, 1, 0]),
+            "there is no target directly above: the pair at (0, 2, 0) covers it"
+        );
+        let mut seen = targets.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 10, "no target is listed twice");
     }
 }
