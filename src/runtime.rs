@@ -1033,15 +1033,19 @@ pub const CAPACITOR_ADDON: &str = "oritech:machine_capacitor_addon";
 pub const BURST_ADDON: &str = "oritech:machine_burst_addon";
 /// `BlockContent.MACHINE_ULTIMATE_ADDON`: speed ×0.25, efficiency ×1.1.
 pub const ULTIMATE_ADDON: &str = "oritech:machine_ultimate_addon";
+/// `BlockContent.MACHINE_REDSTONE_ADDON`: the Control Unit Addon, whose settings
+/// are `AddonSettings.getDefaultSettings()` — a control, not a multiplier.
+pub const REDSTONE_ADDON: &str = "oritech:machine_redstone_addon";
 
-/// The six default addon blocks, in the order the readout names them.
-pub const ADDON_BLOCKS: [&str; 6] = [
+/// The seven default addon blocks, in the order the readout names them.
+pub const ADDON_BLOCKS: [&str; 7] = [
     SPEED_ADDON,
     EFFICIENCY_ADDON,
     PROCESSING_ADDON,
     CAPACITOR_ADDON,
     BURST_ADDON,
     ULTIMATE_ADDON,
+    REDSTONE_ADDON,
 ];
 
 /// `OritechConfig.addonConfig.burstAddonSpeedMultiplier`: a charged burst addon
@@ -1116,6 +1120,10 @@ pub fn addon_settings(block: &str) -> Option<AddonSettings> {
             efficiency: 1.1,
             ..PLAIN
         },
+        // `BlockContent.MACHINE_REDSTONE_ADDON = new RedstoneAddonBlock(…,
+        // AddonSettings.getDefaultSettings()…)`: a control unit contributes no
+        // multiplier; its effect is the machine-wide gate below.
+        REDSTONE_ADDON => PLAIN,
         _ => return None,
     };
     Some(settings)
@@ -1253,6 +1261,7 @@ pub fn addon_names(blocks: &[&str]) -> String {
         "capacitor",
         "burst",
         "ultimate",
+        "redstone",
     ];
     let names: Vec<&str> = ADDON_BLOCKS
         .iter()
@@ -1265,6 +1274,19 @@ pub fn addon_names(blocks: &[&str]) -> String {
     } else {
         names.join("+")
     }
+}
+
+/// `MachineBlockEntity.onRedstoneEvent` as the Control Unit Addon drives it:
+/// `RedstoneAddonBlock.neighborChanged` reads `world.hasNeighborSignal(pos)` and
+/// pushes the answer to its controller, which sets `disabledViaRedstone`. A fresh
+/// addon's mode is `RedstoneMode.INPUT_CONTROL` — the shipped default — so a
+/// *connected* addon that is powered disables its machine and an unpowered one
+/// does not. The four comparator modes (`OUTPUT_POWER`, `OUTPUT_SLOT`,
+/// `OUTPUT_PROGRESS`, `OUTPUT_ACTIVE`) need a control to pick them and are
+/// `blocked(no-addon-mode-control)`.
+#[must_use]
+pub fn redstone_disables(connected: bool, powered: bool) -> bool {
+    connected && powered
 }
 
 /// `MachineBlockEntity.calculateEnergyUsage`: `base * efficiency * (1/speed)`,
@@ -2614,6 +2636,48 @@ mod tests {
             "speed+capacitor"
         );
         assert_eq!(addon_names(&[SPEED_ADDON, "minecraft:stone"]), "speed");
+    }
+
+    #[test]
+    fn the_redstone_addon_is_a_neutral_addon_the_scan_finds() {
+        // `BlockContent.MACHINE_REDSTONE_ADDON` is built with
+        // `AddonSettings.getDefaultSettings()`: it is one of the addon blocks the
+        // machine's scan must find, and it changes no multiplier.
+        let control = addon_settings(REDSTONE_ADDON).expect("the control unit addon");
+        assert_eq!(
+            control,
+            AddonSettings {
+                speed: 1.0,
+                efficiency: 1.0,
+                capacity_bonus: 0,
+                insert_bonus: 0,
+                chambers: 0,
+                burst_ticks: 0,
+            }
+        );
+        assert_eq!(addon_names(&[REDSTONE_ADDON]), "redstone");
+        assert_eq!(
+            Addons::gather(&[REDSTONE_ADDON], ADDON_MODE),
+            Addons::default(),
+            "a control unit is not a speed/efficiency/capacity addon"
+        );
+        assert!(
+            ADDON_BLOCKS.contains(&REDSTONE_ADDON),
+            "the machine's own scan reads `ADDON_BLOCKS`, so the seventh block must be in it"
+        );
+    }
+
+    #[test]
+    fn a_machine_is_disabled_only_by_a_connected_powered_redstone_addon() {
+        // `RedstoneAddonBlock.neighborChanged` pushes `hasNeighborSignal` to the
+        // controller only while the addon is connected and in input mode.
+        assert!(redstone_disables(true, true), "connected and powered");
+        assert!(!redstone_disables(true, false), "connected, no signal");
+        assert!(
+            !redstone_disables(false, true),
+            "a signal with no addon cannot reach a machine"
+        );
+        assert!(!redstone_disables(false, false));
     }
 
     #[test]

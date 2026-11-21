@@ -4,12 +4,12 @@
 [`tools/carry_content.py`](tools/carry_content.py) from the ATM10 jar
 `oritech-neoforge-1.21.1-1.2.13.jar`
 (SHA-256 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`).
-The script is deterministic (`--check` exits 1 on any drift) and writes **141
+The script is deterministic (`--check` exits 1 on any drift) and writes **148
 files** at the root; since 0.2.0 they travel in the same SDK package as `src/`,
 so there is no separate content `.hmod` and no manifest here (the root
 `horizon-mod.toml` is the only one).
 
-## Carried byte for byte from the jar (52 files)
+## Carried byte for byte from the jar (55 files)
 
 | File | Why |
 |---|---|
@@ -18,6 +18,7 @@ so there is no separate content `.hmod` and no manifest here (the root
 | `assets/oritech/textures/block/machine_core_N.png` (N = 1..7) | the cores' textures |
 | `assets/oritech/models/{block,item}/machine_{speed,efficiency,ultimate,processing,capacitor,burst}_addon.json` | slice 5: the six addons' own vanilla block and item models |
 | `assets/oritech/textures/block/machine_{speed,efficiency,ultimate,processing,capacitor,burst}_addon_off.png` | slice 5: their `_off` textures (the same look upstream has before an addon is claimed) |
+| `assets/oritech/models/{block,item}/machine_redstone_addon.json` and `assets/oritech/textures/block/machine_redstone_addon_off.png` | slice 6: the Control Unit Addon's own model and texture (its `_on`/`_powered` models are not carried — one blockstate variant) |
 | `assets/oritech/textures/block/machine_particle_texture.png` | slice 5: the particle texture every addon model names |
 
 `machine_core_hidden` is upstream's worldgen plating, not part of the multiblock, and is not carried.
@@ -46,7 +47,7 @@ The other 117 pulverizer files, and the other 60 assembler / 93 centrifuge / 29 
 recipes, name Oritech dusts, clumps, gems and fluids that are not carried here; they are a later slice
 (see `notes.md`, gaps).
 
-## Authored by `tools/carry_content.py` (79 files)
+## Authored by `tools/carry_content.py` (93 files)
 
 Everything here is written from a value read out of the jar or the upstream
 source; `notes.md` records each one.
@@ -54,13 +55,13 @@ source; `notes.md` records each one.
 | File | Source of the values |
 |---|---|
 | `horizon-mod.toml` | the jar's `neoforge.mods.toml` (id, name, authors, licence) |
-| `assets/oritech/lang/en_us.json` | the jar's lang: the eighteen block names, `itemgroup.oritech.machines` |
-| `assets/oritech/blockstates/*.json` (the five machines and the six addons) | one `""` variant (the jar's own blockstates have exactly one variant for a machine; the addons' have 24 `face`/`facing` states this port does not declare) |
+| `assets/oritech/lang/en_us.json` | the jar's lang: the nineteen block names, `itemgroup.oritech.machines` |
+| `assets/oritech/blockstates/*.json` (the five machines and the seven addons) | one `""` variant (the jar's own blockstates have exactly one variant for a machine; the addons' have 24 `face`/`facing` states this port does not declare) |
 | `assets/oritech/models/block/*.json` (the five machines) | `minecraft:block/cube_all` of the machine's own texture (see the deviation below) |
 | `assets/oritech/models/item/*.json` (the five machines) | the block model, so the item is the block |
-| `assets/oritech/items/*.json` (eighteen blocks) | 26.3's item definition (`minecraft:model`) |
-| `data/oritech/horizon/block/*.json` (eighteen blocks) | `BlockContent`: `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()` → template `minecraft:iron_block`, `occludes: false` |
-| `data/oritech/loot_table/blocks/*.json` (eighteen blocks) | the jar's loot, rewritten into 26.3's singular `condition` shape |
+| `assets/oritech/items/*.json` (nineteen blocks) | 26.3's item definition (`minecraft:model`) |
+| `data/oritech/horizon/block/*.json` (nineteen blocks) | `BlockContent`: `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()` → template `minecraft:iron_block`, `occludes: false` |
+| `data/oritech/loot_table/blocks/*.json` (nineteen blocks) | the jar's loot, rewritten into 26.3's singular `condition` shape |
 | `data/oritech/horizon/creative_tab/machines.json` | `ItemGroups.MACHINE_GROUP`'s title key; icon is the generator (upstream uses the fertilizer block, not in this slice) |
 | `data/minecraft/tags/block/mineable/pickaxe.json` | the iron-block copy is a pickaxe block; a mod block is in no vanilla tag by itself |
 | `data/minecraft/tags/block/needs_stone_tool.json` | the iron-block copy needs a stone tier |
@@ -87,18 +88,20 @@ source; `notes.md` records each one.
 5. **Loot shape.** Upstream's 1.21.1 `conditions: [ … ]` array evaluates false
    at this pin; the carried loot uses 26.3's `condition: { … }` object. Same
    entry, same `survives_explosion` rule.
-6. **No crafting recipes for the eighteen blocks.** The jar's recipes need
+6. **No crafting recipes for the nineteen blocks.** The jar's recipes need
    `oritech:motor`, `oritech:magnetic_coil` and the `c:ingots/nickel`,
    `c:storage_blocks/copper` and `c:player_workstations/furnaces` tags, none of
    which exist in this slice or in 26.3's vanilla data. Shipping them would ship
    recipes that can never match, so they are recorded as a gap instead.
 7. **The creative tab is the machines tab only.** The jar registers four
    (`itemgroup.oritech.machines|components|decorative|equipment`); this slice has
-   items for one (eighteen blocks).
+   items for one (nineteen blocks).
 8. **The addons' blockstate is authored.** The jar's `machine_*_addon.json`
    blockstates have 24 variants keyed by `face`/`facing`/`addon_used`, states
    upstream's `FaceAttachedHorizontalDirectionalBlock` carries; this port declares
    a plain block (no `ADDON_USED`, no addon block entity — see `notes.md` →
    *Deviations (slice 5)*), so the blockstate is one `""` variant pointing at the
-   carried `_off` model.
+   carried `_off` model. The Control Unit Addon (slice 6) is the same shape, and
+   its jar `powered` state is not declared either (it would only choose between
+   `_on` and `_powered` models the port does not carry).
 

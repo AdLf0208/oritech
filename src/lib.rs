@@ -1,5 +1,6 @@
-//! Oritech for Horizon — slices 1 to 4: the Basic Generator, the Pulverizer, the
-//! Powered Furnace, the Industrial Chiller and the Lava Generator.
+//! Oritech for Horizon — slices 1 to 6: the Basic Generator, the Pulverizer, the
+//! Powered Furnace, the Industrial Chiller, the Lava Generator, the machine addon
+//! system and the Control Unit Addon's redstone gate.
 //!
 //! One flat SDK package (mod API 0.2): the carried machines, their models,
 //! textures, lang, loot tables, recipes, tags and creative tab are this
@@ -275,7 +276,9 @@ impl BlockEntityPart for PulverizerPart {
     }
 
     /// One server tick: find the matching recipe, check the output room, and let
-    /// the pure state machine spend FE and advance.
+    /// the pure state machine spend FE and advance. A Control Unit Addon in the
+    /// machine's slot with a signal on it holds the whole tick (upstream's
+    /// `disabledViaRedstone`), which is why the tick can answer `Unchanged`.
     fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
         let Some(level) = support::in_place_level(host) else {
             return;

@@ -95,6 +95,10 @@ ADDON_NAMES = {
     "machine_capacitor_addon": "Capacitor Addon",
     "machine_burst_addon": "Burst Addon",
     "machine_ultimate_addon": "Synergy Matrix Addon",
+    # Slice 6: the Control Unit Addon (`block.oritech.machine_redstone_addon` is
+    # "Control Unit Addon" in the jar's lang). Its settings are the neutral
+    # default: it is a control, not a multiplier.
+    "machine_redstone_addon": "Control Unit Addon",
 }
 ADDON_ASSETS = [
     f"assets/oritech/{kind}/{path}"

@@ -4,6 +4,7 @@
 The lines are (see `src/support.rs`, the readout section):
 
     Basic Generator at [0, 100, 0]: 1940/50000 FE, burning 1503/1600 ticks, fuel minecraft:coal x4, t=324
+    Pulverizer at [20, 100, 0]: 10000/25000 FE, progress 0 recipe none, input minecraft:bone x1, out0 empty, out1 empty, addons redstone redstone disabled, t=7
     Pulverizer at [1, 100, 0]: 3600/25000 FE, progress 9 recipe oritech:pulverizer/bone, input minecraft:bone x1, out0 empty, out1 empty, t=488
     Powered Furnace at [8, 100, 0]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe …, input …, out …, t=424
     Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=424
@@ -44,12 +45,19 @@ FIELDS = (
     "ADDONS",
     "BURST",
     "BURST_MAX",
+    "REDSTONE",
     "T",
 )
 
 # Slice 5: every upgradable machine's line ends `addons <names>` and, only when a
-# burst addon sets a maximum, `burst <remaining>/<max>`.
-ADDON_FIELD = r"addons (?P<ADDONS>[^\s,]+?)(?: burst (?P<BURST>-?\d+)/(?P<BURST_MAX>\d+))?, t=(?P<T>\d+)$"
+# burst addon sets a maximum, `burst <remaining>/<max>`. Slice 6 adds
+# `redstone <enabled|disabled>` after it, only while a Control Unit Addon sits in
+# the machine's slot.
+ADDON_FIELD = (
+    r"addons (?P<ADDONS>[^\s,]+?)"
+    r"(?: burst (?P<BURST>-?\d+)/(?P<BURST_MAX>\d+))?"
+    r"(?: redstone (?P<REDSTONE>disabled|enabled))?, t=(?P<T>\d+)$"
+)
 
 GENERATOR = re.compile(
     r"^Basic Generator at \[(?P<POS>[^\]]+)\]: "

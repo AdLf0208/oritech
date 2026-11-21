@@ -5,7 +5,7 @@
 # fluid-burning generator with its own ten-target energy push) and the machine
 # addon system (the six default addon blocks and their scan).
 #
-# STATUS: 0.2.7 (SDK package, pin 0a875da). The run needs a game the launcher
+# STATUS: 0.2.8 (SDK package, pin 0a875da). The run needs a game the launcher
 # built with this package: `ports/tools/launcher-game.sh build oritech`, then
 # `eval "$(ports/tools/launcher-game.sh env oritech)"` and this script in a
 # build-slot lease. The 0.1.0 and 0.2.x runs are the historical evidence for
@@ -81,7 +81,13 @@
 #    charged burst addon crafts in exactly 13 ticks for 416 FE; a processing addon
 #    turns two bones into twelve bone meal in one completion for 4,800 FE;
 #  - the furnace, the chiller and the lava generator run their own addon slots:
-#    exactly 3,886 FE, 7,772 FE and 7,590 FE for the same craft/burn.
+#    exactly 3,886 FE, 7,772 FE and 7,590 FE for the same craft/burn;
+#  - a Control Unit Addon in the pulverizer's (1,0,0) slot with a redstone block
+#    beside it gates the whole tick: 40 ticks leave `progress 0`, `recipe none`,
+#    the bone still in the slot and the buffer untouched at exactly 10,000 FE,
+#    and the readout says `redstone disabled`; removing the signal lets the same
+#    machine, addon and bone finish for exactly 3,200 FE with `redstone enabled`,
+#    so the addon with no signal is not a gate (the differential).
 #
 # CONTROL=1 (with CONTROL_GAME set) launches the package-less build first, where
 # every id must be unknown: that is the differential run, and without it the
@@ -89,8 +95,9 @@
 #
 # SELFTEST=1 flips the exact-FE assertion of each machine leg (it must FAIL),
 # proving the scenario can fail; `SELFTEST_COOLER=1` does the same for the
-# chiller's leg on its own, `SELFTEST_LAVA=1` for the lava generator's, and
-# `SELFTEST_ADDONS=1` for the speed addon's.
+# chiller's leg on its own, `SELFTEST_LAVA=1` for the lava generator's,
+# `SELFTEST_ADDONS=1` for the speed addon's and `SELFTEST_REDSTONE=1` for the
+# control unit's gate.
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -156,6 +163,14 @@ PROCESSING_ADDON=oritech:machine_processing_addon
 CAPACITOR_ADDON=oritech:machine_capacitor_addon
 BURST_ADDON=oritech:machine_burst_addon
 ULTIMATE_ADDON=oritech:machine_ultimate_addon
+# Slice 6: the Control Unit Addon and the pulverizer buffer the gate is primed
+# with. 10,000 FE is more than the whole 3,200-FE craft, so a machine that ticked
+# while gated would visibly spend it.
+REDSTONE_ADDON=oritech:machine_redstone_addon
+REDSTONE_PRIMED=10000
+# The whole base craft: 100 ticks x 32 FE. (Phase D reassigns SPENT with the
+# measured tick count, so the gate leg keeps its own exact figure.)
+REDSTONE_SPENT=$((GENERATOR_RATE * RECIPE_TICKS))
 ADDON_TICKS=67
 ADDON_RATE=58
 ADDON_SPENT=$((ADDON_TICKS * ADDON_RATE))
@@ -400,21 +415,24 @@ control_leg() {
     ctl command "setblock 20 100 6 $LAVA" >/dev/null 2>&1 || true
     ctl command "setblock 5 100 0 $SPEED_ADDON" >/dev/null 2>&1 || true
     ctl command "setblock 5 100 1 $CAPACITOR_ADDON" >/dev/null 2>&1 || true
+    ctl command "setblock 5 100 2 $REDSTONE_ADDON" >/dev/null 2>&1 || true
     ctl wait 4
-    local furnace core chiller lava addon capacitor
+    local furnace core chiller lava addon capacitor control
     furnace=$(block_name 8 100 0)
     core=$(block_name 8 101 0)
     chiller=$(block_name 12 100 0)
     lava=$(block_name 20 100 6)
     addon=$(block_name 5 100 0)
     capacitor=$(block_name 5 100 1)
+    control=$(block_name 5 100 2)
     [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
     [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
     [ "$chiller" = "minecraft:air" ] || fail "the control game holds $chiller, so the chiller id was known"
     [ "$lava" = "minecraft:air" ] || fail "the control game holds $lava, so the lava generator id was known"
     [ "$addon" = "minecraft:air" ] || fail "the control game holds $addon, so the speed addon id was known"
     [ "$capacitor" = "minecraft:air" ] || fail "the control game holds $capacitor, so the capacitor addon id was known"
-    echo "  without this package: no generator item, and the generator, furnace, core, chiller, lava generator and addon blocks all stayed $name"
+    [ "$control" = "minecraft:air" ] || fail "the control game holds $control, so the control unit addon id was known"
+    echo "  without this package: no generator item, and the generator, furnace, core, chiller, lava generator, addon and control unit blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -1240,11 +1258,11 @@ expect TANK_FLUID minecraft:water
 expect TANK_AMOUNT 1000
 echo "  a tank of water: $ENERGY FE after 200 ticks, still $TANK_FLUID $TANK_AMOUNT, no recipe"
 
-echo "== AA: the six default addon blocks place and read back =="
+echo "== AA: the seven default addon blocks place and read back =="
 # The six `BlockContent.MACHINE_*_ADDON` blocks are ordinary blocks and items in
 # this package; an addon id it does not declare must be refused.
 for addon in "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" \
-    "$CAPACITOR_ADDON" "$BURST_ADDON" "$ULTIMATE_ADDON"; do
+    "$CAPACITOR_ADDON" "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
     ctl command "setblock 20 100 16 $addon" >/dev/null
     ctl wait 3
     [ "$(block_name 20 100 16)" = "$addon" ] \
@@ -1255,7 +1273,7 @@ ctl command "setblock 21 100 16 oritech:machine_speed_addon_2" >/dev/null 2>&1 |
 ctl wait 3
 [ "$(block_name 21 100 16)" = "minecraft:air" ] \
     || fail "an addon id this package does not declare placed"
-echo "  all six addon blocks placed and read back; an undeclared addon id was refused"
+echo "  all seven addon blocks placed and read back; an undeclared addon id was refused"
 
 echo "== AB: a speed addon finishes a bone in exactly 67 ticks for exactly 3,886 FE =="
 # The pulverizer at (4,100,0) has one addon slot at its (1,0,0). Prime exactly the
@@ -1492,6 +1510,77 @@ expect ENERGY "$LAVA_ADDON_SPENT"
 expect TANK_FLUID empty
 echo "  lava: (int)(120 x 2/3 / 1.2) = 66 ticks at (int)(64 x 1.2 x 3/2) = 115 FE = $LAVA_ADDON_SPENT FE"
 
+echo "== AK: a powered Control Unit Addon gates the machine's whole tick =="
+# A fresh pulverizer at (24,100,0) — a position no other phase uses, cleared first
+# so its block entity is new: `setblock` of the *same* block keeps the old entity,
+# and phase N's coal would then block the output slot. Its one addon slot is
+# (1,0,0), and the Control Unit Addon there reads the vanilla signal at its own
+# position — upstream's `RedstoneAddonBlock.neighborChanged` →
+# `world.hasNeighborSignal(pos)` — which the machine re-reads every tick. The
+# redstone block is read back by name, so the signal is recorded, not assumed.
+ctl command "setblock 24 100 0 minecraft:air" >/dev/null
+ctl command "setblock 25 100 0 minecraft:air" >/dev/null
+ctl command "setblock 26 100 0 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 24 100 0 $PULVERIZER" >/dev/null
+ctl command "setblock 25 100 0 $REDSTONE_ADDON" >/dev/null
+ctl command "setblock 26 100 0 minecraft:redstone_block" >/dev/null
+ctl wait 8
+[ "$(block_name 24 100 0)" = "$PULVERIZER" ] || fail "the gated pulverizer did not place"
+[ "$(block_name 25 100 0)" = "$REDSTONE_ADDON" ] || fail "the control unit addon did not place"
+SIGNAL=$(block_name 26 100 0)
+echo "  block(24,100,0) = $(block_name 24 100 0), block(25,100,0) = $(block_name 25 100 0), block(26,100,0) = $SIGNAL"
+[ "$SIGNAL" = "minecraft:redstone_block" ] || fail "the signal source at 26,100,0 reads '$SIGNAL'"
+drain 24 100 0
+feed 24 100 0 minecraft:bone
+line=$(info 24 100 0)
+read_info "$line"
+expect ADDONS redstone
+expect REDSTONE disabled
+expect INPUT "minecraft:bone x1"
+expect OUT0 empty
+expect ENERGY 0
+expect PROGRESS 0
+expect RECIPE none
+# Prime more than the whole craft: a machine that ticked while gated spends 32 FE
+# a tick, so the figure below is what makes the gate visible.
+say "oritech energy 24 100 0 $REDSTONE_PRIMED"
+ctl wait 40
+line=$(info 24 100 0)
+read_info "$line"
+expect ADDONS redstone
+expect REDSTONE disabled
+expect RECIPE none
+expect PROGRESS 0
+expect INPUT "minecraft:bone x1"
+BEFORE_OUT=$(count_in "$OUT0")
+if [ "${SELFTEST_REDSTONE:-0}" = 1 ]; then
+    echo "  SELFTEST_REDSTONE: expecting a gated machine to have spent a tick (this must fail)"
+    expect ENERGY "$((REDSTONE_PRIMED - GENERATOR_RATE))"
+else
+    expect ENERGY "$REDSTONE_PRIMED"
+fi
+echo "  powered: progress $PROGRESS recipe $RECIPE after 40 ticks, buffer still $ENERGY FE, input $INPUT, addons $ADDONS, redstone $REDSTONE"
+
+echo "== AL: removing the signal releases the same machine, addon and bone =="
+# The differential: the same pulverizer, the same Control Unit Addon, the same
+# bone and the same buffer — only the signal goes. A gated machine would never
+# finish; one that was never gated would have finished during AK.
+ctl command "setblock 26 100 0 minecraft:air" >/dev/null
+ctl wait 120
+line=$(info 24 100 0)
+read_info "$line"
+expect ADDONS redstone
+expect REDSTONE enabled
+expect PROGRESS 0
+expect INPUT empty
+expect ENERGY "$((REDSTONE_PRIMED - REDSTONE_SPENT))"
+[ "$(count_in "$OUT0")" -eq "$((BEFORE_OUT + 6))" ] \
+    || fail "the released craft produced '$OUT0', expected 6 more bone meal: $line"
+echo "  signal removed: the same addon let the bone finish in $RECIPE_TICKS ticks for exactly $REDSTONE_SPENT FE, buffer $ENERGY, out0 $OUT0"
+ctl command "setblock 25 100 0 minecraft:air" >/dev/null
+ctl command "setblock 24 100 0 minecraft:air" >/dev/null
+
 echo "== W: every carried loot table rolls its own block =="
 # The carried `data/oritech/loot_table/blocks/*.json` are the jar's self-drop,
 # rewritten into 26.3's singular `condition`. Rolling each table directly asserts
@@ -1504,7 +1593,7 @@ for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" \
     oritech:machine_core_4 oritech:machine_core_5 oritech:machine_core_6 \
     oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON"; do
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
     ctl command "loot give @s loot oritech:blocks/${block#oritech:}" >/dev/null
 done
 ctl wait 8
@@ -1512,7 +1601,7 @@ INV=$(ctl inventory)
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" \
     oritech:machine_core_1 oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON"; do
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
     jq -e --arg item "$block" \
         '[.hotbar[], .main[] | select(.item == $item)] | length > 0' <<<"$INV" >/dev/null \
         || fail "loot table oritech:blocks/${block#oritech:} gave nothing: $(jq -c '{hotbar, main}' <<<"$INV")"
@@ -1527,4 +1616,4 @@ AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
 [ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
 echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all six default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, and every carried loot table rolled its own block"
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, and every carried loot table rolled its own block"

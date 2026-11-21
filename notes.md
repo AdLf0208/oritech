@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -17,9 +17,10 @@ Status: **ported-partial** — slice 1 (the fuel generator, the pulverizer, thei
 energy link, the recipe reader and the content carry), slice 2 (the Powered
 Furnace multiblock and the seven machine cores), slice 3 (the Industrial
 Chiller, the mod's first fluid machine), slice 4 (the Lava Generator, a
-fluid-burning generator) and slice 5 (the machine addon system: the six default
-addon blocks and the scan that applies them) are implemented and verified in
-game. The gap list below is the rest of the mod.
+fluid-burning generator), slice 5 (the machine addon system: the six default
+addon blocks and the scan that applies them) and slice 6 (the Control Unit
+Addon and the per-machine redstone gate) are implemented and verified in game.
+The gap list below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
 `precheck-mod.py oritech` offers (`DISPATCHABLE`, jar licence CC0-1.0, no
@@ -1043,7 +1044,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
 | `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
 | `command` | tested | `/oritech info` (every phase), `/oritech energy` (D, H, R, S, T), `/oritech fluid` (P, T, U) |
-| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (redstone, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5) |
+| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), and the Control Unit Addon's input gate is `tested` in slice 6 |
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
 mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
@@ -1396,7 +1397,7 @@ is `25000/25000`, so the capacity really moved.
 | `oritech:machine_ultimate_addon` | tested | AA places and reads it back (its speed/efficiency figures are unit-tested, `additive_addons_convert_the_jars_settings_back_to_multipliers`) |
 | `block_entity` | tested | the addon scan itself: the `addons` field of every readout in AA–AJ, and AC proves the field follows the block |
 | `loot_table` | tested | W rolls all six addon tables into the inventory; an unknown table gives nothing |
-| `*` | not ported | the special addon kinds — acceptor, fluid, inventory proxy, redstone, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter — belong to machine families this port does not carry |
+| `*` | not ported | the special addon kinds — acceptor, fluid, inventory proxy, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter — belong to machine families this port does not carry; the Control Unit Addon is `tested` in slice 6 |
 
 The burst counter's own drain is unit-tested
 (`a_burst_counter_charges_one_a_tick_drains_two_a_work_tick_and_throttles`) rather than asserted in
@@ -1408,3 +1409,209 @@ unrotated addon slots are recorded deviations, not defects; the config's additiv
 choice, and the port follows the shipped default.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Slice 6 — the Control Unit Addon (`oritech:machine_redstone_addon`) and the per-machine gate (0.2.8, 2026-11-22)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **9**,
+verbatim: "Redstone control and addons do nothing. The basic generator has no addon slots upstream; the
+pulverizer's one addon slot, the addon items, the speed and efficiency multipliers and the burst ticks
+are all fixed at 1 here (`BaseAddonData.DEFAULT_ADDON_DATA`)." Slice 5 shipped the six multiplier
+addons; the 0.2.7 report's `## Next slice` named the one that is left of the family, and it is the only
+addon whose effect is not a number: the **Control Unit Addon** and the machine-wide redstone gate
+behind it. Its `RedstoneMode` defaults to `INPUT_CONTROL` (`RedstoneAddonBlockEntity.activeMode`), so
+the shipped behaviour is implementable without a GUI — the four comparator modes are not.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the
+**machines** shape this slice needs (a block, a saved per-machine flag, one early return in a tick the
+port already has). No renderer, no GUI, no dimension, no energy network.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| the addon block | `BlockContent.MACHINE_REDSTONE_ADDON = new RedstoneAddonBlock(…, AddonSettings.getDefaultSettings()…)` (`init/BlockContent.java:261`) | `REDSTONE_ADDON`, `addon_settings` → the neutral entry |
+| the mode a fresh addon has | `RedstoneAddonBlockEntity.activeMode = RedstoneMode.INPUT_CONTROL` (`:46`) | the only mode, fixed (no control to pick another) |
+| the signal read | `RedstoneAddonBlock.neighborChanged` → `world.hasNeighborSignal(pos)` (`:63-72`) | `LevelRef::has_neighbor_signal` at the addon's own slot position, once a tick |
+| the push to the controller | `setRedstonePowered(isPowered)` → `controller.onRedstoneEvent(isPowered)` (`RedstoneAddonBlockEntity.java:134-142`) | `redstone_disables(connected, powered)` |
+| the flag | `MachineBlockEntity.onRedstoneEvent` → `disabledViaRedstone = isPowered` (`:508-510`) | the saved `oritech.redstone` boolean |
+| its saved key | `nbt.putBoolean("oritech.redstone", …)` / `getBoolean` (`:269,280`) | the same key, `Tag::Byte` (vanilla's boolean) |
+| the gate | `if (!isActive(state) \|\| disabledViaRedstone) return;` (`MachineBlockEntity.java:93`, `UpgradableGeneratorBlockEntity.java:67`) | the tick returns before the recipe/burn: no recipe resolved, no progress, no FE, no output push |
+| the burst still recharges | `UpgradableMachineBlockEntity.serverTick` calls `addBurstTicks()` *after* `super.serverTick` | `burst.recharge` still runs while gated |
+| the four comparator modes | `RedstoneAddonBlockEntity.tick` (`OUTPUT_POWER`/`SLOT`/`PROGRESS`/`ACTIVE`) | `blocked(no-addon-mode-control)` |
+
+The addon slot positions are the ones slice 5 already carries; the **basic generator has none**, which
+is why it cannot be gated (upstream's own guide page says the same), and the lava generator, furnace and
+chiller are gated by the same rule as the pulverizer.
+
+### What was added
+
+- `src/runtime.rs`: `REDSTONE_ADDON`, the seventh entry in `ADDON_BLOCKS`, its neutral
+  `addon_settings` arm, its `redstone` short name, and `redstone_disables(connected, powered)` — the
+  truth table the tick obeys. Two tests.
+- `src/support.rs`: `KEY_REDSTONE` (`oritech.redstone`), `read_bool`/`write_bool`, `redstone_state` /
+  `store_redstone`, `redstone_gate` (the scan's live signal plus the saved flag, and whether the flag
+  moved), the gate in `tick_pulverizer`, `tick_furnace`, `tick_cooler` and `tick_lava_generator`,
+  `AddonView.redstone` and its `redstone enabled|disabled` field, and the readout's use of the saved
+  flag. Two tests.
+- Content: `oritech:machine_redstone_addon` — the jar's block model, item model and
+  `machine_redstone_addon_off` texture carried byte for byte, an authored single-variant blockstate
+  (the jar's has 24 `face`/`facing`/`addon_used`/`powered` variants), the 26.3 item definition, the
+  block declaration, the loot table, the lang name `Control Unit Addon`, the machines tab and both tool
+  tags. `assets/` + `data/` are now **148 files** (`tools/carry_content.py --check` → `148 files, 0
+  differ`), 19 blocks.
+- `tools/parse_info.py`: the optional `REDSTONE` field on all four upgradable-machine lines.
+  `tools/e2e.sh`: the seventh addon in phase AA and in the loot phase W, phases **AK** and **AL**, the
+  control leg's id list and `SELFTEST_REDSTONE=1`. `tools/slice6-glue-counterfactual.py` is the glue's
+  fail-capability. `PLAN-slice6.md` is the slice's plan.
+
+### The gate's exact semantics (what upstream's `return` skips)
+
+Upstream's first line is `if (!isActive(state) || disabledViaRedstone) return;`, *before* `getRecipe()`
+and before `useEnergy()`. So a gated machine:
+
+- resolves no recipe (`currentRecipe` keeps whatever it had; the readout shows `recipe none` on a fresh
+  machine and the last recipe on a working one),
+- keeps its `progress` (it is not reset — the port does not call the pure `tick_with` at all while
+  gated),
+- spends no FE and produces nothing (a generator also queues no push, because `outputEnergy()` is
+  inside the same body),
+- still recharges its burst counter (`addBurstTicks` is the caller's line, after `super`).
+
+The port re-derives the flag from the live signal every tick instead of waiting for a `neighborChanged`
+push. That is the same scan design slice 5 recorded (deviation 2 there): a broken addon or a removed
+signal releases the machine on the next tick, where upstream would hold the last pushed value until the
+addon's next neighbour change.
+
+### Deviations (slice 6)
+
+1. **Only `INPUT_CONTROL` is implemented** — `blocked(no-addon-mode-control)`. The mode is a saved int
+   upstream, changed from the addon's screen; this port has no GUI, so `OUTPUT_POWER`, `OUTPUT_SLOT`,
+   `OUTPUT_PROGRESS` and `OUTPUT_ACTIVE` (and the comparator read the addon offers through
+   `has_analog_output`/`analog_output`) have no control to select them and would be inert data. The
+   addon block is not a signal source here.
+2. **The flag is re-derived every tick, not only on a neighbour change.** See above; the saved
+   `oritech.redstone` key makes a non-ticking machine's state readable, and the readout prints it.
+3. **The blockstate is one variant** (as the six addons in slice 5): the jar's `powered` state and the
+   `_on`/`_powered` models are not carried, because the port has no per-state model selection for it.
+4. **`ADDON_USED` is still not modelled**, so the addon block cannot show whether a machine claimed it —
+   the same recorded deviation as slice 5, now including the control unit.
+
+### Verification (0.2.8)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline`, `redstone_disables`' body `todo!()` | **92 passed, 1 failed** — `a_machine_is_disabled_only_by_a_connected_powered_redstone_addon` panicked `not yet implemented` (`slice6-test-red.log`); the neutral-settings test passed at once because its const/settings arm landed in the same edit |
+| glue fail-capability (counterfactual) | four targeted mutations of the flag/readout, then `cargo test --offline redstone` | **2 passed, 2 failed**, one per new glue test; the file restored byte-identically afterwards (`slice6-glue-red-counterfactual.log`, `tools/slice6-glue-counterfactual.py`) |
+| tests (green) | `cargo test --offline` | **95 passed**, 0 failed (`sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| `runtime.rs` slice-1 part | `head -333 src/runtime.rs \| sha256sum` before/after `cargo fmt` | `74ee2dbc…f3b4` both times |
+| package | `cargo horizon-mod build` twice, the artifact deleted between, the tree's `Cargo.lock` present | **162,377 B**, sha256 `2d5c36276718c5868c69d218ff5e0a5e9973462b36e9efe59ea108f31189f491`, `cmp` identical, **158 entries incl. `Cargo.lock`** (`slice6-build.log`, `slice6-build-second.log`, `slice6-sha256.txt`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.8 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `162377 bytes … unsigned`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (delivered file, sha `2d5c3627…`) |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (`sdk-fits.log`) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `148 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.8 ⇒ a real recompile) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows `redstone enabled redstone disabled` and `oritech:machine_redstone_addon` |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice6.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package the generator item is absent and the generator, furnace, core, chiller, lava generator, addon and **control unit** ids all stay `minecraft:air` (`e2e-slice6-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice6-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` (`e2e-slice6-selftest.log`) |
+| fail-capability, the gate | `SELFTEST_REDSTONE=1` (the powered buffer figure flipped) | **EXIT:1** — `ENERGY is '10000', expected '9968'` (`e2e-slice6-selftest-redstone.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 27 logs, 27 ok, 0 bad |
+| coverage | `check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+The delivered archive was rebuilt after `README.md` gained this slice's section: the archive the e2e ran
+against (`6b3d628f…`, 162,175 B) and the delivered one (`2d5c3627…`, 162,377 B) hold the **same 158
+entries** and differ only in the packed `README.md` — the game compiles `src/`, `assets/`, `data/` and
+`horizon-mod.toml` from the tree and never reads the archive, so the in-game evidence is the delivered
+code and content. Everything else below is the same run.
+
+The gate leg is fail-capable five ways: the **powered pause** (40 ticks with more than the whole craft
+primed must leave `progress 0`, `recipe none`, the bone in the slot and exactly 10,000 FE), the
+**release** (the same machine, addon and bone finish for exactly 3,200 FE once the signal goes, so a
+machine that was never gated would have finished during AK), the **`redstone enabled|disabled` field**
+(the saved flag, both ways), `SELFTEST_REDSTONE=1` (flips the powered figure and exits 1), and the
+`CONTROL=1` differential (the id is unknown without the package).
+
+### The `Cargo.lock` correction
+
+0.2.7 recorded "no packed `Cargo.lock`". `verify-sdk-package.py` now refuses that for a package that
+declares a **registry** dependency: this crate's `serde_json` needs the lock, the launcher's clean build
+reads it, and the gate says so ("the launcher's clean build needs it", reviewed on #1536/#1544). The
+port's own `AGENTS.md` already said "keep `Cargo.lock`". So the delivered package now packs the lock —
+generated from the launcher's own cargo home (`cargo generate-lockfile --offline` there, resolving
+`serde_json` 1.0.151, `syn` 3.0.6, `unicode-ident` 1.0.26, the versions the prebuilt game pins) — and
+the two builds are still `cmp`-identical.
+
+### In-game transcript (quoted from `e2e-slice6.log`)
+
+```
+  block(24,100,0) = oritech:pulverizer_block, block(25,100,0) = oritech:machine_redstone_addon, block(26,100,0) = minecraft:redstone_block
+  info(24,100,0): Pulverizer at [24, 100, 0]: 0/25000 FE, progress 0 recipe none, input empty, out0 empty, out1 empty, addons redstone redstone disabled, t=7649
+  info(24,100,0): Pulverizer at [24, 100, 0]: 0/25000 FE, progress 0 recipe none, input minecraft:bone x1, out0 empty, out1 empty, addons redstone redstone disabled, t=7709
+  info(24,100,0): Pulverizer at [24, 100, 0]: 10000/25000 FE, progress 0 recipe none, input minecraft:bone x1, out0 empty, out1 empty, addons redstone redstone disabled, t=7761
+  powered: progress 0 recipe none after 40 ticks, buffer still 10000 FE, input minecraft:bone x1, addons redstone, redstone disabled
+  info(24,100,0): Pulverizer at [24, 100, 0]: 6800/25000 FE, progress 0 recipe none, input empty, out0 minecraft:bone_meal x6, out1 empty, addons redstone redstone enabled, t=7891
+  signal removed: the same addon let the bone finish in 100 ticks for exactly 3200 FE, buffer 6800, out0 minecraft:bone_meal x6
+```
+
+The arithmetic: 40 ticks with a signal on the addon spend **0 FE** and advance **0** ticks; the same
+operation then costs the jar's `time: 100` × 32 FE = **3,200 FE** and 10,000 − 3,200 = **6,800** is
+what the readout holds.
+
+### What slice 6 covered, and by which phase
+
+| Family | Status | Evidence |
+|---|---|---|
+| `oritech:machine_redstone_addon` | tested | AA places and reads it back; AK the powered pause (progress 0, recipe none, buffer exactly 10,000, bone kept); AL the release (3,200 FE, 6 bone meal); the readout's `redstone disabled`/`enabled` |
+| `oritech:blocks/machine_redstone_addon` | tested | W rolls its carried loot table into the inventory |
+| `block_entity` | tested | the saved `oritech.redstone` flag: `the_redstone_flag_reads_back_from_the_compound_it_wrote`, and the in-game field both ways |
+| `*` | not ported | the control unit's four comparator modes (`blocked(no-addon-mode-control)`); the other special addon kinds belong to machine families this port does not carry |
+
+### Traps this slice hit (new to this port; the next one must know)
+
+1. **`setblock` of the *same* block keeps the block entity.** The first AK used (20,100,0), which phase
+   N had already used for its `#coal_ores` craft: `setblock 20 100 0 oritech:pulverizer_block` left the
+   old entity's `out0 minecraft:coal x2` in place, and the bone meal could not enter that slot, so the
+   "released" leg never crafted and the run failed on `INPUT is 'minecraft:bone x1', expected 'empty'`.
+   The phase now uses a position no other phase uses, clears the three positions to air first, and
+   asserts `OUT0 empty` right after placing.
+2. **A gate leg needs a position nobody else has touched**, and its buffer must be primed with more
+   than the whole operation: that is what makes "the buffer did not move" meaningful.
+
+`## Upstream defects fixed` (slice 6): none found. The four comparator modes are a coverable gap (no
+control to select them), not a broken behaviour; the re-derived flag is a recorded deviation.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Next slice
+
+The next family from the same gap list, with the surface it must bind to before it is dispatched:
+
+- **The assembler (`oritech:assembler_block`) is *not* ready.** Its 57 `oritech:assembler` recipes take
+  Oritech components (`motor`, `magnetic_coil`, plated alloys) and the mod's own fluids, none of which
+  this package declares; the same holds for the centrifuge (16 + 49 recipes), the foundry (29), the
+  refinery (22), the atomic forge (19) and the grinder (114). A slice that carries one of these would
+  ship dead recipes, which the campaign forbids — the honest next step there is the **ore-processing
+  chain** (dusts/clumps/gems + the `oritech:grinder`-fed items) as one family, and that is a bigger
+  slice than a gate.
+- **What is genuinely ready is the machines' remaining *controls*, and the cheapest is comparator
+  output.** The pin has `has_analog_output` (hook 274), `analog_output` (hook 8) and
+  `LevelRef::signal`/`best_neighbor_signal`, and this port already computes everything a comparator
+  could report: a pulverizer's `progress / time * 15`, a generator's buffer fraction, a slot's contents
+  and an "actively working" flag. `MachineBlockEntity.getComparatorProgress` /
+  `getComparatorEnergyAmount` / `getComparatorSlotAmount` / `getComparatorActiveState` are the four
+  figures, and upstream's *controller* answers 0 (`RedstoneControllable.getComparatorOutput`), i.e. the
+  comparator belongs on the **addon** block, which needs the mode control this slice recorded as a gap —
+  so the honest slice there is the addon's **mode field plus a control**, which needs a GUI (out of
+  tier for now).
+- **Recommended instead: the `oritech:*_block` machine recipes and the mod's component chain as a
+  content slice** (nickel/copper/platinum ingots, `motor`, `magnetic_coil`, the machine-plating chain)
+  — it is `data`-shaped, it is what makes every machine craftable without `/give` (gap 5), it needs no
+  new hook, and it is the prerequisite for the assembler family above. The in-game assertion is a
+  crafting-table craft of the generator item from the carried components, with the ingredients consumed,
+  plus the machine-plating alloy recipe.

@@ -303,8 +303,58 @@ filter) carry machine-family-specific behaviour this port does not ship.
 ### Not read / not ported (still gaps)
 
 The GUI/screens and GeckoLib models, the `ADDON_USED` blockstate and the addon block entities, the
-addon extender traversal (`layeredExtenders`), the special addon kinds, and the comparator/redstone
-surface of the redstone addon. `ports/_shared/sdk/0a875da/surface.json` does have `has_analog_output`
-(hook 274), `analog_output` (hook 8) and the redstone `signal` read (hook 60), so the redstone addon is
-implementable at this pin.
+addon extender traversal (`layeredExtenders`), the other special addon kinds, and (until slice 6) the
+comparator/redstone surface of the redstone addon. `ports/_shared/sdk/0a875da/surface.json` does have
+`has_analog_output` (hook 274), `analog_output` (hook 8) and the redstone `signal` read (hook 60); slice
+6 ports the input-control gate and reads the live signal with `LevelRef::has_neighbor_signal`, and the
+comparator half stays `blocked(no-addon-mode-control)` — see the slice-6 section below.
 
+
+## Slice 6: the Control Unit Addon (`oritech:machine_redstone_addon`)
+
+Read for behaviour only, at the same tag **`v1.2.13`** / commit
+`4069b6dd14b05dfe0c80126618739b64054630ea` (the repo is a local shallow clone in the
+session's scratch directory; the jar in `ports/_shared/licence-cache/` supplied the
+carried model, texture, lang and loot):
+
+- `common/src/main/java/rearth/oritech/block/entity/addons/RedstoneAddonBlockEntity.java`
+  (`RedstoneMode`, `activeMode`, `monitoredSlot`, `currentOutput`, `setRedstonePowered`,
+  `getComparatorOutput`, the two saved keys `slot`/`mode`)
+- `common/src/main/java/rearth/oritech/block/blocks/addons/RedstoneAddonBlock.java`
+  (`neighborChanged` → `world.hasNeighborSignal(pos)` → `setRedstonePowered`,
+  `updateShape`'s `POWERED` state, `isSignalSource`, `hasAnalogOutputSignal`,
+  `getAnalogOutputSignal`, `useWithoutItem` opening the screen)
+- `common/src/main/java/rearth/oritech/block/base/entity/MachineBlockEntity.java`
+  (`serverTick`'s `if (!isActive(state) || disabledViaRedstone) return;`,
+  `onRedstoneEvent`, `disabledViaRedstone`, `nbt.putBoolean("oritech.redstone", …)`,
+  the four `getComparator*` figures)
+- `common/src/main/java/rearth/oritech/block/base/entity/UpgradableMachineBlockEntity.java`
+  (`serverTick` → `super` then `addBurstTicks()`, `receivedRedstoneSignal`,
+  `currentRedstoneEffect`)
+- `common/src/main/java/rearth/oritech/block/base/entity/UpgradableGeneratorBlockEntity.java`
+  (the same early return, before `tryConsumeInput` **and** `outputEnergy`)
+- `common/src/main/java/rearth/oritech/init/BlockContent.java:261`
+  (`new RedstoneAddonBlock(…, AddonSettings.getDefaultSettings()…)`)
+
+### What the jar says
+
+| Fact | Evidence |
+|---|---|
+| a fresh addon is in input-control mode | `activeMode = RedstoneMode.INPUT_CONTROL` |
+| a neighbour change pushes the signal to the controller | `neighborChanged` → `setRedstonePowered(world.hasNeighborSignal(pos))` |
+| only input control reacts; the other four set `currentOutput` | `setRedstonePowered` returns early when `activeMode != INPUT_CONTROL` |
+| the machine saves the flag | `oritech.redstone`, a boolean |
+| a gated machine does nothing at all | the tick's first line, before the recipe lookup and `useEnergy` |
+| a gated generator pushes nothing | `outputEnergy()` is after the same return |
+| the burst still recharges | `UpgradableMachineBlockEntity.serverTick` calls `addBurstTicks()` after `super.serverTick` |
+| the addon answers a comparator itself | `getAnalogOutputSignal` → `ComparatorOutputProvider.getComparatorOutput`; a controller answers 0 |
+| the control unit has neutral settings | `AddonSettings.getDefaultSettings()` |
+
+### Ported, blocked, not ported
+
+- ported: the block, the neutral settings, `INPUT_CONTROL`'s gate, the saved flag, the readout field.
+- `blocked(no-addon-mode-control)`: `OUTPUT_POWER`, `OUTPUT_SLOT`, `OUTPUT_PROGRESS`,
+  `OUTPUT_ACTIVE` and the addon's comparator output — they need a control (a screen) to select a mode.
+- not ported: the addon's screen (`RedstoneAddonScreen`, `RedstoneAddonScreenHandler`), the two
+  network payloads (`RedstoneAddonClientUpdate`/`ServerUpdate`) and the `POWERED` blockstate's
+  `_on`/`_powered` models — no GUI and no per-state model in this port.

@@ -18,7 +18,8 @@
     "oritech:machine_processing_addon",
     "oritech:machine_capacitor_addon",
     "oritech:machine_burst_addon",
-    "oritech:machine_ultimate_addon"
+    "oritech:machine_ultimate_addon",
+    "oritech:machine_redstone_addon"
   ],
   "title": "itemgroup.oritech.machines"
 }

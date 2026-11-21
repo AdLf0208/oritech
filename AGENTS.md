@@ -28,7 +28,10 @@ Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `cor
 3 the Industrial Chiller's (`COOLER_*`, `FluidInput`, `tank_matches`, `cooler_output_fits`,
 `after_draining`, `CoolerRecipe`, `Cooler`, on the same `advance`) and slice 4 the Lava Generator's
 (`LAVA_*`, `EnergyTarget`, `lava_output_targets`, `lavagen_ticks`, `LavaGenerator`, `LavaGenRecipe`,
-`parse_fluid_input`). A declaration or readout test belongs next to its code in `src/support.rs`.
+`parse_fluid_input`), slice 5 the addon system's (`*_ADDON`, `ADDON_BLOCKS`, `AddonSettings`,
+`Addons`, `Burst`, `energy_usage`, `processing_ticks`, …) and slice 6 the Control Unit Addon's
+(`REDSTONE_ADDON`, its neutral settings, `redstone_disables`). A declaration or readout test belongs
+next to its code in `src/support.rs`.
 
 Validate, in this order, each inside a lease:
 

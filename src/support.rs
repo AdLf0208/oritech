@@ -24,10 +24,11 @@ use crate::runtime::{
     FluidInput, Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY,
     LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe,
     LavaGenerator, MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
-    PulverizerRecipe, RecipeResult, SmeltingRecipe, Step, Work, addon_names, addon_settings,
-    addon_slots, after_consuming, after_draining, can_output, clamp_energy, cooler_output_fits,
-    core_quality, efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output,
-    is_fuel, lava_output_targets, output_fits, processing_ticks, speed_multiplier, tank_matches,
+    PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, Work, addon_names,
+    addon_settings, addon_slots, after_consuming, after_draining, can_output, clamp_energy,
+    cooler_output_fits, core_quality, efficiency_multiplier, energy_usage, generator_burn_ticks,
+    generator_output, is_fuel, lava_output_targets, output_fits, processing_ticks,
+    redstone_disables, speed_multiplier, tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
@@ -88,6 +89,9 @@ const KEY_QUALITY: &str = "coreQuality";
 /// `UpgradableMachineBlockEntity.remainingBurstTicks`, a sync field upstream and
 /// a saved int here so a reload does not lose a charged burst.
 const KEY_BURST: &str = "oritech.addon_burst";
+/// `MachineBlockEntity.disabledViaRedstone`'s own key (`saveAdditional`'s
+/// `nbt.putBoolean("oritech.redstone", …)`); a vanilla boolean is a `Byte`.
+const KEY_REDSTONE: &str = "oritech.redstone";
 
 /// Rebuild the parsed recipe cache this often (ticks); a `/reload` lands within
 /// two seconds, and the pure parser cost is paid once.
@@ -119,6 +123,15 @@ fn read_string(nbt: &Compound, key: &str) -> String {
 
 fn write_string(nbt: &mut Compound, key: &str, value: &str) {
     nbt.insert(key.into(), Tag::String(value.into()));
+}
+
+/// A saved boolean: vanilla's `putBoolean` writes a `Byte` of 0 or 1.
+fn read_bool(nbt: &Compound, key: &str) -> bool {
+    matches!(nbt.get(&key.into()), Some(Tag::Byte(value)) if *value != 0)
+}
+
+fn write_bool(nbt: &mut Compound, key: &str, value: bool) {
+    nbt.insert(key.into(), Tag::Byte(if value { 1 } else { 0 }));
 }
 
 // ---------------------------------------------------------------------------
@@ -299,12 +312,14 @@ fn gathered(found: &[Option<&'static str>]) -> Addons {
     Addons::gather(&ids[..connected], ADDON_MODE)
 }
 
-/// What a readout prints about a machine's addons: their names, and the burst
-/// counter against the addons' own maximum.
+/// What a readout prints about a machine's addons: their names, the burst
+/// counter against the addons' own maximum, and — only while a Control Unit
+/// Addon is connected — the saved redstone gate.
 pub(crate) struct AddonView {
     pub(crate) names: String,
     pub(crate) burst: i32,
     pub(crate) burst_max: i32,
+    pub(crate) redstone: Option<bool>,
 }
 
 impl AddonView {
@@ -315,31 +330,49 @@ impl AddonView {
             names: addon_names(&[]),
             burst: 0,
             burst_max: 0,
+            redstone: None,
         }
     }
 
-    /// The view for one machine's connected blocks and saved counter.
-    pub(crate) fn of(found: &[Option<&'static str>], burst: Burst, max: i32) -> Self {
+    /// The view for one machine's connected blocks, saved counter and redstone
+    /// flag. The gate is printed only when a Control Unit Addon is connected: a
+    /// machine without one has no redstone state to report.
+    pub(crate) fn of(
+        found: &[Option<&'static str>],
+        burst: Burst,
+        max: i32,
+        disabled: bool,
+    ) -> Self {
         let ids = addon_ids(found);
         let connected = found.iter().flatten().count();
         Self {
             names: addon_names(&ids[..connected]),
             burst: burst.remaining,
             burst_max: max,
+            redstone: found.contains(&Some(REDSTONE_ADDON)).then_some(disabled),
         }
     }
 
     /// The field every machine line carries: `addons speed+capacitor`, plus
-    /// `burst <n>/<max>` only when a burst addon sets a maximum.
+    /// `burst <n>/<max>` only when a burst addon sets a maximum, plus
+    /// `redstone <enabled|disabled>` only while a control unit is connected.
     fn text(&self) -> String {
-        if self.burst_max > 0 {
+        let mut text = if self.burst_max > 0 {
             format!(
                 "addons {} burst {}/{}",
                 self.names, self.burst, self.burst_max
             )
         } else {
             format!("addons {}", self.names)
+        };
+        if let Some(disabled) = self.redstone {
+            text.push_str(if disabled {
+                " redstone disabled"
+            } else {
+                " redstone enabled"
+            });
         }
+        text
     }
 }
 
@@ -353,6 +386,51 @@ pub(crate) fn burst_state(nbt: &Compound) -> Burst {
 /// Write the burst counter back.
 fn store_burst(nbt: &mut Compound, burst: Burst) {
     write_int(nbt, KEY_BURST, burst.remaining);
+}
+
+/// `MachineBlockEntity.disabledViaRedstone`, as it was last saved.
+pub(crate) fn redstone_state(nbt: &Compound) -> bool {
+    read_bool(nbt, KEY_REDSTONE)
+}
+
+/// Write the redstone flag back, under upstream's own key.
+fn store_redstone(nbt: &mut Compound, disabled: bool) {
+    write_bool(nbt, KEY_REDSTONE, disabled);
+}
+
+/// The redstone gate of one tick. `RedstoneAddonBlock.neighborChanged` reads
+/// `world.hasNeighborSignal(pos)` at the addon's own position and pushes the
+/// answer to its controller; this port reads the same signal from the machine's
+/// addon slot every tick (the scan above), so a signal that goes away releases
+/// the machine at the next tick instead of waiting for another neighbour change.
+/// The flag is saved (upstream's `oritech.redstone`, and the readout prints it),
+/// so a machine that is not ticking still says what it was.
+///
+/// Answers whether the machine is disabled now, and whether the saved flag moved
+/// (a moved flag is a payload write even when the machine does nothing).
+fn redstone_gate(
+    host: &dyn Host,
+    level: LevelRef,
+    block: &str,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+) -> (bool, bool) {
+    let mut connected = false;
+    let mut powered = false;
+    for offset in addon_slots(block).iter().take(MAX_ADDON_SLOTS) {
+        let at = offset_pos(pos, *offset);
+        if block_at(host, level, at).as_deref() != Some(REDSTONE_ADDON) {
+            continue;
+        }
+        connected = true;
+        powered |= level.has_neighbor_signal(host, at);
+    }
+    let disabled = redstone_disables(connected, powered);
+    let moved = redstone_state(nbt) != disabled;
+    if moved {
+        store_redstone(nbt, disabled);
+    }
+    (disabled, moved)
 }
 
 // ---------------------------------------------------------------------------
@@ -697,53 +775,59 @@ pub(crate) fn tick_pulverizer(
     }
     let (addons, speed, cost, mut burst) =
         addon_tick(&*host, level, PULVERIZER, pos, nbt, PULVERIZER_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, PULVERIZER, pos, nbt);
     let capacity = addons.capacity(PULVERIZER_CAPACITY);
     let before = pulverizer_state(nbt, capacity);
     let before_burst = burst;
-    let input = items[INPUT_SLOT].clone();
-    let recipe = input.as_ref().and_then(|stack| find_recipe(&*host, stack));
-    let work = recipe.as_ref().and_then(|recipe| {
-        let outputs = pulverizer_outputs(&*host, items);
-        can_output(recipe, output_refs(&outputs), |item| {
-            max_stack(&*host, item)
-        })
-        .then_some(Work {
-            id: &recipe.id,
-            time: processing_ticks(recipe.time, speed),
-        })
-    });
     let mut state = before.clone();
-    let step = state.tick_with(work, cost);
-    let worked = matches!(step, Step::Working | Step::Finished);
-    if step == Step::Finished
-        && let Some(recipe) = recipe.as_ref()
-    {
-        finish_operation(&*host, items, recipe);
-        // `supportExtraChambersAuto`: the processing addon repeats the craft
-        // while another matching input and its output room remain.
-        for _ in 0..addons.chambers {
-            let Some(stack) = items[INPUT_SLOT].clone() else {
-                break;
-            };
-            let Some(next) = find_recipe(&*host, &stack) else {
-                break;
-            };
+    let mut step = Step::Idle;
+    // `MachineBlockEntity.serverTick`'s first line: `disabledViaRedstone` returns
+    // before the recipe lookup, so a gated machine resolves no recipe, spends
+    // nothing and keeps whatever progress it had.
+    if !disabled {
+        let input = items[INPUT_SLOT].clone();
+        let recipe = input.as_ref().and_then(|stack| find_recipe(&*host, stack));
+        let work = recipe.as_ref().and_then(|recipe| {
             let outputs = pulverizer_outputs(&*host, items);
-            if next.id != recipe.id
-                || !can_output(&next, output_refs(&outputs), |item| max_stack(&*host, item))
-            {
-                break;
+            can_output(recipe, output_refs(&outputs), |item| {
+                max_stack(&*host, item)
+            })
+            .then_some(Work {
+                id: &recipe.id,
+                time: processing_ticks(recipe.time, speed),
+            })
+        });
+        step = state.tick_with(work, cost);
+        if step == Step::Finished
+            && let Some(recipe) = recipe.as_ref()
+        {
+            finish_operation(&*host, items, recipe);
+            // `supportExtraChambersAuto`: the processing addon repeats the craft
+            // while another matching input and its output room remain.
+            for _ in 0..addons.chambers {
+                let Some(stack) = items[INPUT_SLOT].clone() else {
+                    break;
+                };
+                let Some(next) = find_recipe(&*host, &stack) else {
+                    break;
+                };
+                let outputs = pulverizer_outputs(&*host, items);
+                if next.id != recipe.id
+                    || !can_output(&next, output_refs(&outputs), |item| max_stack(&*host, item))
+                {
+                    break;
+                }
+                finish_operation(&*host, items, &next);
             }
-            finish_operation(&*host, items, &next);
         }
     }
-    if worked {
+    if matches!(step, Step::Working | Step::Finished) {
         burst.spend(addons.burst_ticks);
     }
     burst.recharge(addons.burst_ticks);
     store_pulverizer(nbt, &state);
     store_burst(nbt, burst);
-    resized || step != Step::Idle || state != before || burst != before_burst
+    resized || flag_moved || step != Step::Idle || state != before || burst != before_burst
 }
 
 /// The pulverizer's two output slots, as `can_output` reads them.
@@ -839,6 +923,7 @@ pub(crate) fn tick_furnace(
     // `calculateEnergyUsage` halves the result of the same formula.
     let (addons, speed, cost, mut burst) =
         addon_tick(&*host, level, FURNACE, pos, nbt, FURNACE_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, FURNACE, pos, nbt);
     let capacity = addons.capacity(FURNACE_CAPACITY);
     let before = furnace_state(nbt, capacity);
     let before_burst = burst;
@@ -848,7 +933,9 @@ pub(crate) fn tick_furnace(
     // upstream's `onCoreBroken` clears the assembly, not the operation.
     recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
-    if saved.assembly.assembled {
+    // `MachineBlockEntity.serverTick`: a redstone-disabled machine returns before
+    // its recipe, so the core's assembly is the other gate on the same tick.
+    if saved.assembly.assembled && !disabled {
         let input = items[INPUT_SLOT].clone();
         let recipe = input
             .as_ref()
@@ -904,7 +991,7 @@ pub(crate) fn tick_furnace(
     burst.recharge(addons.burst_ticks);
     store_furnace(nbt, &saved);
     store_burst(nbt, burst);
-    resized || step != Step::Idle || saved != before || burst != before_burst
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
 }
 
 /// `ItemStack.getCount` as an `i32`.
@@ -944,13 +1031,14 @@ pub(crate) fn tick_cooler(
     }
     let (addons, speed, cost, mut burst) =
         addon_tick(&*host, level, COOLER, pos, nbt, COOLER_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, COOLER, pos, nbt);
     let capacity = addons.capacity(COOLER_CAPACITY);
     let before = cooler_state(nbt, capacity);
     let before_burst = burst;
     let mut saved = before.clone();
     recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
-    if saved.assembly.assembled {
+    if saved.assembly.assembled && !disabled {
         // `getRecipe()` picks a recipe whose fluid the tank holds
         // (`recipeInputMatchesTank`); `canOutputRecipe` is the 64 rule.
         let recipe = saved
@@ -1005,7 +1093,7 @@ pub(crate) fn tick_cooler(
     burst.recharge(addons.burst_ticks);
     store_cooler(nbt, &saved);
     store_burst(nbt, burst);
-    resized || step != Step::Idle || saved != before || burst != before_burst
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
 }
 
 /// `CoolerBlockEntity.processCraftInstance`: take the recipe's millibuckets out
@@ -1041,6 +1129,7 @@ pub(crate) fn tick_lava_generator(
 ) -> bool {
     let found = connected_addons(&*host, level, LAVA, pos);
     let addons = gathered(&found);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, LAVA, pos, nbt);
     let mut burst = burst_state(nbt).clamped(addons.burst_ticks);
     let before_burst = burst;
     let bonus = burst.bonus();
@@ -1052,7 +1141,7 @@ pub(crate) fn tick_lava_generator(
     let mut saved = before.clone();
     recheck_core(&*host, level, pos, &mut saved.assembly);
     let mut produced = 0;
-    if saved.assembly.assembled {
+    if saved.assembly.assembled && !disabled {
         // `UpgradableGeneratorBlockEntity.serverTick`: `tryConsumeInput` runs
         // only while no burn is left and the buffer has room for one tick; the
         // recipe comes from the tank and its fluid leaves it at load time.
@@ -1086,7 +1175,7 @@ pub(crate) fn tick_lava_generator(
     burst.recharge(addons.burst_ticks);
     store_lava(nbt, &saved);
     store_burst(nbt, burst);
-    produced > 0 || saved != before || burst != before_burst
+    produced > 0 || flag_moved || saved != before || burst != before_burst
 }
 
 /// `FluidMultiblockGeneratorBlockEntity.consumeFluidRecipeInput`: the recipe's
@@ -1815,7 +1904,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 &state,
                 slots,
                 capacity,
-                &AddonView::of(&found, burst, addons.burst_ticks),
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
                 time,
             ))
         }
@@ -1843,7 +1932,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
                 capacity,
-                &AddonView::of(&found, burst, addons.burst_ticks),
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
                 time,
             ))
         }
@@ -1867,7 +1956,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
                 capacity,
-                &AddonView::of(&found, burst, addons.burst_ticks),
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
                 time,
             ))
         }
@@ -1889,7 +1978,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                     core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
                 },
                 capacity,
-                &AddonView::of(&found, burst, addons.burst_ticks),
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
                 time,
             ))
         }
@@ -3003,6 +3092,7 @@ mod tests {
             names: "speed+capacitor".to_owned(),
             burst: 0,
             burst_max: 0,
+            redstone: None,
         };
         assert_eq!(
             pulverizer_line(
@@ -3020,6 +3110,7 @@ mod tests {
             names: "burst".to_owned(),
             burst: 227,
             burst_max: 240,
+            redstone: None,
         };
         assert_eq!(
             pulverizer_line(
@@ -3032,6 +3123,84 @@ mod tests {
             ),
             "Pulverizer at [4, 100, 0]: 100/25000 FE, progress 0 recipe none, input empty, \
              out0 empty, out1 empty, addons burst burst 227/240, t=9"
+        );
+    }
+
+    // -- slice 6: the Control Unit Addon --------------------------------------
+
+    #[test]
+    fn the_redstone_flag_reads_back_from_the_compound_it_wrote() {
+        // `MachineBlockEntity.saveAdditional`'s `nbt.putBoolean("oritech.redstone", …)`,
+        // which a vanilla compound writes as a byte.
+        let mut nbt = Compound::new();
+        assert!(!redstone_state(&nbt), "a fresh machine is not disabled");
+        store_redstone(&mut nbt, true);
+        assert!(redstone_state(&nbt));
+        assert_eq!(
+            nbt.get(&KEY_REDSTONE.into()),
+            Some(&Tag::Byte(1)),
+            "upstream's boolean is a byte"
+        );
+        store_redstone(&mut nbt, false);
+        assert!(!redstone_state(&nbt));
+        assert_eq!(nbt.get(&KEY_REDSTONE.into()), Some(&Tag::Byte(0)));
+    }
+
+    #[test]
+    fn the_readout_names_the_redstone_addon_and_its_gate() {
+        let state = Pulverizer {
+            energy: 10_000,
+            progress: 0,
+            recipe: String::new(),
+        };
+        let slots = [Some(("minecraft:bone", 1)), None, None];
+        let gated = AddonView {
+            names: "redstone".to_owned(),
+            burst: 0,
+            burst_max: 0,
+            redstone: Some(true),
+        };
+        assert_eq!(
+            pulverizer_line([20, 100, 0], &state, slots, PULVERIZER_CAPACITY, &gated, 7),
+            "Pulverizer at [20, 100, 0]: 10000/25000 FE, progress 0 recipe none, \
+             input minecraft:bone x1, out0 empty, out1 empty, addons redstone redstone disabled, t=7"
+        );
+        let released = AddonView {
+            names: "redstone".to_owned(),
+            burst: 0,
+            burst_max: 0,
+            redstone: Some(false),
+        };
+        assert_eq!(
+            pulverizer_line(
+                [20, 100, 0],
+                &state,
+                [None, None, None],
+                PULVERIZER_CAPACITY,
+                &released,
+                7
+            ),
+            "Pulverizer at [20, 100, 0]: 10000/25000 FE, progress 0 recipe none, \
+             input empty, out0 empty, out1 empty, addons redstone redstone enabled, t=7"
+        );
+        // No control unit, no redstone field: the line every earlier phase reads.
+        let plain = AddonView {
+            names: "speed".to_owned(),
+            burst: 0,
+            burst_max: 0,
+            redstone: None,
+        };
+        assert_eq!(
+            pulverizer_line(
+                [20, 100, 0],
+                &state,
+                [None, None, None],
+                PULVERIZER_CAPACITY,
+                &plain,
+                7
+            ),
+            "Pulverizer at [20, 100, 0]: 10000/25000 FE, progress 0 recipe none, \
+             input empty, out0 empty, out1 empty, addons speed, t=7"
         );
     }
 }

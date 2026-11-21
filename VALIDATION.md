@@ -5,6 +5,35 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.8 — slice 6, the Control Unit Addon and the redstone gate (pin `0a875da`, 2026-11-22)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline'` (`redstone_disables` body `todo!()`) | **92 passed, 1 failed** — the gate rule is red first (`panicked … not yet implemented`); the neutral-settings test passed at once (its arm landed in the same edit) | `slice6-test-red.log` |
+| 2 | four targeted mutations of the flag/readout, then `cargo test --offline redstone` (`tools/slice6-glue-counterfactual.py`) | **2 passed, 2 failed** — one per new glue test; the file restored byte-identically | `slice6-glue-red-counterfactual.log` |
+| 3 | same, implemented | **95 passed, 0 failed** | `sdk-test.log` |
+| 4 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `sdk-clippy.log` |
+| 5 | `cargo generate-lockfile --offline` with the launcher's cargo home, then `cd ports/oritech && cargo horizon-mod build` twice, the artifact deleted between | **162,377 B**, sha256 `2d5c36276718c5868c69d218ff5e0a5e9973462b36e9efe59ea108f31189f491`, `cmp` identical, 158 entries **incl. `Cargo.lock`** (rebuilt after the `README.md` edit; the e2e ran the same entries, see `notes.md`) | `slice6-build.log`, `slice6-build-second.log`, `slice6-sha256.txt` |
+| 6 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.8 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` | `sdk-check.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 (delivered file, sha `6b3d628f…`) | `sdk-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `sdk-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 10 | `python3 tools/carry_content.py --check` | `148 files, 0 differ` | stdout |
+| 11 | `ports/tools/launcher-game.sh build oritech` (manifest bumped to 0.2.8 so it recompiles) | `Compiling the mods against the prebuilt game`; `strings liboritech.so` shows `redstone enabled redstone disabled` and `oritech:machine_redstone_addon` | — |
+| 12 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (AK the powered pause, AL the release) | `e2e-slice6.log` |
+| 13 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build's generator, furnace, core, chiller, lava generator, addon and **control unit** ids stay air | `e2e-slice6-differential.log` |
+| 14 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice6-control.log` |
+| 15 | same with `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` | `e2e-slice6-selftest.log` |
+| 16 | same with `SELFTEST_REDSTONE=1` (the powered buffer figure flipped) | **EXIT:1** — `ENERGY is '10000', expected '9968'` | `e2e-slice6-selftest-redstone.log` |
+| 17 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 27 logs, 27 ok, 0 bad | stdout |
+| 18 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 19 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game assertions and what each can fail on are listed in `notes.md` → *Slice 6* → *Verification*
+and *In-game transcript*. The delivered package now packs `Cargo.lock` (this crate declares the registry
+dependency `serde_json`; `verify-sdk-package.py` requires it — see *The `Cargo.lock` correction* in
+`notes.md`).
+
 ## 0.2.7 — slice 5, the machine addon system (pin `0a875da`, 2026-11-21)
 
 | # | Command (from the campaign root) | Verdict | Log |
