@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -18,9 +18,10 @@ energy link, the recipe reader and the content carry), slice 2 (the Powered
 Furnace multiblock and the seven machine cores), slice 3 (the Industrial
 Chiller, the mod's first fluid machine), slice 4 (the Lava Generator, a
 fluid-burning generator), slice 5 (the machine addon system: the six default
-addon blocks and the scan that applies them) and slice 6 (the Control Unit
-Addon and the per-machine redstone gate) are implemented and verified in game.
-The gap list below is the rest of the mod.
+addon blocks and the scan that applies them), slice 6 (the Control Unit
+Addon and the per-machine redstone gate) and slice 7 (the material and
+component chain and the machines' own crafting recipes) are implemented and
+verified in game. The gap list below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
 `precheck-mod.py oritech` offers (`DISPATCHABLE`, jar licence CC0-1.0, no
@@ -1588,30 +1589,324 @@ control to select them), not a broken behaviour; the re-derived flag is a record
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
+## Slice 7 — the material and component chain, and the machines' crafting recipes (0.2.9, 2026-11-22)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **5**,
+verbatim: "**The machines have no crafting recipes.** They need Oritech components (`motor`,
+`magnetic_coil`, nickel/copper tags) that are not in this slice; carrying the recipes would ship
+uncraftable ones. Gained with `/give` here." `CONTENT.md` → *Deviations* item 6 recorded the same, and
+the 0.2.8 report's `## Next slice` named it. It is the **prerequisite** for the assembler (whose 57
+recipes take those components) and the last thing that stood between the five machines and a player
+who does not use `/give`.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the shape
+this slice needs — **data only**: seven item components, three plating blocks, the conventional tags
+their recipes name, and the jar's own crafting and smelting files. No hook, no tick, no new machine,
+no renderer, no GUI.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| steel | `crafting/alloy/steel`: 2 iron + 2 coal → 1 steel ingot | carried |
+| electrum | `crafting/alloy/electrum`: 2 gold + 2 redstone → 1 electrum ingot | carried |
+| raw silicon | `crafting/alloy/rawsilicon`: 2 quartz + 2 sand → 3 raw silicon | carried |
+| silicon | `silicon_from_smelting_raw_silicon`: `cookingtime: 60`, 0.5 xp | carried (30 ticks in the powered furnace at its 0.5 speed) |
+| magnetic coil | `crafting/magnet`: 3 nickel over 3 steel over 3 nickel → **4** coils | carried |
+| motor | `motor/motorcraft`: 1 nickel, 4 steel, 2 coils → 1 motor | carried |
+| plating blocks | `crafting/{plating,iron,nickel}`: 4 steel + 4 stone + 4 copper/iron/nickel → **2** | carried |
+| the five machines | `crafting/{basicgen,pulverizer,electricfurnace,cooler,lavagen}` | carried |
+| machine cores | `crafting/{core1,core2,core3alt}` | carried (`core3` needs `c:carbon_fibre`, the centrifuge's product, so its alt — nickel + redstone — is the one carried) |
+| the Control Unit Addon | `crafting/addon/redstone`: 5 redstone + 2 repeaters + a comparator + any plating | carried |
+| the `c:` tags | the jar ships `c:ingots/{steel,nickel,electrum,…}`, `c:silicon`, `oritech:plating` | carried as declarations (see the tag note below) |
+
+### The recipe table — what was taken, what was left
+
+The rule, stated once and applied below: a recipe is carried only when **its result and every
+ingredient resolve** — a `minecraft:` id the engine has, an item this package declares above, or a tag
+this package ships with resolvable values — its type is one the engine loads
+(`minecraft:crafting_shaped`, `crafting_shapeless`, `smelting`), and none of its ingredients is an
+alternative list (26.3's loader drops such a file). Every carried recipe is crafted in game (phase AM
+/ AN); `src/support.rs`'s three tests walk the files and would fail on a broken one.
+`tools/slice7-inventory.py` enumerates every recipe in the jar with its result and ingredients. Running
+the closure rule over the jar's **965 recipe files** leaves **exactly 20**: the 17 shaped files below,
+`silicon_from_smelting_raw_silicon`, and `core2alt` + `pulverizeralt`, which are kept out as duplicates
+of a carried recipe. **No other recipe in the jar has both its result and every ingredient
+resolvable** — that is the measurement behind the "left" rows.
+
+| Recipe file | Verdict | Why |
+|---|---|---|
+| `crafting/alloy/{steel,electrum,rawsilicon}` | **taken** | vanilla items + `c:` tags this package declares |
+| `crafting/magnet` | **taken** | nickel + steel |
+| `motor/motorcraft` | **taken** | nickel + steel + the coil (it is a shaped recipe in the `motor/` folder) |
+| `crafting/{plating,iron,nickel}` | **taken** | steel + stone + copper/iron/nickel |
+| `crafting/basicgen` | **taken** | nickel, copper, the coil, `#c:player_workstations/furnaces` |
+| `crafting/pulverizer` | **taken** | iron, nickel, the motor, `#c:storage_blocks/copper` |
+| `crafting/electricfurnace` | **taken** | copper, silicon, electrum, the coil, the furnace tag |
+| `crafting/cooler` | **taken** | iron, the motor, ice, a cauldron |
+| `crafting/lavagen` | **taken** | electrum, the coil, `#oritech:plating`, a basic generator |
+| `crafting/{core1,core2}` | **taken** | planks + a crafting table; copper + lapis |
+| `crafting/core3alt` | **taken** | nickel + redstone (`core3` itself needs `c:carbon_fibre`, which only the centrifuge makes) |
+| `crafting/addon/redstone` | **taken** | plating + redstone + a comparator + repeaters |
+| `silicon_from_smelting_raw_silicon` | **taken** | raw silicon → silicon; crafted in the powered furnace, phase AN |
+| `crafting/core2alt` | left | same result as `core2`, whose ingredients also resolve; the canonical file is carried (no second recipe for one item) |
+| `crafting/pulverizeralt` | left | same reason (`pulverizer` is carried; the alt is for packs whose copper block tag differs) |
+| `crafting/carbon`, `crafting/metalgirder` | left | need `oritech:reinforced_carbon_sheet` / `#c:carbon_fibre` — the **centrifuge** family, not carried |
+| `crafting/addon/{speed,eff,capacitor,ultimate,processing,burst}` | left | need `c:plates/plastic` (polymer resin → the refinery/oil chain), `oritech:energite_ingot` (mixing), `flux_gate`, `overcharged_crystal`, `super_ai_chip` or carbon fibre |
+| `crafting/{core4,core5,core6,core7}` | left | need `enderic_compound` (centrifuge/particle), `advanced_computing_engine`, `adamant_ingot`, `dubios_container`, `superconductor`, `prometheum_ingot` |
+| `crafting/alloy/adamant` | left | its recipe resolves (nickel + diamond) but **no carried consumer** exists: adamant's only users are the chainsaw, the dubios container and the heisenberg compensator, none of which this port ships — an inert item |
+| the other 170 `crafting/*` files | left | each names at least one item no carried recipe declares — the reactor, the accelerator, the augment stations, the pipes/ducts, the jetpack and the exo armour, the paints, the drills, the wrench and the building/door/light blocks. The closure pass above is the check: none of them has both its result and every ingredient resolvable |
+| `assembler/*` (60), `centrifuge/*` (93), `foundry/*` (39), `refinery/*` (32), `atomicforge/*` (23), `grinder/*` (143), `particle/*` (12), `deepdrill/*` (12), `laser/*`, `mixing/*`, `crushing/*`, `splashing/*`, `reactorgen/*`, `steamgen/*`, `fuelgen/*`, `biogen/*` | left | they are *machine* recipes of machines this port has not ported; `oritech:*_block` machine recipes are the assembler slice's business |
+| every `compat/*` | left | names another mod's items (`create:`, `mekanism:`, `ae2:`, `immersiveengineering:`, `pneumaticcraft:`, `powah:`, `productivemetalworks:`, …) |
+| `blasting/*`, `nickel_ingot_from_*`, `platinum_ingot_from_*`, `plastic_sheet_from_*`, the blocks' storage recipes | left | their raw material (raw nickel/platinum, polymer resin) comes from an **ore or a machine** this package cannot produce — see *The ore gap* |
+| `worldgen/configured_feature/ore_{nickel,platinum}` | **not carried** | the pin does not register a content package's configured features — see *The ore gap* |
+
+### The ore gap (measured, not skipped)
+
+`oritech:nickel_ingot` has exactly one survival source in the jar: `oritech:nickel_ore` (or its
+deepslate variant) → `oritech:raw_nickel` → smelting. Every other producer of nickel in the jar is
+circular (dust/gem from nickel), belongs to a machine this port does not carry (the grinder's
+`ore/iron` byproduct, the deep drill's nodes), or is another mod's (`compat/`). The ore is **worldgen**:
+`data/oritech/worldgen/configured_feature/ore_nickel.json` is a vanilla `minecraft:ore` feature and its
+placed feature/biome modifier are data, but at this pin a **content package's configured features never
+reach the feature registry**, so they generate nothing:
+
+```
+> place feature silentgems:overworld/ruby_ore 40 20 0
+Can't find element 'silentgems:overworld/ruby_ore' in registry 'minecraft:worldgen/feature'
+[World initialization/WARN]: Horizon: 11 placed features cannot run and will be skipped
+```
+
+That is `blocked(configured-feature-not-registered)`, measured by `silentgems`
+([`../_shared/evidence/silentgems-e2e/worldgen-gap.md`](../_shared/evidence/silentgems-e2e/worldgen-gap.md)),
+not a property of this port. Shipping the ore files now would ship data that cannot run, which the
+campaign forbids; the slice therefore stops at the ingot and records the ore as the next slice's
+subject. **What a player gets today:** everything from the components down — steel, electrum, silicon,
+the coil, the motor, the plating and every one of the five machines — craftable at a table, with the
+nickel and platinum ingots the one `/give` left (and the creative components tab).
+
+### What was added
+
+- **Items (seven)**: `oritech:{steel_ingot,nickel_ingot,electrum_ingot,raw_silicon,silicon,magnetic_coil,motor}`
+  — the jar's item model and texture carried byte for byte, 26.3's item definition, a
+  `horizon/item` declaration copying `minecraft:iron_ingot`, and the jar's lang name.
+- **Blocks (three)**: `oritech:{machine_plating_block,iron_plating_block,nickel_plating_block}` — the
+  jar's model and its `particle` texture carried, an authored one-variant blockstate (the jar's also
+  carries `athena:ctm` keys this pin has no loader for), the item definition, the block declaration
+  (the same `minecraft:iron_block` copy the machines use, but **opaque**: only the machines copy
+  `noOcclusion`), the self-drop loot table, the pickaxe/stone-tool tags and the machines creative tab.
+- **Tags (14)**: `c:ingots/{steel,nickel,electrum,iron,copper,gold}`, `c:dusts/{redstone,quartz}`,
+  `c:gems/{diamond,lapis}`, `c:silicon`, `c:storage_blocks/copper`,
+  `c:player_workstations/furnaces` and `oritech:plating`. 26.3 ships **no `c:` namespace** (measured in
+  slice 1 for `#c:cobblestones`), so every conventional name a carried recipe uses is declared here —
+  the file for each is the conventional tag's own content (`c:player_workstations/furnaces` is the
+  furnace/blast furnace/smoker set, `c:gems/diamond` is `minecraft:diamond`).
+- **Recipes (18)**: the seventeen shaped/shapeless files and the one smelting file in the table above,
+  each the jar's file with **only** the ingredient rewrite (`{"item": …}` / `{"tag": …}` →
+  `"minecraft:…"` / `"#minecraft:…"`, the slice-2 repair applied to the shaped `key`, the shapeless
+  `ingredients` and the smelting `ingredient`); a **list** ingredient is refused by the tool instead of
+  shipped.
+- **Tests (three, in `src/support.rs`)**: `the_carried_recipes_are_the_bare_form_the_engine_loads`,
+  `every_carried_recipe_resolves_in_this_package` (every id declared, every tag shipped and non-empty),
+  `the_generator_recipe_costs_the_components_this_slice_ships`. They walk `data/` at test time, so a
+  renamed tag or an object-form ingredient fails `cargo test` before any game run.
+- **`tools/craft_check.py`**: the seventeen crafts, the generator differential and `SELFTEST_CRAFT`.
+  **`tools/e2e.sh`**: phases AM/AN, the new ids in the `CONTROL=1` list, `--offscreen` (see the traps).
+  `PLAN-slice7.md` is the slice's plan.
+
+### Deviations (slice 7)
+
+1. **The `c:` tags are authored, not copied.** The jar's own `c:ingots/steel.json` lists
+   `oritech:steel_ingot` **twice** and adds `oritech:biosteel_ingot`, which this package does not carry;
+   the port declares the one item it ships, and the vanilla-only names are the conventional sets
+   NeoForge generates for vanilla items. `oritech:plating` likewise carries three of the jar's four
+   members (carbon plating needs the centrifuge's carbon fibre).
+2. **`core3alt` stands in for `core3`.** `core3` is `8 x #c:carbon_fibre + redstone`; carbon fibre is
+   the centrifuge's product, so its alt (nickel + redstone) is the recipe carried. Both exist upstream.
+3. **The plating blocks copy `Blocks.IRON_BLOCK` opaquely.** The machines copy it with `noOcclusion`
+   (upstream's `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()`); the plating blocks are solid
+   cubes, so their declaration keeps the copy's occlusion and drops nothing else.
+4. **The plating blockstate is authored.** The jar's has an `athena:ctm` loader and five CTM textures;
+   the pin renders the single `particle` texture on a `cube_all`, which is the same look the machines
+   already use without GeckoLib.
+5. **Nickel and platinum have no survival source at this pin** — `blocked(configured-feature-not-registered)`,
+   with the ore worldgen as the next slice (above).
+6. **No `c:plates/plastic`, so six of the seven addon recipes stay uncrafted** (the refinery/oil chain
+   is a later family); the Control Unit Addon's is carried because all four of its ingredients resolve.
+7. **No `minecraft:smelting` twin for the dust/gem ingots** — their ingredients are the ore chain
+   (above). The one cooking recipe carried is raw silicon → silicon.
+
+### Verification (0.2.9)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| red | `cargo test --offline carried_recipe`, the slice's recipes absent | **0 passed, 2 failed** — `the slice carries seventeen crafting recipes and one smelting recipe: 0 found ([])` and `no carried recipe to resolve` (`slice7-test-red.log`) |
+| tests (green) | `cargo test --offline` | **98 passed**, 0 failed (`slice7-test-green.log` = `sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`slice7-clippy.log` = `sdk-clippy.log`) |
+| package | `cargo horizon-mod build` twice, the artifact deleted between | **195,181 B**, sha256 `8935cae7bb3f34c4564bbe83fc81869fcb33ca97a3205b6aff8a014eb4133276`, `cmp` identical, **240 entries incl. `Cargo.lock`** (`slice7-build.log`, `slice7-build-second.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.9 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `195181 bytes … unsigned`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `230 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.9 ⇒ a real recompile) | `Compiling the mods against the prebuilt game`; `native-0a875da-e42664391ac2`; the exported `horizon-native-mods/oritech/horizon-mod.toml` reads `version = "0.2.9"` and carries `data/oritech/recipe/crafting/` |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice7.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package the generator item is absent, no motor is given, and the generator, furnace, core, chiller, lava generator, addon, control unit **and plating** ids all stay `minecraft:air` (`e2e-slice7-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice7-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `91 ticks spent 2912 FE, expected 2944` (`e2e-slice7-selftest.log`) |
+| fail-capability, the crafts | `SELFTEST_CRAFT=1` (the coil's expected count flipped) | **EXIT:1** — `magnetic coil: 6 nickel + 3 steel: expected 5 oritech:magnetic_coil, got oritech:magnetic_coil x4` (`e2e-slice7-selftest-craft.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 32 logs, 32 ok, 0 bad |
+| coverage | `check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+The craft leg is fail-capable five ways: every case asserts the **result id and count** and then that
+**each ingredient's inventory count fell by exactly what the recipe used** (a recipe that consumed
+nothing fails the second half); the **generator differential** fills the same grid with four nickel and
+a stick and requires an empty result; `SELFTEST_CRAFT=1` inverts the coil's count; the `CONTROL=1`
+differential proves the ids and the items are this package's; and the whole-scenario control leg fails
+at the first package id.
+
+### In-game transcript (quoted from `e2e-slice7.log`)
+
+```
+steel ingot: 2 iron + 2 coal -> {"count": 1, "item": "oritech:steel_ingot", "slot": 200}
+electrum ingot: 2 gold + 2 redstone -> {"count": 1, "item": "oritech:electrum_ingot", "slot": 200}
+raw silicon: 2 quartz + 2 sand -> {"count": 3, "item": "oritech:raw_silicon", "slot": 200}
+magnetic coil: 6 nickel + 3 steel -> {"count": 4, "item": "oritech:magnetic_coil", "slot": 200}
+motor: 1 nickel + 4 steel + 2 coils -> {"count": 1, "item": "oritech:motor", "slot": 200}
+copper plating: 4 steel + 4 stone + 1 copper -> {"count": 2, "item": "oritech:machine_plating_block", "slot": 200}
+iron plating: 4 steel + 4 stone + 1 iron -> {"count": 2, "item": "oritech:iron_plating_block", "slot": 200}
+nickel plating: 4 steel + 4 stone + 1 nickel -> {"count": 2, "item": "oritech:nickel_plating_block", "slot": 200}
+the Basic Generator: 5 nickel + 2 coils + 1 copper + 1 furnace -> {"count": 1, "item": "oritech:basic_generator_block", "slot": 200}
+the Pulverizer: 5 iron + 2 motors + 1 nickel + 1 copper block -> {"count": 1, "item": "oritech:pulverizer_block", "slot": 200}
+the Powered Furnace: 3 copper + 2 silicon + 2 coils + 1 electrum -> {"count": 1, "item": "oritech:powered_furnace_block", "slot": 200}
+the Industrial Chiller: 5 iron + 1 motor + 2 ice + 1 cauldron -> {"count": 1, "item": "oritech:cooler_block", "slot": 200}
+the Lava Generator: 5 electrum + 1 coil + 2 plating + 1 generator -> {"count": 1, "item": "oritech:lava_generator_block", "slot": 200}
+machine core 1: 8 planks + 1 crafting table -> {"count": 1, "item": "oritech:machine_core_1", "slot": 200}
+machine core 2: 8 copper + 1 lapis -> {"count": 1, "item": "oritech:machine_core_2", "slot": 200}
+machine core 3: 8 nickel + 1 redstone (the alt recipe) -> {"count": 1, "item": "oritech:machine_core_3", "slot": 200}
+the Control Unit Addon: 5 redstone + 2 repeaters + 1 comparator + 1 plating -> {"count": 1, "item": "oritech:machine_redstone_addon", "slot": 200}
+the generator's grid one nickel short -> {"item": null, "slot": 200}
+recipe PASS: all 17 carried recipes crafted in a real table with their declared output id and count, every ingredient consumed, and the generator's grid one nickel short crafting nothing
+  core click: {"ok":true,"block":"oritech:powered_furnace_block"}
+  info(28,100,0): Powered Furnace at [28, 100, 0]: 0/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe oritech:silicon_from_smelting_raw_silicon, input oritech:raw_silicon x1, out empty, addons none, t=9251
+  info(28,100,0): Powered Furnace at [28, 100, 0]: 0/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, input empty, out oritech:silicon x1, addons none, t=9304
+  raw silicon smelted in exactly 30 ticks for exactly 960 FE: out0 oritech:silicon x1
+```
+
+The silicon arithmetic: the jar's `cookingtime: 60` at the powered furnace's 0.5 speed is **30 ticks**,
+and 30 × 32 FE = **960 FE**, the figure the phase primes; a recipe the table did not load would starve
+with the input still in the slot.
+
+### Traps this slice hit (new to this port; the next one must know)
+
+1. **A menu cannot be driven `--headless`.** `ctl screen` on an open crafting table timed out
+   ("timed out waiting for the game's reply") and `ctl menu` answered `screen: "other"` with no slots:
+   the widget layout needs the renderer. The e2e now launches `--offscreen` — the same note `powah`
+   records — and every phase of the port runs under it unchanged.
+2. **`interact` refuses a face the eye cannot see.** Standing beside the table puts the eye above it, so
+   the menu never opens and every later `click-slot` lands in the inventory. `craft_check` stands 2.5
+   blocks away, faces the table, retries four times and requires slot 200 to appear before it places
+   anything.
+3. **The smelt's result id is `oritech:silicon`**, not `minecraft:silicon` — the first run of phase AN
+   failed on exactly that (`OUT0 is 'oritech:silicon x1', expected 'minecraft:silicon x1'`), which is
+   the assertion doing its job.
+4. **Two `--offscreen` games at once are not reliable on this box's integrated GPU.** One of two
+   parallel legs lost its socket mid-run (`cannot connect to … is the game running`); run the in-game
+   legs one at a time (the differential/control pair did run in parallel once, and failed once).
+
+### What slice 7 covered, and by which phase
+
+| Family | Status | Evidence / reason |
+|---|---|---|
+| `oritech:steel_ingot` | tested | AM: 2 iron + 2 coal craft 1, both ingredients consumed; every machine recipe takes it |
+| `oritech:electrum_ingot` | tested | AM; phase AN's furnace recipe takes it |
+| `oritech:nickel_ingot` | tested | AM (coil, motor, plating, cores); the ore is `blocked(configured-feature-not-registered)` |
+| `oritech:raw_silicon` | tested | AM: 2 quartz + 2 sand → 3; AN smelts one into silicon |
+| `oritech:silicon` | tested | AN: raw silicon → silicon in exactly 30 ticks for exactly 960 FE |
+| `oritech:magnetic_coil` | tested | AM: 6 nickel + 3 steel → 4 (`SELFTEST_CRAFT` flips this count) |
+| `oritech:motor` | tested | AM: 1 nickel + 4 steel + 2 coils → 1 |
+| `oritech:machine_plating_block` | tested | AM: 2 per craft; W rolls its loot table; the lava generator and the Control Unit Addon take it |
+| `oritech:iron_plating_block` | tested | AM; W |
+| `oritech:nickel_plating_block` | tested | AM; W |
+| `oritech:basic_generator_block` | tested | A/C/E/G (the machine); **AM** its craft: 5 nickel + 2 coils + 1 copper + 1 furnace → 1, and the one-nickel-short grid crafts nothing |
+| `oritech:pulverizer_block` | tested | B/D/E/N/O (the machine); **AM** its craft |
+| `oritech:powered_furnace_block` | tested | H/I/J/L (the multiblock); **AM** its craft; **AN** the raw-silicon smelt |
+| `oritech:cooler_block` | tested | P/Q/R/S/T (the chiller); **AM** its craft |
+| `oritech:lava_generator_block` | tested | X/Y (the lava generator); **AM** its craft |
+| `oritech:machine_core_1` | tested | M; **AM** its craft |
+| `oritech:machine_core_2` | tested | I, M; **AM** its craft |
+| `oritech:machine_core_3` | tested | Q, M; **AM** its craft by the alt recipe (nickel + redstone) |
+| `oritech:machine_redstone_addon` | tested | AK/AL (the gate); **AM** its craft: 5 redstone + 2 repeaters + a comparator + plating |
+| `recipe:minecraft:crafting_shaped` | not ported | the jar's other ~170 shaped files name items of families this port does not carry (the recipe table above); the 17 carried ones are the rows below |
+| `recipe:minecraft:smelting` | not ported | `nickel_ingot_from_smelting_*`, `platinum_ingot_from_smelting_*`, `steel_ingot_from_smelting_steel_dust` … all take the ore chain's products |
+| `oritech:crafting/alloy/steel` | tested | AM |
+| `oritech:crafting/alloy/electrum` | tested | AM |
+| `oritech:crafting/alloy/rawsilicon` | tested | AM |
+| `oritech:crafting/magnet` | tested | AM |
+| `oritech:motor/motorcraft` | tested | AM |
+| `oritech:crafting/plating` | tested | AM |
+| `oritech:crafting/iron` | tested | AM |
+| `oritech:crafting/nickel` | tested | AM |
+| `oritech:crafting/basicgen` | tested | AM (and the differential) |
+| `oritech:crafting/pulverizer` | tested | AM |
+| `oritech:crafting/electricfurnace` | tested | AM |
+| `oritech:crafting/cooler` | tested | AM |
+| `oritech:crafting/lavagen` | tested | AM |
+| `oritech:crafting/core1` | tested | AM |
+| `oritech:crafting/core2` | tested | AM |
+| `oritech:crafting/core3alt` | tested | AM |
+| `oritech:crafting/addon/redstone` | tested | AM |
+| `oritech:silicon_from_smelting_raw_silicon` | tested | AN: 30 ticks, exactly 960 FE |
+| `worldgen:configured_feature` | not ported | the ore files are not carried: the pin cannot register a package's configured features (`blocked(configured-feature-not-registered)`, above) |
+| `worldgen:placed_feature` | not ported | same |
+
+The package also ships **fifteen tag files** — `c:ingots/{steel,nickel,electrum,iron,copper,gold}`,
+`c:dusts/{redstone,quartz}`, `c:gems/{diamond,lapis}`, `c:silicon`, `c:storage_blocks/copper`,
+`c:player_workstations/furnaces` and `oritech:plating` — and every one is the ingredient path of a
+phase-AM case: a missing tag resolves to nothing, 26.3 drops the whole recipe, and that case fails.
+They are recorded here rather than as table rows because `check-coverage.py`'s inventory skips a
+namespace that is not the port's own (`_inventory_data`: `if ns != namespace: return`), so a `c:`
+selector can never match an inventoried family; the `tag:item` family row above is their declared
+default.
+
+`## Upstream defects fixed` (slice 7): none found. The jar's `c:ingots/steel` tag lists
+`oritech:steel_ingot` twice and `oritech:biosteel_ingot`, which this package does not carry — a datagen
+duplication, not a behaviour the game gets wrong; the tag is authored with the one item shipped and that
+is recorded under *Deviations* instead.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
 ## Next slice
 
-The next family from the same gap list, with the surface it must bind to before it is dispatched:
+The assembler (`oritech:assembler_block`) is now **workable**, and it is the family this slice was the
+prerequisite for. Slice 7 gave the package every component its recipe type takes — `oritech:motor`,
+`oritech:magnetic_coil`, `oritech:machine_plating_block`/`iron`/`nickel`, and the ingots their own recipes
+consume — so the assembler's recipe family can be carried **without dead data** for the first time (the
+0.2.8 report's reason for deferring it was exactly that the 57 `oritech:assembler` files take components
+this package did not declare).
 
-- **The assembler (`oritech:assembler_block`) is *not* ready.** Its 57 `oritech:assembler` recipes take
-  Oritech components (`motor`, `magnetic_coil`, plated alloys) and the mod's own fluids, none of which
-  this package declares; the same holds for the centrifuge (16 + 49 recipes), the foundry (29), the
-  refinery (22), the atomic forge (19) and the grinder (114). A slice that carries one of these would
-  ship dead recipes, which the campaign forbids — the honest next step there is the **ore-processing
-  chain** (dusts/clumps/gems + the `oritech:grinder`-fed items) as one family, and that is a bigger
-  slice than a gate.
-- **What is genuinely ready is the machines' remaining *controls*, and the cheapest is comparator
-  output.** The pin has `has_analog_output` (hook 274), `analog_output` (hook 8) and
-  `LevelRef::signal`/`best_neighbor_signal`, and this port already computes everything a comparator
-  could report: a pulverizer's `progress / time * 15`, a generator's buffer fraction, a slot's contents
-  and an "actively working" flag. `MachineBlockEntity.getComparatorProgress` /
-  `getComparatorEnergyAmount` / `getComparatorSlotAmount` / `getComparatorActiveState` are the four
-  figures, and upstream's *controller* answers 0 (`RedstoneControllable.getComparatorOutput`), i.e. the
-  comparator belongs on the **addon** block, which needs the mode control this slice recorded as a gap —
-  so the honest slice there is the addon's **mode field plus a control**, which needs a GUI (out of
-  tier for now).
-- **Recommended instead: the `oritech:*_block` machine recipes and the mod's component chain as a
-  content slice** (nickel/copper/platinum ingots, `motor`, `magnetic_coil`, the machine-plating chain)
-  — it is `data`-shaped, it is what makes every machine craftable without `/give` (gap 5), it needs no
-  new hook, and it is the prerequisite for the assembler family above. The in-game assertion is a
-  crafting-table craft of the generator item from the carried components, with the ingredients consumed,
-  plus the machine-plating alloy recipe.
+- **The family**: the `oritech:assembler` machine block, its block entity and its recipe type
+  (`oritech:assembler`: `ingredients` × up to 4, `results`, `time`, the jar's `assembler/*.json`), and
+  the subset of its 57 recipes whose ingredients all resolve — from the jar's files, `assembler/motor`
+  (2 motors from nickel + steel + 2 coils), `assembler/magnet` (6 coils), `assembler/plating`,
+  `platingiron`, `platingnickel`, `battery` (needs `c:plates/plastic`: **not** carried) — so the
+  carried set is the four that pass the slice-7 rule and the rest are recorded, one reason each.
+- **Why it fits the tier**: the machine shape this port already has four times over (a block entity, a
+  declared container and FE buffer, one custom recipe type, a tick); `horizon/docs/modpacks.md`'s
+  `machines` tier, no renderer, no GUI.
+- **The in-game assertion**: place the assembler, prime it with exactly the motor recipe's cost, feed
+  one nickel + two steel + two coils through its four input slots, tick to completion, and assert
+  **`out0` is `oritech:motor x2`**, the buffer fell by exactly `time × energyPerTick`, and the input
+  slots emptied; the differential is the same grid with a coil missing (no result, no FE spent). The
+  figure comes from the jar: `OritechConfig.processingMachines.assemblerData` and the recipe's
+  `time: 48`. `SELFTEST_ASSEMBLER=1` flips the output count.
+- **Also still open, in order**: the **centrifuge** (93 recipes; unlocks carbon fibre → carbon plating,
+  the metal girder and the burst addon), the **foundry** (29) and **refinery** (22) (the plastic chain →
+  six addon recipes), the **grinder** (143) with the ore-processing dusts, the **atomic forge** (23) and
+  the **deep drill/resource nodes**, the **augment stations and the jetpack**, and the **ores**
+  themselves — `blocked(configured-feature-not-registered)` at this pin, to be re-checked at every new
+  pin before any of the ore-fed families is scheduled.

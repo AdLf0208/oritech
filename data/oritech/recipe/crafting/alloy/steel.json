@@ -1,0 +1,16 @@
+{
+  "category": "misc",
+  "key": {
+    "a": "#c:ingots/iron",
+    "b": "#minecraft:coals"
+  },
+  "pattern": [
+    "aa ",
+    "bb "
+  ],
+  "result": {
+    "count": 1,
+    "id": "oritech:steel_ingot"
+  },
+  "type": "minecraft:crafting_shaped"
+}

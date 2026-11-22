@@ -1,7 +1,8 @@
-# Oritech for Horizon — slices 1 to 6
+# Oritech for Horizon — slices 1 to 7
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
-Chiller**, the **Lava Generator**, the **machine addon system** and the **Control Unit Addon** of
+Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon** and the
+**material and component chain** of
 [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for Horizon at the
 campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
@@ -57,6 +58,15 @@ models, textures, recipes, loot, lang, tags).
   recipe resolved, no progress, no FE spent, no energy pushed — and the readout says `redstone
   disabled`; remove the signal and the same operation carries on. Upstream's `disabledViaRedstone`,
   saved under its own `oritech.redstone` key.
+- **The material chain** — **steel**, **electrum** and **raw silicon/silicon** from vanilla items;
+  the **magnetic coil** (3 nickel + 3 steel → 4) and the **motor** (1 nickel + 4 steel + 2 coils);
+  the three **plating blocks** (4 steel + 4 stone + 1 copper/iron/nickel → 2). With them, **every one
+  of the five machines, three machine cores and the Control Unit Addon is craftable at a crafting
+  table** — the generator from 5 nickel + 2 coils + 1 copper + 1 furnace, the pulverizer from 5 iron +
+  2 motors + 1 nickel + 1 copper block, and so on — and **raw silicon smelts into silicon** in any
+  furnace. The seven items and the three blocks are declared items with the jar's own models and
+  textures, in the **Oritech Components** and **Oritech Machines** creative tabs, with the
+  conventional `c:` item tags their recipes name.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
@@ -69,8 +79,9 @@ models, textures, recipes, loot, lang, tags).
 ## What it does not do (yet)
 
 No GUI, no GeckoLib models (the machines are drawn as a full cube of their own
-texture), no crafting recipe for the blocks (they need Oritech components that
-are not in these slices — use `/give`), no special addons (the Control Unit
+texture), no **ores** (the pin cannot register a content package's configured
+features, so the nickel and platinum ingots come from the creative tab or
+`/give` while everything from the components down is craftable), no special addons (the Control Unit
 Addon's four comparator modes, fluid, inventory proxy, acceptor, extender, combi,
 quarry), no energy or item pipes, no comparator output, no cold-biome speed bonus
 on the chiller
@@ -84,7 +95,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules: 91 tests (runtime + glue)
+cargo test --offline                       # the rules and the carried data: 98 tests
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod
@@ -96,14 +107,13 @@ cargo horizon-mod fits oritech.hmod --build 0b14f8a   # a different build: the p
 `cargo horizon-mod` fetches the pinned SDK into `.horizon/sdk/` (gitignored,
 never packed); the tree here already carries a copy of the campaign cache. The
 package's one registry dependency is `serde_json` (the carried rules module
-parses the recipe JSON); `cargo horizon-mod build` packs no `Cargo.lock`, while
-the launcher's `native-build` needs one — it is generated from the launcher's
-cargo home for the in-game leg and removed afterwards (see `notes.md`).
+parses the recipe JSON), so the resolved `Cargo.lock` travels inside the package
+— the launcher's clean build needs it (`notes.md`, *The `Cargo.lock` correction*).
 
 The in-game leg needs a game the launcher built with this package (`../tools/launcher-game.sh build
 oritech`), because a native `.hmod` cannot load on an unmodded build. `tools/e2e.sh` is the scenario
 and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1`, `SELFTEST_COOLER=1`,
-`SELFTEST_LAVA=1`, `SELFTEST_ADDONS=1` and `SELFTEST_REDSTONE=1` must fail.
+`SELFTEST_LAVA=1`, `SELFTEST_ADDONS=1`, `SELFTEST_REDSTONE=1` and `SELFTEST_CRAFT=1` must fail.
 
 Every build/test step goes through `../tools/build-slot.sh` in the campaign tree (`BUILD_LOCAL=1`,
 since the far box has no copy of this port). Pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`, mixins

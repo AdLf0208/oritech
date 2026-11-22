@@ -4,7 +4,7 @@
 [`tools/carry_content.py`](tools/carry_content.py) from the ATM10 jar
 `oritech-neoforge-1.21.1-1.2.13.jar`
 (SHA-256 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`).
-The script is deterministic (`--check` exits 1 on any drift) and writes **148
+The script is deterministic (`--check` exits 1 on any drift) and writes **230
 files** at the root; since 0.2.0 they travel in the same SDK package as `src/`,
 so there is no separate content `.hmod` and no manifest here (the root
 `horizon-mod.toml` is the only one).
@@ -22,6 +22,42 @@ so there is no separate content `.hmod` and no manifest here (the root
 | `assets/oritech/textures/block/machine_particle_texture.png` | slice 5: the particle texture every addon model names |
 
 `machine_core_hidden` is upstream's worldgen plating, not part of the multiblock, and is not carried.
+
+## Slice 7: the items, the plating blocks, the tags and the recipes (82 files)
+
+**Carried byte for byte** (`ITEM_ASSETS`, `PLATING_ASSETS`): the seven items' item models and textures
+(`assets/oritech/{models/item,textures/item}/{steel_ingot,nickel_ingot,electrum_ingot,raw_silicon,silicon,magnetic_coil,motor}`),
+and the three plating blocks' block model, item model and their `particle` texture
+(`assets/oritech/{models/block,models/item}/…plate…` and `assets/oritech/textures/block/<block>/particle.png`;
+the jar's other four CTM textures belong to its `athena:ctm` blockstate, which this pin has no loader
+for).
+
+**Authored**: each item's 26.3 item definition (`assets/oritech/items/<item>.json`), its declaration
+(`data/oritech/horizon/item/<item>.json`, `template: minecraft:iron_ingot`), its lang name
+(`item.oritech.<item>`); each plating block's one-variant blockstate, item definition, block
+declaration (the `minecraft:iron_block` copy, opaque), self-drop loot table, lang name
+(`block.oritech.<block>` — the jar's "… Reinforced Plating") and place in the machines tab; the
+`components` creative tab (`ItemGroups.COMPONENT_GROUP`); and the **fourteen tags** the recipes name:
+
+| Tag | Values | Source |
+|---|---|---|
+| `c:ingots/steel`, `c:ingots/nickel`, `c:ingots/electrum` | the one Oritech ingot each | authored from the declarations (the jar's own files repeat `steel_ingot` twice and name `biosteel_ingot`, which this package does not carry) |
+| `c:ingots/{iron,copper,gold}` | `minecraft:{iron,copper,gold}_ingot` | the conventional tags NeoForge generates for vanilla items; 26.3 ships no `c:` namespace |
+| `c:dusts/{redstone,quartz}` | `minecraft:redstone`, `minecraft:quartz` | same |
+| `c:gems/{diamond,lapis}` | `minecraft:diamond`, `minecraft:lapis_lazuli` | same |
+| `c:silicon` | `oritech:silicon` | the jar's own file's content |
+| `c:storage_blocks/copper` | `minecraft:copper_block` | conventional |
+| `c:player_workstations/furnaces` | furnace, blast furnace, smoker | conventional |
+| `oritech:plating` | the three plating blocks carried | the jar's tag without the carbon plating (the centrifuge's carbon fibre) |
+
+**The eighteen recipes** (`CHAIN_RECIPES`) are the jar's files in the bare ingredient form 26.3 loads:
+`crafting/alloy/{steel,electrum,rawsilicon}`, `crafting/magnet`, `motor/motorcraft`, `crafting/{plating,iron,nickel}`,
+`crafting/{basicgen,pulverizer,electricfurnace,cooler,lavagen}`, `crafting/{core1,core2,core3alt}`,
+`crafting/addon/redstone` and `silicon_from_smelting_raw_silicon`. The rewrite touches the shaped
+`key`, the shapeless `ingredients` and the smelting `ingredient` only; results, counts, patterns, times
+and `experience` are the jar's. A *list* ingredient is refused by the tool (26.3 drops such a file).
+Which files were taken and which left, with a reason each, is `notes.md` → *Slice 7* → *The recipe
+table*.
 
 ## The jar's pulverizer, chiller and lava generator recipes (10 files)
 
@@ -88,14 +124,17 @@ source; `notes.md` records each one.
 5. **Loot shape.** Upstream's 1.21.1 `conditions: [ … ]` array evaluates false
    at this pin; the carried loot uses 26.3's `condition: { … }` object. Same
    entry, same `survives_explosion` rule.
-6. **No crafting recipes for the nineteen blocks.** The jar's recipes need
-   `oritech:motor`, `oritech:magnetic_coil` and the `c:ingots/nickel`,
-   `c:storage_blocks/copper` and `c:player_workstations/furnaces` tags, none of
-   which exist in this slice or in 26.3's vanilla data. Shipping them would ship
-   recipes that can never match, so they are recorded as a gap instead.
-7. **The creative tab is the machines tab only.** The jar registers four
-   (`itemgroup.oritech.machines|components|decorative|equipment`); this slice has
-   items for one (nineteen blocks).
+6. **~~No crafting recipes for the nineteen blocks.~~ Closed by slice 7.** The
+   components (`oritech:motor`, `oritech:magnetic_coil`, the plating blocks, the
+   ingots) and the conventional `c:` tags those recipes name are carried now, so
+   all five machines, three machine cores and the Control Unit Addon are
+   craftable at a table (`notes.md` → *Slice 7*). The ingots' *ore* is the one
+   remaining gap: the pin cannot generate a content package's configured
+   features (`blocked(configured-feature-not-registered)`).
+7. **Two creative tabs.** The jar registers four
+   (`itemgroup.oritech.machines|components|decorative|equipment`); this package
+   has items for two — the machines (twenty-two blocks) and the components
+   (seven items).
 8. **The addons' blockstate is authored.** The jar's `machine_*_addon.json`
    blockstates have 24 variants keyed by `face`/`facing`/`addon_used`, states
    upstream's `FaceAttachedHorizontalDirectionalBlock` carries; this port declares

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Carry Oritech slice 1's content out of the ATM10 jar into the package root.
+"""Carry Oritech's content out of the ATM10 jar into the package root.
+
+Slices 1 to 6 carried the machines, the cores and the seven addons; slice 7 adds
+the material and component chain (seven items, three plating blocks, the tags
+their recipes name and the eighteen recipes themselves).
 
 Every carried file is copied byte for byte from
 `../_shared/licence-cache/oritech-neoforge-1.21.1-1.2.13.jar`; every authored
@@ -111,6 +115,123 @@ ADDON_ASSETS = [
 ] + ["assets/oritech/textures/block/machine_particle_texture.png"]
 CARRIED += ADDON_ASSETS
 
+# --- slice 7: the material and component chain --------------------------------
+#
+# The seven item components and the three plating blocks. Item models and item
+# textures are the jar's own; the plating blocks' model names their `particle`
+# texture (the jar's blockstate also carries `athena:ctm` keys this pin has no
+# loader for, so the blockstate is authored and only the particle texture is
+# needed for a `cube_all`).
+ITEMS = {
+    # id: (lang name, vanilla template the declaration copies)
+    "steel_ingot": ("Steel Ingot", "minecraft:iron_ingot"),
+    "nickel_ingot": ("Nickel Ingot", "minecraft:iron_ingot"),
+    "electrum_ingot": ("Electrum Ingot", "minecraft:iron_ingot"),
+    "raw_silicon": ("Raw Silicon", "minecraft:iron_ingot"),
+    "silicon": ("Silicon", "minecraft:iron_ingot"),
+    "magnetic_coil": ("Magnetic Coil", "minecraft:iron_ingot"),
+    "motor": ("Motor", "minecraft:iron_ingot"),
+}
+PLATING = {
+    # The jar's lang names them "… Reinforced Plating"; upstream copies
+    # `Blocks.IRON_BLOCK` for them, the same copy the machines use.
+    "machine_plating_block": "Copper Reinforced Plating",
+    "iron_plating_block": "Iron Reinforced Plating",
+    "nickel_plating_block": "Nickel Reinforced Plating",
+}
+ITEM_ASSETS = [
+    f"assets/oritech/{kind}/{path}"
+    for item in ITEMS
+    for kind, path in (
+        ("models/item", f"{item}.json"),
+        ("textures/item", f"{item}.png"),
+    )
+]
+PLATING_ASSETS = [
+    f"assets/oritech/{kind}/{path}"
+    for block in PLATING
+    for kind, path in (
+        ("models/block", f"{block}.json"),
+        ("models/item", f"{block}.json"),
+        ("textures/block", f"{block}/particle.png"),
+    )
+]
+CARRIED += ITEM_ASSETS + PLATING_ASSETS
+
+# Slice 7's recipes: the jar's own files, rewritten into 26.3's bare ingredient
+# form. Nothing else about them changes (results, counts, patterns, times).
+#
+# The rule for taking one: its result and every ingredient must resolve — a
+# `minecraft:` id the engine has, an item this package declares above, or a tag
+# this package ships with resolvable values. The report's table lists what was
+# left and why; `CONTENT.md` repeats it.
+CHAIN_RECIPES = [
+    # The alloys, from vanilla metal + coal/redstone/quartz/sand.
+    "data/oritech/recipe/crafting/alloy/steel.json",
+    "data/oritech/recipe/crafting/alloy/electrum.json",
+    "data/oritech/recipe/crafting/alloy/rawsilicon.json",
+    # The two components: the coil from nickel + steel, the motor from both.
+    "data/oritech/recipe/crafting/magnet.json",
+    "data/oritech/recipe/motor/motorcraft.json",
+    # The three plating blocks the `oritech:plating` tag holds.
+    "data/oritech/recipe/crafting/plating.json",
+    "data/oritech/recipe/crafting/iron.json",
+    "data/oritech/recipe/crafting/nickel.json",
+    # The five machines this port ships, and the three machine cores whose
+    # ingredients resolve (`core3`'s carbon fibre belongs to the centrifuge, so
+    # its `core3alt` — nickel + redstone — is the one carried).
+    "data/oritech/recipe/crafting/basicgen.json",
+    "data/oritech/recipe/crafting/pulverizer.json",
+    "data/oritech/recipe/crafting/electricfurnace.json",
+    "data/oritech/recipe/crafting/cooler.json",
+    "data/oritech/recipe/crafting/lavagen.json",
+    "data/oritech/recipe/crafting/core1.json",
+    "data/oritech/recipe/crafting/core2.json",
+    "data/oritech/recipe/crafting/core3alt.json",
+    # The seventh addon, whose four ingredients all resolve here (the other six
+    # want plastic plates, energite or flux gates this package does not carry).
+    "data/oritech/recipe/crafting/addon/redstone.json",
+    # Raw silicon smelts into silicon in any furnace (60 ticks; the powered
+    # furnace's 0.5 speed makes it 30).
+    "data/oritech/recipe/silicon_from_smelting_raw_silicon.json",
+]
+REWRITTEN_RECIPES += CHAIN_RECIPES
+
+# Slice 7's tags. The jar's own `c:ingots/*` files list items this package does
+# not declare (its steel tag repeats `steel_ingot` twice and names
+# `biosteel_ingot`), so they are authored from the declarations above instead of
+# copied. The vanilla-only tags are the conventional (`c:`) names NeoForge
+# generates for vanilla items; 26.3 ships no `c:` namespace, so a recipe naming
+# one resolves to nothing without these files.
+CONVENTION_TAGS = {
+    "c:ingots/steel": ["oritech:steel_ingot"],
+    "c:ingots/nickel": ["oritech:nickel_ingot"],
+    "c:ingots/electrum": ["oritech:electrum_ingot"],
+    "c:ingots/iron": ["minecraft:iron_ingot"],
+    "c:ingots/copper": ["minecraft:copper_ingot"],
+    "c:ingots/gold": ["minecraft:gold_ingot"],
+    "c:dusts/redstone": ["minecraft:redstone"],
+    "c:dusts/quartz": ["minecraft:quartz"],
+    "c:gems/diamond": ["minecraft:diamond"],
+    "c:gems/lapis": ["minecraft:lapis_lazuli"],
+    "c:silicon": ["oritech:silicon"],
+    "c:storage_blocks/copper": ["minecraft:copper_block"],
+    "c:player_workstations/furnaces": [
+        "minecraft:furnace",
+        "minecraft:blast_furnace",
+        "minecraft:smoker",
+    ],
+    # The jar groups the plating blocks so the lava generator takes any of them;
+    # its fourth member (carbon plating) needs the centrifuge's carbon fibre and
+    # is not carried.
+    "oritech:plating": [
+        "oritech:machine_plating_block",
+        "oritech:iron_plating_block",
+        "oritech:nickel_plating_block",
+    ],
+}
+
+
 # --- authored files ----------------------------------------------------------
 
 BLOCKS = {
@@ -153,6 +274,12 @@ CORE_NAMES = [
 ]
 for tier, name in enumerate(CORE_NAMES, start=1):
     BLOCKS[f"machine_core_{tier}"] = {"name": name, "carry_assets": True}
+# Slice 7: the three plating blocks carry their model and their `particle`
+# texture; their blockstate is authored (the jar's also carries `athena:ctm`
+# keys this pin has no loader for), and their declaration copies the same iron
+# block upstream copies.
+for block, name in PLATING.items():
+    BLOCKS[block] = {"name": name, "carry_model": True, "solid": True}
 # Slice 5: the addon blocks carry their models and textures; only the blockstate
 # is authored, because the jar's has states this port does not declare.
 for block, name in ADDON_NAMES.items():
@@ -169,8 +296,11 @@ def authored() -> dict[str, str]:
     lang = {
         f"block.{NS}.{block}": data["name"] for block, data in BLOCKS.items()
     }
+    lang |= {f"item.{NS}.{item}": name for item, (name, _) in ITEMS.items()}
     # Upstream's `ItemGroups.MACHINE_GROUP` title key.
     lang["itemgroup.oritech.machines"] = "Oritech Machines"
+    # Slice 7: `ItemGroups.COMPONENT_GROUP`.
+    lang["itemgroup.oritech.components"] = "Oritech Components"
     put(f"assets/{NS}/lang/en_us.json", lang)
 
     for block, data in BLOCKS.items():
@@ -198,15 +328,12 @@ def authored() -> dict[str, str]:
             {"model": {"type": "minecraft:model", "model": f"{NS}:item/{block}"}},
         )
         # `BlockContent`: `Properties.ofFullCopy(Blocks.IRON_BLOCK).noOcclusion()`
-        # for the machines and the cores alike.
-        put(
-            f"data/{NS}/horizon/block/{block}.json",
-            {
-                "template": "minecraft:iron_block",
-                "properties": {"occludes": False},
-                "item": True,
-            },
-        )
+        # for the machines and the cores alike; the plating blocks are full
+        # opaque cubes, so only they keep the copy's occlusion.
+        declaration = {"template": "minecraft:iron_block", "item": True}
+        if not data.get("solid"):
+            declaration["properties"] = {"occludes": False}
+        put(f"data/{NS}/horizon/block/{block}.json", declaration)
         # 26.3's singular typed condition: the 1.21.1 plural array evaluates
         # false here and the block would drop nothing.
         put(
@@ -236,8 +363,31 @@ def authored() -> dict[str, str]:
             "title": "itemgroup.oritech.machines",
         },
     )
-    # `Blocks.IRON_BLOCK`'s copy: a pickaxe and a stone tier, as the template
-    # requires; a mod block is not in vanilla's tags by itself.
+    # Slice 7: the components tab (`ItemGroups.COMPONENT_GROUP`).
+    put(
+        f"data/{NS}/horizon/creative_tab/components.json",
+        {
+            "icon": f"{NS}:motor",
+            "items": [f"{NS}:{item}" for item in ITEMS],
+            "title": "itemgroup.oritech.components",
+        },
+    )
+    # Slice 7: the items themselves — 26.3's item definition plus the
+    # declaration that registers them (the vanilla template each copies).
+    for item, (_, template) in ITEMS.items():
+        put(
+            f"assets/{NS}/items/{item}.json",
+            {"model": {"type": "minecraft:model", "model": f"{NS}:item/{item}"}},
+        )
+        put(f"data/{NS}/horizon/item/{item}.json", {"template": template})
+    # Slice 7: the tags the carried recipes name. `minecraft:` tags are the
+    # engine's own; `c:` has no namespace at 26.3, so every conventional name a
+    # carried recipe uses is declared here.
+    for tag, values in CONVENTION_TAGS.items():
+        namespace, name = tag.split(":", 1)
+        put(f"data/{namespace}/tags/item/{name}.json", {"values": values})
+    # `BlockContent`'s iron-block copy: a pickaxe and a stone tier, as the
+    # template requires; a mod block is not in vanilla's tags by itself.
     for tag in ("mineable/pickaxe", "needs_stone_tool"):
         put(
             f"data/minecraft/tags/block/{tag}.json",
@@ -264,21 +414,33 @@ def bare_ingredients(raw: bytes) -> bytes:
     A 1.21.1 file writes `{"item": "minecraft:bone"}` or
     `{"tag": "minecraft:coal_ores"}`; 26.3's loader refuses those and drops the
     recipe, so they become `"minecraft:bone"` and `"#minecraft:coal_ores"`. The
-    rest of the file (type, results, time) is untouched.
+    shapes a file can use are a shaped recipe's `key` map, a shapeless recipe's
+    `ingredients` list, a cooking recipe's single `ingredient`, and the mod's own
+    machine recipes' `ingredients` list. A *list* of alternative ingredients is
+    refused by 26.3's loader, so the script refuses it too rather than shipping a
+    file the game drops. Everything else (type, results, counts, patterns, time)
+    is the jar's.
     """
     recipe = json.loads(raw)
 
     def bare(ingredient):
-        if isinstance(ingredient, list):
-            return [bare(entry) for entry in ingredient]
         if isinstance(ingredient, dict):
             if "item" in ingredient:
                 return ingredient["item"]
             if "tag" in ingredient:
                 return f"#{ingredient['tag']}"
+        if isinstance(ingredient, list):
+            raise SystemExit(
+                f"an alternative-list ingredient is fatal to 26.3's loader: {ingredient}"
+            )
         return ingredient
 
-    recipe["ingredients"] = [bare(entry) for entry in recipe["ingredients"]]
+    if "key" in recipe:
+        recipe["key"] = {symbol: bare(entry) for symbol, entry in recipe["key"].items()}
+    if "ingredients" in recipe:
+        recipe["ingredients"] = [bare(entry) for entry in recipe["ingredients"]]
+    if "ingredient" in recipe:
+        recipe["ingredient"] = bare(recipe["ingredient"])
     return (json.dumps(recipe, indent=2, sort_keys=True) + "\n").encode()
 
 

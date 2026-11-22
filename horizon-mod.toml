@@ -2,10 +2,10 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.8"
-description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 6: the Basic Generator, the Pulverizer, the Powered
-Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system and the Control
-Unit Addon. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
+version = "0.2.9"
+description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 7: the Basic Generator, the Pulverizer, the Powered
+Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
+Unit Addon and the material and component chain. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
 buffer that accepts no inserts and gives 256 FE a call; the pulverizer spends 32 FE a tick and turns one
 input into its recipe's results in the recipe's time, reading the jar's own `oritech:pulverizer` files;
 the powered furnace is a controller plus one of the seven machine cores above it that smelts any vanilla
@@ -22,8 +22,9 @@ the addon holds the whole tick (no recipe, no progress, no FE) until the signal 
 Every buffer is a real block energy capability another mod's cable can read, every tank a real block
 fluid handler another mod's pipe can fill, and a fuelled generator pushes its FE to the machines beside
 it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the special
-addons (the control unit's four comparator modes, fluid, proxy, extender) and the other multiblock
-machines."""
+addons (the control unit's four comparator modes, fluid, proxy, extender), the other multiblock
+machines, and the ores themselves — the ingots' worldgen cannot generate at this nightly, so the chain
+is craftable from the components down and the ore is the next slice."""
 authors = ["Rearth", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins, beside
 # the carried assets/ and data/. The id is the resource namespace and the only identity.
@@ -32,7 +33,7 @@ api = "0.2"
 # server belongs to the client installation.
 side = "both"
 # The one shared value every manifest carries ("May add blocks, items, mob effects and entity
-# types"); this mod declares nineteen blocks and their block entities, so it is used, not just
+# types"); this mod declares twenty-two blocks and their block entities, so it is used, not just
 # required.
 capabilities = ["registries"]
 

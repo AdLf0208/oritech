@@ -3203,4 +3203,221 @@ mod tests {
              input empty, out0 empty, out1 empty, addons speed, t=7"
         );
     }
+
+    // Slice 7 is data: the deliverable is `data/oritech/recipe/crafting/*.json` and the tags that
+    // make its ingredients resolve. These three tests are that data's only unit-level gate, so
+    // they read the files the package ships (`data/` travels beside `src/` in the crate root).
+
+    /// The recipe files this package ships, as `(path under the recipe root, parsed json)`.
+    fn carried_recipes() -> Vec<(String, serde_json::Value)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "json") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/oritech/recipe");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        files.sort();
+        files
+            .into_iter()
+            .map(|path| {
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{} is unreadable: {e}", path.display()));
+                let recipe = serde_json::from_str(&text)
+                    .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+                let name = path
+                    .strip_prefix(&root)
+                    .expect("walked from the recipe root")
+                    .display()
+                    .to_string();
+                (name, recipe)
+            })
+            .collect()
+    }
+
+    /// Every ingredient of a vanilla-typed recipe, as written in the file.
+    fn ingredients_of(recipe: &serde_json::Value) -> Vec<&serde_json::Value> {
+        let mut out = Vec::new();
+        if let Some(key) = recipe.get("key").and_then(|k| k.as_object()) {
+            out.extend(key.values());
+        }
+        if let Some(list) = recipe.get("ingredients").and_then(|i| i.as_array()) {
+            out.extend(list.iter());
+        }
+        if let Some(single) = recipe.get("ingredient") {
+            out.push(single);
+        }
+        out
+    }
+
+    /// Whether this package's `assets/` carries an item definition for `id` (the engine registers
+    /// an item from `assets/<ns>/items/<path>.json`; an id without one is not a known item).
+    fn declared(id: &str) -> bool {
+        let Some((namespace, name)) = id.split_once(':') else {
+            return false;
+        };
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("assets/{namespace}/items/{name}.json"))
+            .is_file()
+    }
+
+    /// A tag's values, when this package ships `data/<ns>/tags/item/<name>.json`.
+    fn tag_values(tag: &str) -> Option<Vec<String>> {
+        let (namespace, name) = tag.split_once(':')?;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("data/{namespace}/tags/item/{name}.json"));
+        let text = std::fs::read_to_string(path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        Some(
+            json["values"]
+                .as_array()?
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect(),
+        )
+    }
+
+    /// The recipes a vanilla crafting, cooking or table type loads. The mod's own machine
+    /// recipes (`oritech:pulverizer`, `oritech:cooler`, `oritech:lava_generator`) have their own
+    /// parser in `runtime.rs` and are crafted by the machines, not by the engine's crafting copy.
+    fn engine_recipes() -> Vec<(String, serde_json::Value)> {
+        carried_recipes()
+            .into_iter()
+            .filter(|(_, recipe)| {
+                !recipe["type"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("oritech:")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_carried_recipes_are_the_bare_form_the_engine_loads() {
+        let recipes = engine_recipes();
+        assert_eq!(
+            recipes.len(),
+            18,
+            "the slice carries seventeen crafting recipes and one smelting recipe: {} found ({:?})",
+            recipes.len(),
+            recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        for (path, recipe) in &recipes {
+            let ingredients = ingredients_of(recipe);
+            assert!(!ingredients.is_empty(), "{path} declares no ingredient");
+            for ingredient in ingredients {
+                let id = ingredient.as_str().unwrap_or_else(|| {
+                    panic!(
+                        "{path}: the ingredient {ingredient} is not the bare form — 26.3's loader \
+                         refuses an object or a nested list and drops the whole recipe"
+                    )
+                });
+                assert!(
+                    id.starts_with('#') || id.contains(':'),
+                    "{path}: the ingredient '{id}' is not a namespaced id or a #tag"
+                );
+            }
+            let result = &recipe["result"];
+            assert!(
+                result["id"].is_string(),
+                "{path}: the result is not {{\"id\": …, \"count\": n}}"
+            );
+            assert!(
+                result["count"].as_u64().is_some_and(|count| count >= 1),
+                "{path}: the result has no positive count"
+            );
+        }
+    }
+
+    #[test]
+    fn every_carried_recipe_resolves_in_this_package() {
+        let recipes = engine_recipes();
+        assert!(!recipes.is_empty(), "no carried recipe to resolve");
+        for (path, recipe) in &recipes {
+            for ingredient in ingredients_of(recipe) {
+                let Some(id) = ingredient.as_str() else {
+                    continue;
+                };
+                match id.strip_prefix('#') {
+                    Some(tag) if tag.starts_with("minecraft:") => {
+                        // The engine ships vanilla's tags (coals, planks, sand, *_ores).
+                    }
+                    Some(tag) => {
+                        let values = tag_values(tag).unwrap_or_else(|| {
+                            panic!(
+                                "{path}: the tag #{tag} is not in this package — the ingredient \
+                                 resolves to nothing and 26.3 drops the recipe"
+                            )
+                        });
+                        assert!(!values.is_empty(), "{path}: the tag #{tag} has no value");
+                        for value in values {
+                            let value = value.trim_start_matches('#');
+                            assert!(
+                                value.starts_with("minecraft:") || declared(value),
+                                "{path}: #{tag} names {value}, which neither the engine nor this \
+                                 package declares"
+                            );
+                        }
+                    }
+                    None => assert!(
+                        id.starts_with("minecraft:") || declared(id),
+                        "{path}: the ingredient {id} is not declared by this package"
+                    ),
+                }
+            }
+            let result = recipe["result"]["id"].as_str().unwrap_or_default();
+            assert!(
+                result.starts_with("minecraft:") || declared(result),
+                "{path}: the result {result} is not declared by this package"
+            );
+        }
+    }
+
+    #[test]
+    fn the_generator_recipe_costs_the_components_this_slice_ships() {
+        let recipes = engine_recipes();
+        let (path, recipe) = recipes
+            .iter()
+            .find(|(path, _)| path == "crafting/basicgen.json")
+            .expect("the generator's crafting recipe is carried");
+        assert_eq!(
+            recipe["pattern"],
+            serde_json::json!(["fff", "fcf", "sbs"]),
+            "{path}: the jar's pattern"
+        );
+        assert_eq!(
+            recipe["key"]["f"], "#c:ingots/nickel",
+            "{path}: five nickel ingots"
+        );
+        assert_eq!(
+            recipe["key"]["c"], "#c:ingots/copper",
+            "{path}: two copper ingots"
+        );
+        assert_eq!(
+            recipe["key"]["s"], "oritech:magnetic_coil",
+            "{path}: two magnetic coils"
+        );
+        assert_eq!(
+            recipe["key"]["b"], "#c:player_workstations/furnaces",
+            "{path}: one furnace"
+        );
+        let pattern: String = ["fff", "fcf", "sbs"].concat();
+        assert_eq!(pattern.matches('f').count(), 5, "{path}: five nickel");
+        assert_eq!(pattern.matches('s').count(), 2, "{path}: two coils");
+        assert_eq!(
+            recipe["result"],
+            serde_json::json!({"count": 1, "id": "oritech:basic_generator_block"}),
+            "{path}: one generator"
+        );
+    }
 }

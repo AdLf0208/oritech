@@ -5,6 +5,34 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.9 — slice 7, the material chain and the machines' crafting recipes (pin `0a875da`, 2026-11-22)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline carried_recipe'` with the slice's recipe files moved aside | **0 passed, 2 failed** — `the slice carries seventeen crafting recipes and one smelting recipe: 0 found ([])` and `no carried recipe to resolve`; the two tests are the data's red proof | `slice7-test-red.log` |
+| 2 | same, implemented | **98 passed, 0 failed** | `slice7-test-green.log` (= `sdk-test.log`) |
+| 3 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `slice7-clippy.log` (= `sdk-clippy.log`) |
+| 4 | `cd ports/oritech && cargo horizon-mod build` twice, the artifact deleted between | **195,181 B**, sha256 `8935cae7bb3f34c4564bbe83fc81869fcb33ca97a3205b6aff8a014eb4133276`, `cmp` identical, 240 entries **incl. `Cargo.lock`** | `slice7-build.log`, `slice7-build-second.log` |
+| 5 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.9 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` | `sdk-check.log` |
+| 6 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `sdk-check.log`, `sdk-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `sdk-check.log`, `sdk-fits.log` |
+| 8 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 9 | `python3 tools/carry_content.py --check` | `230 files, 0 differ` | stdout |
+| 10 | `ports/tools/launcher-game.sh build oritech` (manifest bumped to 0.2.9 so it recompiles) | `Compiling the mods against the prebuilt game`; build `native-0a875da-e42664391ac2`; the exported `horizon-native-mods/oritech/horizon-mod.toml` says `version = "0.2.9"` and carries `data/oritech/recipe/crafting/` (this slice adds **no code string** to `liboritech.so`, so `strings` is not its proof — the manifest version and the packed data are) | — |
+| 11 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (AM the 17 crafts, AN the silicon smelt) | `e2e-slice7.log` |
+| 12 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no generator item and no motor, and every package block id stays air, the three plating blocks included | `e2e-slice7-differential.log` |
+| 13 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice7-control.log` |
+| 14 | same with `SELFTEST=1` | **EXIT:1** — `91 ticks spent 2912 FE, expected 2944` | `e2e-slice7-selftest.log` |
+| 15 | same with `SELFTEST_CRAFT=1` (the coil's count flipped to 5) | **EXIT:1** — `magnetic coil: 6 nickel + 3 steel: expected 5 oritech:magnetic_coil, got oritech:magnetic_coil x4` | `e2e-slice7-selftest-craft.log` |
+| 16 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 32 logs, 32 ok, 0 bad | stdout |
+| 17 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 18 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game assertions and what each can fail on are listed in `notes.md` → *Slice 7* → *Verification*
+and *In-game transcript*. The e2e now launches `--offscreen`: at this pin a menu's widget layout needs
+the renderer, and `--headless` makes `ctl screen` time out on an open crafting table (measured, and the
+same note `powah` records).
+
 ## 0.2.8 — slice 6, the Control Unit Addon and the redstone gate (pin `0a875da`, 2026-11-22)
 
 | # | Command (from the campaign root) | Verdict | Log |

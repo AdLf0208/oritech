@@ -1,0 +1,17 @@
+{
+  "category": "misc",
+  "key": {
+    "c": "minecraft:crafting_table",
+    "s": "#minecraft:planks"
+  },
+  "pattern": [
+    "sss",
+    "scs",
+    "sss"
+  ],
+  "result": {
+    "count": 1,
+    "id": "oritech:machine_core_1"
+  },
+  "type": "minecraft:crafting_shaped"
+}

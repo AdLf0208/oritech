@@ -1,0 +1,13 @@
+{
+  "icon": "oritech:motor",
+  "items": [
+    "oritech:steel_ingot",
+    "oritech:nickel_ingot",
+    "oritech:electrum_ingot",
+    "oritech:raw_silicon",
+    "oritech:silicon",
+    "oritech:magnetic_coil",
+    "oritech:motor"
+  ],
+  "title": "itemgroup.oritech.components"
+}

@@ -1,0 +1,16 @@
+{
+  "category": "misc",
+  "key": {
+    "a": "#c:ingots/gold",
+    "b": "#c:dusts/redstone"
+  },
+  "pattern": [
+    "aa ",
+    "bb "
+  ],
+  "result": {
+    "count": 1,
+    "id": "oritech:electrum_ingot"
+  },
+  "type": "minecraft:crafting_shaped"
+}

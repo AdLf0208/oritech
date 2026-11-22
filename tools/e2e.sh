@@ -87,7 +87,14 @@
 #    the bone still in the slot and the buffer untouched at exactly 10,000 FE,
 #    and the readout says `redstone disabled`; removing the signal lets the same
 #    machine, addon and bone finish for exactly 3,200 FE with `redstone enabled`,
-#    so the addon with no signal is not a gate (the differential).
+#    so the addon with no signal is not a gate (the differential);
+#  - every carried crafting recipe crafts in a real table: the steel/electrum/
+#    raw-silicon alloys, the magnetic coil and the motor, the three plating
+#    blocks, the five machines, three machine cores and the Control Unit Addon,
+#    each asserting its output id and count, with the grid consumed afterwards
+#    (survival), and the generator's grid one nickel short crafting nothing;
+#  - raw silicon smelts into silicon in a powered furnace in exactly 30 ticks for
+#    exactly 960 FE (the jar's `cookingtime: 60` at the 0.5 speed).
 #
 # CONTROL=1 (with CONTROL_GAME set) launches the package-less build first, where
 # every id must be unknown: that is the differential run, and without it the
@@ -96,8 +103,8 @@
 # SELFTEST=1 flips the exact-FE assertion of each machine leg (it must FAIL),
 # proving the scenario can fail; `SELFTEST_COOLER=1` does the same for the
 # chiller's leg on its own, `SELFTEST_LAVA=1` for the lava generator's,
-# `SELFTEST_ADDONS=1` for the speed addon's and `SELFTEST_REDSTONE=1` for the
-# control unit's gate.
+# `SELFTEST_ADDONS=1` for the speed addon's, `SELFTEST_REDSTONE=1` for the
+# control unit's gate and `SELFTEST_CRAFT=1` for the coil's crafted count.
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -178,6 +185,11 @@ EFFICIENCY_RATE=27
 EFFICIENCY_SPENT=$((RECIPE_TICKS * EFFICIENCY_RATE))
 PROCESSING_RATE=48
 PROCESSING_SPENT=$((RECIPE_TICKS * PROCESSING_RATE))
+# Slice 7: the material chain. `oritech:silicon` comes from the jar's
+# `silicon_from_smelting_raw_silicon.json`: `cookingtime: 60`, and the powered
+# furnace's 0.5 speed makes it 30 ticks at 32 FE a tick.
+SILICON_TICKS=30
+SILICON_SPENT=$((SILICON_TICKS * FURNACE_RATE))
 BURST_TICKS=13
 BURST_SPENT=$((BURST_TICKS * GENERATOR_RATE))
 CAPACITOR_CAPACITY=$((ROOM_CAPACITY + 2000000))
@@ -233,8 +245,12 @@ launch() { # launch [WORLD] [GAME]
     rm -f "$SOCK"
     cd "$SCRATCH"
     echo "  launch: $game" >&2
+    # `--offscreen`, not `--headless`: slice 7 opens a crafting table and reads
+    # its slots, and at this pin a menu's widget layout needs the renderer —
+    # with `--headless`, `ctl screen` times out on an open menu (measured; the
+    # same note is in powah's e2e).
     "$CTL" --socket "$SOCK" launch \
-        --game "$game" --world "$world" --seed 20261105 --creative --headless --wait \
+        --game "$game" --world "$world" --seed 20261105 --creative --offscreen --wait \
         --resources "$RES" >/dev/null
     ctl wait-ready 120
     ctl wait 40
@@ -298,8 +314,8 @@ drain() { # drain X Y Z
 arena() {
     ctl tp 0.5 101 4.5 >/dev/null
     ctl wait 20
-    ctl command "fill -8 99 -8 24 99 24 minecraft:stone" >/dev/null
-    ctl command "fill -8 100 -8 24 110 24 minecraft:air" >/dev/null
+    ctl command "fill -8 99 -8 34 99 24 minecraft:stone" >/dev/null
+    ctl command "fill -8 100 -8 34 110 24 minecraft:air" >/dev/null
     ctl command "kill @e[type=!player]" >/dev/null
     ctl tp 0.5 100 4.5 >/dev/null
     ctl wait 20
@@ -416,8 +432,12 @@ control_leg() {
     ctl command "setblock 5 100 0 $SPEED_ADDON" >/dev/null 2>&1 || true
     ctl command "setblock 5 100 1 $CAPACITOR_ADDON" >/dev/null 2>&1 || true
     ctl command "setblock 5 100 2 $REDSTONE_ADDON" >/dev/null 2>&1 || true
+    # Slice 7: the components are items and a plain block, so the control game
+    # must refuse both the item and the plating block.
+    ctl command "item replace entity @s hotbar.3 with oritech:motor 1" >/dev/null 2>&1 || true
+    ctl command "setblock 5 100 3 oritech:machine_plating_block" >/dev/null 2>&1 || true
     ctl wait 4
-    local furnace core chiller lava addon capacitor control
+    local furnace core chiller lava addon capacitor control plating motor
     furnace=$(block_name 8 100 0)
     core=$(block_name 8 101 0)
     chiller=$(block_name 12 100 0)
@@ -425,6 +445,8 @@ control_leg() {
     addon=$(block_name 5 100 0)
     capacitor=$(block_name 5 100 1)
     control=$(block_name 5 100 2)
+    plating=$(block_name 5 100 3)
+    motor=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:motor")] | length')
     [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
     [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
     [ "$chiller" = "minecraft:air" ] || fail "the control game holds $chiller, so the chiller id was known"
@@ -432,7 +454,9 @@ control_leg() {
     [ "$addon" = "minecraft:air" ] || fail "the control game holds $addon, so the speed addon id was known"
     [ "$capacitor" = "minecraft:air" ] || fail "the control game holds $capacitor, so the capacitor addon id was known"
     [ "$control" = "minecraft:air" ] || fail "the control game holds $control, so the control unit addon id was known"
-    echo "  without this package: no generator item, and the generator, furnace, core, chiller, lava generator, addon and control unit blocks all stayed $name"
+    [ "$plating" = "minecraft:air" ] || fail "the control game holds $plating, so the plating id was known"
+    [ "$motor" = 0 ] || fail "the control game holds $motor oritech:motor, so the component id was known"
+    echo "  without this package: no generator item and no motor, and the generator, furnace, core, chiller, lava generator, addon, control unit and plating blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -1581,6 +1605,71 @@ echo "  signal removed: the same addon let the bone finish in $RECIPE_TICKS tick
 ctl command "setblock 25 100 0 minecraft:air" >/dev/null
 ctl command "setblock 24 100 0 minecraft:air" >/dev/null
 
+echo "== AM: every carried recipe crafts in a real table, ingredients consumed =="
+# Slice 7 is data: items, three plating blocks, conventional tags and the jar's
+# own crafting recipes. `tools/craft_check.py` puts one ingredient in every cell
+# the pattern names, asserts the result's id and count, takes it and asserts each
+# ingredient's inventory count fell by exactly what the recipe used, and fills the
+# generator's pattern one nickel short as the differential: that grid must craft
+# nothing. It puts the player in survival for the craft and back in creative.
+ctl command "setblock 32 100 0 minecraft:crafting_table" >/dev/null
+ctl wait 6
+[ "$(block_name 32 100 0)" = "minecraft:crafting_table" ] || fail "the crafting table did not place"
+SELFTEST_CRAFT="${SELFTEST_CRAFT:-0}" python3 "$PORT/tools/craft_check.py" "$SOCK" "$CTL" 32 100 0 \
+    || fail "the carried recipes did not all craft"
+echo "  the crafting table's craft pass is above"
+ctl command "setblock 32 100 0 minecraft:air" >/dev/null
+ctl wait 4
+
+echo "== AN: raw silicon smelts into silicon in the powered furnace =="
+# The one cooking recipe this slice carries: the jar's `cookingtime: 60` at the
+# powered furnace's 0.5 speed is 30 ticks, 32 FE a tick = exactly 960 FE. A
+# recipe the table did not load would starve at 960 with the input still there.
+# A fresh controller at (28,100,0) with no addon slot filled, so the arithmetic
+# is the base one (phase AH leaves a speed addon on the first furnace).
+ctl command "setblock 28 100 0 $FURNACE" >/dev/null
+ctl command "setblock 28 101 0 minecraft:air" >/dev/null
+ctl wait 8
+ctl command "clear @s" >/dev/null
+ctl give "oritech:machine_core_$FURNACE_CORE_TIER" 1 >/dev/null
+ctl wait 3
+ctl select "oritech:machine_core_$FURNACE_CORE_TIER" >/dev/null
+ctl wait 3
+ctl command "execute in minecraft:overworld run tp @s 28.5 100 -2.5" >/dev/null
+ctl wait 6
+ctl look-at-block 28 100 0 north >/dev/null
+ctl wait 2
+echo "  core click: $(ctl interact 28 100 0 | jq -c '{ok, block: .block.block}')"
+ctl wait 8
+CORE_BLOCK=$(block_name 28 101 0)
+[ "$CORE_BLOCK" = "oritech:machine_core_$FURNACE_CORE_TIER" ] \
+    || fail "the core click left $CORE_BLOCK above the new controller"
+ctl command "clear @s" >/dev/null
+ctl wait 6
+ctl look-at-block 28 100 0 north >/dev/null
+ctl wait 2
+ctl interact 28 100 0 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 28 100 0)
+read_info "$line"
+expect ASSEMBLED yes
+feed 28 100 0 oritech:raw_silicon
+line=$(info 28 100 0)
+read_info "$line"
+expect INPUT "oritech:raw_silicon x1"
+expect OUT0 empty
+say "oritech energy 28 100 0 $SILICON_SPENT"
+ctl wait 45
+line=$(info 28 100 0)
+read_info "$line"
+expect PROGRESS 0
+expect INPUT empty
+expect ENERGY 0
+expect OUT0 "oritech:silicon x1"
+echo "  raw silicon smelted in exactly $SILICON_TICKS ticks for exactly $SILICON_SPENT FE: out0 $OUT0"
+ctl command "setblock 28 101 0 minecraft:air" >/dev/null
+ctl command "setblock 28 100 0 minecraft:air" >/dev/null
+
 echo "== W: every carried loot table rolls its own block =="
 # The carried `data/oritech/loot_table/blocks/*.json` are the jar's self-drop,
 # rewritten into 26.3's singular `condition`. Rolling each table directly asserts
@@ -1593,7 +1682,9 @@ for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" \
     oritech:machine_core_4 oritech:machine_core_5 oritech:machine_core_6 \
     oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" \
+    oritech:machine_plating_block oritech:iron_plating_block \
+    oritech:nickel_plating_block; do
     ctl command "loot give @s loot oritech:blocks/${block#oritech:}" >/dev/null
 done
 ctl wait 8
@@ -1601,7 +1692,9 @@ INV=$(ctl inventory)
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" \
     oritech:machine_core_1 oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" \
+    oritech:machine_plating_block oritech:iron_plating_block \
+    oritech:nickel_plating_block; do
     jq -e --arg item "$block" \
         '[.hotbar[], .main[] | select(.item == $item)] | length > 0' <<<"$INV" >/dev/null \
         || fail "loot table oritech:blocks/${block#oritech:} gave nothing: $(jq -c '{hotbar, main}' <<<"$INV")"
@@ -1616,4 +1709,4 @@ AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
 [ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
 echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, and every carried loot table rolled its own block"
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all seventeen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, and every carried loot table rolled its own block"

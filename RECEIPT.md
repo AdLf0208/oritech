@@ -1,11 +1,11 @@
-# Package receipt — oritech 0.2.8
+# Package receipt — oritech 0.2.9
 
 | field | value |
 |---|---|
-| version | `0.2.8` |
+| version | `0.2.9` |
 | file | `oritech.hmod` |
-| bytes | 162,377 |
-| sha256 | `2d5c36276718c5868c69d218ff5e0a5e9973462b36e9efe59ea108f31189f491` |
+| bytes | 195,548 |
+| sha256 | `df078ef68690cb78c92bbc4d66f53524a01a9ebe73b18a9dd948b6ce42b72aa8` |
 | source | this tag — the tree here is the source that produced the archive |
 | game | 26.3 |
 | horizon | `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` |
