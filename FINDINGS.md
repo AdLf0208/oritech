@@ -358,3 +358,44 @@ carried model, texture, lang and loot):
 - not ported: the addon's screen (`RedstoneAddonScreen`, `RedstoneAddonScreenHandler`), the two
   network payloads (`RedstoneAddonClientUpdate`/`ServerUpdate`) and the `POWERED` blockstate's
   `_on`/`_powered` models — no GUI and no per-state model in this port.
+
+## Slice 8: the Assembler (`oritech:assembler_block`)
+
+Read for behaviour only (the clone was shallow at the same tag `v1.2.13` /
+`4069b6dd14b05dfe0c80126618739b64054630ea`, deleted after these findings):
+
+- `common/src/main/java/rearth/oritech/block/entity/processing/AssemblerBlockEntity.java`
+- `common/src/main/java/rearth/oritech/block/blocks/processing/AssemblerBlock.java`
+- `common/src/main/java/rearth/oritech/block/base/entity/MachineBlockEntity.java`
+  (`serverTick`, `craftItem`, `canOutputRecipe`/`canAddToSlot`, `findLowestMatchingSlot`)
+- `common/src/main/java/rearth/oritech/init/recipes/OritechRecipe.java` (`matches` → `complexMatch`)
+- `common/src/main/java/rearth/oritech/util/MultiblockMachineController.java`
+  (`getNextMissingCore`, `initMultiblock`, `onCoreBroken`, `addMultiblockToNbt`)
+- `common/src/main/java/rearth/oritech/init/OritechConfig.java` (`assemblerData`)
+- the jar's `data/oritech/recipe/assembler/*.json` (57 files) and
+  `data/oritech/recipe/crafting/{assembler,assembleralt,alloy/adamant}.json`
+
+### Values carried into the port
+
+| Value | Source | Used for |
+|---|---|---|
+| `ASSEMBLER_CAPACITY = 50_000` | `assemblerData.energyCapacity` | the buffer |
+| `ASSEMBLER_MAX_INSERT = 1_024` | `assemblerData.maxEnergyInsertion` (`128 * 8`) | the most one insert moves |
+| `ASSEMBLER_ENERGY_PER_TICK = 128` | `assemblerData.energyPerTick` | the usage formula |
+| four inputs, one output | `InventorySlotAssignment(0, 4, 4, 1)`, `getInventorySize` 5 | the container |
+| cores at (0,0,1), (0,1,0), (0,1,1) | `getCorePositions` | `ASSEMBLER_CORE_OFFSETS` |
+| addon slots (0,0,-1), (0,0,2), (1,0,0) | `getAddonSlots` | the first three-slot machine |
+| a recipe matches as a multiset | `OritechRecipe.complexMatch` | `runtime::craft_plan` |
+| one item per ingredient, rotating start | `craftItem` `startOffset` | the same `craft_plan` |
+| an empty slot wins the click | `findLowestMatchingSlot` | `runtime::insert_slot` |
+| quality = the average core tier | `initMultiblock`'s `sumCoreQuality / size` | `Assembly::quality` |
+
+### Ported, blocked, not ported
+
+- ported: the block, its three-core assembly, the `oritech:assembler` recipe type and the five carried
+  recipes, the four-slot click, the one-output rule, the addon scan on three slots, the readout.
+- not ported: the machine's screen (`AssemblerScreen`/`AssemblerScreenHandler`), the `ENCHANTED_HIT`
+  particles in `useEnergy`, the `SETUP`/`WORKING` GeckoLib animations, the `facing`-rotated core and
+  addon offsets (no `facing` state), the `ADDON_USED` state — the same gaps as slices 1–7.
+- the other 52 `oritech:assembler` files: plastic plates (13), `compat/geore` (29), an unported result
+  family (7), `#c:fuels/bio` (2), `#c:leathers` (1) — `notes.md` → *Slice 8* → *The recipe set*.

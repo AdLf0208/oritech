@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Craft every recipe slice 7 carries in a real crafting table.
+"""Craft every carried crafting recipe (slices 7 and 8) in a real table.
 
 Called by `tools/e2e.sh` with the open game's control socket and the position of
 a crafting table the phase placed. The harness numbers a crafting table's grid
@@ -101,6 +101,21 @@ CORE_3 = {
     "oritech:nickel_ingot": [100, 101, 102, 103, 105, 106, 107, 108],
     "minecraft:redstone": [104],
 }
+# Slice 8: `crafting/alloy/adamant` ("aa ", "bb ") and the assembler's own
+# `crafting/assembleralt` ("fff", "mcm", "sbs"). The alt swaps the jar's first
+# recipe's blast furnace for any `#oritech:plating`, so it exercises this
+# package's own tag file.
+ADAMANT = {
+    "oritech:nickel_ingot": [100, 101],
+    "minecraft:diamond": [103, 104],
+}
+ASSEMBLER = {
+    "minecraft:copper_ingot": [100, 101, 102],
+    "minecraft:crafter": [103, 105],
+    "oritech:adamant_ingot": [104],
+    "oritech:motor": [106, 108],
+    "oritech:machine_plating_block": [107],
+}
 CONTROL_UNIT = {
     "minecraft:redstone": [100, 101, 102, 103, 105],
     "minecraft:repeater": [106, 108],
@@ -143,6 +158,10 @@ CASES = [
      "want": ("oritech:machine_core_3", 1)},
     {"label": "the Control Unit Addon: 5 redstone + 2 repeaters + 1 comparator + 1 plating",
      "place": CONTROL_UNIT, "want": ("oritech:machine_redstone_addon", 1)},
+    {"label": "adamant ingot: 2 nickel + 2 diamonds", "place": ADAMANT,
+     "want": ("oritech:adamant_ingot", 1)},
+    {"label": "the Assembler: 3 copper + 2 crafters + 1 adamant + 2 motors + 1 plating",
+     "place": ASSEMBLER, "want": ("oritech:assembler_block", 1)},
 ]
 
 # The generator's grid one nickel short: a stick where the fifth nickel belongs.

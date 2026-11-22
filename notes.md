@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes; slice 8: the Assembler)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -19,8 +19,9 @@ Furnace multiblock and the seven machine cores), slice 3 (the Industrial
 Chiller, the mod's first fluid machine), slice 4 (the Lava Generator, a
 fluid-burning generator), slice 5 (the machine addon system: the six default
 addon blocks and the scan that applies them), slice 6 (the Control Unit
-Addon and the per-machine redstone gate) and slice 7 (the material and
-component chain and the machines' own crafting recipes) are implemented and
+Addon and the per-machine redstone gate), slice 7 (the material and
+component chain and the machines' own crafting recipes) and slice 8 (the
+Assembler, the mod's four-input machine with three cores) are implemented and
 verified in game. The gap list below is the rest of the mod.
 
 **Why this mod now:** it is the rank-0 `content`/`deep` core mod
@@ -1035,17 +1036,27 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `oritech:cooler/snow` | blocked(fluid-whitelist: oritech:still_steam) | U measures the refusal (`accepted 0`); the fluid does not exist in this pack |
 | `oritech:lavagen/lava` | tested | X (100 mB through the tank), Y (a 120-tick burn: exactly 7,680 FE at 64 a tick, the tank emptied at load) |
 | `oritech:lavagen/sheolfire` | blocked(fluid-whitelist: oritech:still_sheol_fire) | Y1 measures the refusal (`accepted 0`); the fluid does not exist in this pack |
+| `oritech:assembler_block` | tested | AO (no core, full grid, nothing), AP (three cores, 48 ticks, 6,144 FE, `oritech:motor x2`), AQ (exactly 6,144 spent), AR (one coil short: nothing, no FE), AS (a stack of two steel pays one), AT; W its loot table; AM its own craft |
+| `oritech:adamant_ingot` | tested | AM: 2 nickel + 2 diamonds → 1, ingredients consumed |
+| `oritech:assembler/motor` | tested | AP (48 ticks, exactly 6,144 FE, two motors, four slots emptied); AM its crafting recipe |
+| `oritech:assembler/magnet` | tested | AT (48 ticks, exactly 6,144 FE, six coils) |
+| `oritech:assembler/blazerod` | tested | AT (96 ticks, exactly 12,288 FE, one blaze rod) |
+| `oritech:assembler/fireball` | tested | AT (96 ticks, exactly 12,288 FE, four fire charges) |
+| `oritech:assembler/shroomlight` | tested | AT (96 ticks, exactly 12,288 FE, one shroomlight) |
+| `oritech:crafting/assembleralt` | tested | AM: the assembler block crafts in a real table |
+| `oritech:crafting/alloy/adamant` | tested | AM |
+| `recipe:oritech:assembler` | not ported | the other 52 of the jar's 57: plastic plates (13), `compat/geore` (29), an unported result family (7), `#c:fuels/bio` (2) and `#c:leathers` (1) — one reason each in *Slice 8* → *The recipe set*; the five that resolve are the rows above |
 | `recipe:oritech:pulverizer` | not ported | the other 117 need Oritech dusts/clumps/gems this port does not carry (gap 6) |
 | `recipe:oritech:cooler` | not ported | `compat/pneumaticcraft/plastic` needs PneumaticCraft (gap 4) and `snow` is blocked above |
 | `recipe:oritech:lava_generator` | not ported | `sheolfire` is blocked above; `lava` is carried and tested |
-| `recipe:*` | not ported | assembler, centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting/crafting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
+| `recipe:*` | not ported | centrifuge, foundry, refinery, atomic forge, grinder, bio/fuel generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
 | `tag:block` | not ported | 14 block tags (`frame_support`, `laser_accelerated`, …) belong to families outside this slice |
 | `tag:item` | not ported | 21 item tags (`biomatter`, `feeder_blacklist`, …) — same |
 | `tag:entity_type` | not ported | `spawner_blacklist` — the spawner family is not ported |
 | `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
 | `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
 | `command` | tested | `/oritech info` (every phase), `/oritech energy` (D, H, R, S, T), `/oritech fluid` (P, T, U) |
-| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (assembler, atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), and the Control Unit Addon's input gate is `tested` in slice 6 |
+| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), and the Control Unit Addon's input gate is `tested` in slice 6 |
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
 mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
@@ -1841,7 +1852,7 @@ with the input still in the slot.
 | `oritech:machine_core_2` | tested | I, M; **AM** its craft |
 | `oritech:machine_core_3` | tested | Q, M; **AM** its craft by the alt recipe (nickel + redstone) |
 | `oritech:machine_redstone_addon` | tested | AK/AL (the gate); **AM** its craft: 5 redstone + 2 repeaters + a comparator + plating |
-| `recipe:minecraft:crafting_shaped` | not ported | the jar's other ~170 shaped files name items of families this port does not carry (the recipe table above); the 17 carried ones are the rows below |
+| `recipe:minecraft:crafting_shaped` | not ported | the jar's other ~170 shaped files name items of families this port does not carry (the recipe table above); the 19 carried ones are the rows below |
 | `recipe:minecraft:smelting` | not ported | `nickel_ingot_from_smelting_*`, `platinum_ingot_from_smelting_*`, `steel_ingot_from_smelting_steel_dust` … all take the ore chain's products |
 | `oritech:crafting/alloy/steel` | tested | AM |
 | `oritech:crafting/alloy/electrum` | tested | AM |
@@ -1880,33 +1891,281 @@ is recorded under *Deviations* instead.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
+
+## Slice 8 — the Assembler (`oritech:assembler_block`), the mod's four-input machine (0.2.10, 2026-11-22)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **13**,
+verbatim: "Not carried: the powered furnace (a multiblock machine that needs its core assembled), the
+assembler, atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the
+augment stations, the jetpack and equipment, the resource-node worldgen and the ores. All later
+slices." The 0.2.9 report's `## Next slice` named it as the family slice 7's component chain made
+workable, and it is the last delivered-shape machine whose recipe type takes **four** order-independent
+ingredients.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), delivered in the
+**machines** shape (a block entity, a declared container and FE buffer, one custom recipe type, a tick,
+a three-core multiblock). No renderer, no GUI, no network, no dimension.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+| Value | Upstream | This port |
+|---|---|---|
+| capacity 50,000 FE | `OritechConfig.processingMachines.assemblerData` (`init/OritechConfig.java:356`) | `ASSEMBLER_CAPACITY` |
+| insert 1,024 FE/t (`128 * 8`) | same | `ASSEMBLER_MAX_INSERT` |
+| 128 FE a working tick | same `energyPerTick`; `calculateEnergyUsage` = 128 × 1 × (1/1) | `assembler_energy_usage()` |
+| four inputs, one output, inventory 5 | `AssemblerBlockEntity.getSlotAssignments` → `InventorySlotAssignment(0, 4, 4, 1)`; `getInventorySize` | container: slots 0–3 in, 4 out |
+| three cores at (0,0,1), (0,1,0), (0,1,1) | `AssemblerBlockEntity.getCorePositions` | `ASSEMBLER_CORE_OFFSETS` |
+| three addon slots (0,0,-1), (0,0,2), (1,0,0) | `getAddonSlots` | `addon_slots` → the first machine with three |
+| order-independent four-item match | `OritechRecipe.complexMatch` | `runtime::craft_plan` over the engine's `Ingredient::test` matrix |
+| one item per ingredient, rotating start | `MachineBlockEntity.craftItem` | the same `craft_plan`, consumed one per named slot |
+| the result must fit the one output slot | `canOutputRecipe` / `canAddToSlot` | `output_fits` |
+| `time` ticks a craft | `checkCraftingFinished` = `progress >= time * speed` | `processing_ticks` |
+| quality = the cores' average tier | `MultiblockMachineController.initMultiblock` | `Assembly::quality`, printed as a whole number |
+
+### The recipe set — measured, not assumed
+
+The brief named `assembler/motor`, `assembler/magnet`, `assembler/plating`, `platingiron` and
+`platingnickel` as the five that resolve. **Three of those five do not**: the three `plating*` files
+each take `#c:plates/plastic`, and this package has no plastic sheet and no plastic-plate tag — plastic
+is the refinery → oil chain (`Slice 7` → *Deviations* 6). A recipe naming a tag with no values is
+dropped at load, i.e. dead data. The artefact wins, so the carried set is the five files that really
+resolve, and the brief's other three are recorded below among the 52:
+
+| Recipe (carried) | Ingredients | Result | `time` |
+|---|---|---|---|
+| `assembler/motor` | `#c:ingots/nickel`, `#c:ingots/steel`, 2 × `oritech:magnetic_coil` | `oritech:motor` ×2 | 48 |
+| `assembler/magnet` | `#c:ingots/steel`, 2 × `#c:ingots/nickel`, `#c:ingots/copper` | `oritech:magnetic_coil` ×6 | 48 |
+| `assembler/blazerod` | 4 × `minecraft:blaze_powder` | `minecraft:blaze_rod` ×1 | 96 |
+| `assembler/fireball` | `minecraft:gunpowder`, `minecraft:blaze_powder`, 2 × `#minecraft:coals` | `minecraft:fire_charge` ×4 | 96 |
+| `assembler/shroomlight` | `#minecraft:logs`, 3 × `minecraft:glowstone` | `minecraft:shroomlight` ×1 | 96 |
+
+The rule is slice 7's: a recipe is carried only when **its result and every ingredient resolve** — a
+`minecraft:` id the engine has, an item this package declares, or a tag this package ships with
+resolvable values — and none of its ingredients is an alternative list. Applied to all **57**
+`data/oritech/recipe/assembler/*.json` it leaves these five; the other **52** are refused here, one
+reason per family:
+
+| Left, and why | Count | Files |
+|---|---:|---|
+| `#c:plates/plastic` — the refinery/oil chain is not carried (this includes the brief's `plating`, `platingiron`, `platingnickel`) | 13 | `plating{,,iron,nickel,carbon}`, `battery`, `batterybetter`, `processingunit`, `plutoniumpellet{basic,better,ult}`, `uranpellet{basic,better,ult}` |
+| another mod's items and results (`geore:` shards, plus `oritech:enderic_compound` / `overcharged_crystal`) | 29 | `compat/geore/budding*.json` |
+| the result belongs to a family this port does not carry | 7 | `amethystbud` (`budding_amethyst` is vanilla, but its two ingredients are the crystal chain), `claybeads`, `enderlens`, `fluxgate`, `ionthruster`, `reactorplatingalt`, `superconductor` |
+| `#c:fuels/bio` — the biofuel chain (bio generator, composter) is not carried | 2 | `slime`, `solidbiofuel` |
+| `#c:leathers` — a conventional tag this package does not ship and nothing else here uses | 1 | `book` |
+
+Also carried, so the machine is obtainable without `/give` and its one non-plating-only ingredient has
+a consumer: **`oritech:adamant_ingot`** (item model, texture, 26.3 definition and declaration) with the
+jar's `crafting/alloy/adamant` (2 nickel + 2 diamond), and the assembler's own
+`crafting/assembleralt` (3 copper + 2 crafters + 1 adamant + 2 motors + any `#oritech:plating`). Slice
+7 left adamant out because nothing consumed it; the assembler does.
+
+### What was added
+
+- **`src/runtime.rs`** (pure, unit-tested): `ASSEMBLER_*` (capacity, insert, 128 FE a tick, four
+  inputs, one output, three core offsets), `assembler_energy_usage`, `assembler_ticks`, `craft_plan`
+  (the `complexMatch` + `craftItem` walk, with the rotating start so two stacks of one item drain
+  evenly), `insert_slot` (`findLowestMatchingSlot`: the first empty slot, else the lowest matching
+  stack), `AssemblerRecipe::parse` / `AssemblerError`, `Assembler` (on the shared `advance` step, so it
+  cannot drift from the four machines already there) and the assembler's entry in `addon_slots`. Six
+  new tests.
+- **`src/support.rs`**: `ASSEMBLER`/`ASSEMBLER_TYPE`/`ASSEMBLER_RECIPE`, the container arm (five slots,
+  four inputs, one output), the buffer arm (50,000 / 1,024 / 0), `ASSEMBLER_PROFILE`, `AssemblerSaved` +
+  `assembler_state`/`store_assembler`, `tick_assembler` (assembly gate, recipe plan, output room,
+  consume-then-grant, the chamber loop), the assembler recipe cache (`with_assembler_recipes`, all four
+  ingredients resolved per file), `assembler_plan`, `assembler_accepts`, `assembler_input_slot`,
+  `finish_assembler`, the readout `assembler_line`, and the assembler's arms in `info_line`,
+  `set_energy` and `right_click`. **The multiblock facts became a list**: `Assembly.core` is now
+  `Assembly.cores: Vec<[i32;3]>` (upstream's `connectedCores` is a list), `recheck_cores` disassembles
+  when any core is gone, `try_assemble` requires every position, `place_core` fills the next missing
+  one, and `core_view` prints one core as before and several joined with `+`. Three new tests.
+- **`src/lib.rs`**: `AssemblerPart`, the sixth block-entity type, the `oritech:assembler` recipe type
+  and its raw serializer.
+- **Content**: `oritech:assembler_block` (authored single-variant blockstate and cube model, the jar's
+  `models/assembler_block.png`, 26.3 item definition, block declaration copying `IRON_BLOCK` with
+  `noOcclusion`, loot table, lang `Assembler`, machines tab, pickaxe/stone-tool tags),
+  `oritech:adamant_ingot` and the seven recipes above. `assets/` + `data/` are now **248 files**
+  (`tools/carry_content.py --check` → `248 files, 0 differ`).
+- **`tools/parse_info.py`**: the assembler's line and its `in0`–`in3` fields (`INPUT` aliases `in0`, so
+  `machine_holds` works on it). **`tools/e2e.sh`**: phases AO–AT, the two new ids in the `CONTROL=1`
+  list and the loot phase, `SELFTEST_ASSEMBLER=1`. **`tools/craft_check.py`**: the adamant ingot and the
+  assembler's own craft. **`tools/slice8-glue-counterfactual.py`** is the glue's fail-capability.
+  `PLAN-slice8.md` is the slice's plan.
+
+### Deviations (slice 8)
+
+1. **The assembler's three cores are a list here, and the earlier machines keep their one.** Upstream's
+   `connectedCores` is a `List<BlockPos>`; the port stored one offset because every machine before the
+   assembler had one. `Assembly.cores` is the general shape now, the furnace/chiller/lava generator save
+   and read a one-entry list, and their readout lines are byte-identical (`core oritech:machine_core_2
+   quality 2`).
+2. **The readout's quality for several cores is the whole-number average.** Upstream keeps a float
+   `coreQuality`; the port prints an integer (one core: its own tier, exactly as before; three: the
+   average rounded down). The field's semantics are upstream's.
+3. **`book.json` is not carried** — `#c:leathers` is a conventional tag this package does not ship and
+   nothing else here names, so shipping the tag for one recipe would be a declaration without a
+   consumer. Recorded, not silently dropped.
+4. **No GUI, no `lit` state, no GeckoLib render, no `ADDON_USED`** — the same recorded gaps as slices
+   1–7. The assembler's three addon slots are scanned like every other machine's, and an addon there
+   applies (unit-tested: 231 FE a tick and 33 ticks with a speed addon), but the game leg runs the base
+   path only.
+5. **The click is the harness's route into the four slots.** Upstream opens the machine's screen; here a
+   right click with an ingredient puts it in `findLowestMatchingSlot`'s slot and refuses an item no
+   loaded recipe names. `ctl` cannot reach a mod block entity's container (the 0.2.1 note), so the
+   readout is the assertion.
+
+### Verification (0.2.10)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline`, the new bodies `todo!()` | **98 passed, 6 failed** — every failure `panicked at src/runtime.rs:…: not yet implemented` (`slice8-test-red.log`) |
+| runtime green | same | **104 passed**, 0 failed |
+| glue counterfactual | five targeted mutations of the declarations/state/line/core table, then `cargo test --offline` | **104 passed, 4 failed**, one per pinned fact (the third glue test fails under two mutations); the file restored byte-identically (`slice8-glue-red-counterfactual.log`, `tools/slice8-glue-counterfactual.py`) |
+| tests (green) | `cargo test --offline` | **108 passed**, 0 failed (`slice8-test-green.log` = `sdk-test.log`) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`slice8-clippy.log` = `sdk-clippy.log`) |
+| `runtime.rs` slice-1 part | `head -333 src/runtime.rs \| sha256sum` before/after `rustfmt` | `74ee2dbc…f3b4` both times |
+| package | `cargo horizon-mod build` twice, the artifact deleted between | **212,959 B**, sha256 `8c39bc526b3dbb0457d4c4f3ea71126214c3267acc51e2f328990a82b107bb6e`, `cmp` identical, **258 entries incl. `Cargo.lock`** (`slice8-build.log`, `slice8-build-second.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.10 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `212959 bytes … unsigned`, exit 0 (`sdk-check.log`) |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `… --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** |
+| content carry | `python3 tools/carry_content.py --check` | `248 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.10 ⇒ a real recompile) | `Compiling the mods against the prebuilt game`; `native-0a875da-d3f24692b8d1`; `strings liboritech.so` shows `Assembler at `, `oritech:assembler` and `is not an ingredient of an assembling recipe`; the export carries all five `data/oritech/recipe/assembler/` files |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice8.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package there is no generator item, no motor, no **adamant ingot**, and the generator, furnace, core, chiller, lava generator, addon, control unit, plating and **assembler** ids all stay `minecraft:air` (`e2e-slice8-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice8-control.log`) |
+| fail-capability, slice 1 | `SELFTEST=1` | **EXIT:1** — `89 ticks spent 2848 FE, expected 2880` (`e2e-slice8-selftest.log`) |
+| fail-capability, the assembler | `SELFTEST_ASSEMBLER=1` (the output count flipped to 3) | **EXIT:1** — `OUT0 is 'oritech:motor x2', expected 'oritech:motor x3'` (`e2e-slice8-selftest-assembler.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | 37 logs, 37 ok, 0 bad |
+| coverage | `check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+The delivered archive was rebuilt after `README.md` gained this slice's section: the archive the e2e ran
+against (`19c28d50…`, 212,651 B) and the delivered one (`8c39bc52…`, 212,959 B) hold the **same 258
+entries** and differ only in the packed `README.md` (`AGENTS.md`, `notes.md` and `tools/` are not packed
+at all). The game compiles `src/`, `assets/`, `data/` and `horizon-mod.toml` from the tree and never
+reads the archive, so the in-game evidence is the delivered code and content — the same note slice 6
+recorded.
+
+The assembler legs are fail-capable six ways: the **assembly gate** (a full grid and 1,280 FE with no
+core do nothing), the **ten-tick arithmetic** (1,280 FE must be exactly ten of its ticks), the
+**exact completion** (48 ticks must leave exactly 0 of 6,144), the **leftover** figure (a second craft
+primed with 1,280 more spends exactly 6,144 and keeps 1,280), the **incomplete grid** (one coil short:
+0 progress, `recipe none`, 10,000 FE untouched — the differential), and `SELFTEST_ASSEMBLER=1`. AS is a
+within-scenario differential for the consumption rule (a slot of two steel pays one and keeps one), and
+`CONTROL=1` proves the ids and the items are this package's.
+
+### In-game transcript (quoted from `e2e-slice8.log`)
+
+```
+  info(0,100,12): Assembler at [0, 100, 12]: 0/50000 FE, assembled no core empty quality 0, progress 0 recipe none, in0 empty, in1 empty, in2 empty, in3 empty, out0 empty, addons none, t=9561
+  four feeds, four slots: oritech:nickel_ingot x1, oritech:steel_ingot x1, oritech:magnetic_coil x1, oritech:magnetic_coil x1
+  unassembled, with a full grid and 1280 FE: progress 0, recipe none, nothing made
+  assemble click: {"ok":true,"block":"oritech:assembler_block"}
+  info(0,100,12): Assembler at [0, 100, 12]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 10 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, in1 oritech:steel_ingot x1, in2 oritech:magnetic_coil x1, in3 oritech:magnetic_coil x1, out0 empty, addons none, t=10084
+  assembled with cores oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 (average quality 2): 1,280 FE advanced the craft exactly 10 of 48 ticks
+  info(0,100,12): Assembler at [0, 100, 12]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe none, in0 empty, in1 empty, in2 empty, in3 empty, out0 oritech:motor x2, addons none, t=10214
+  one motor craft: oritech:motor x2 from four items in 48 ticks for exactly 6144 FE, every input slot emptied
+  a second craft added two motors and spent exactly 6144 FE: buffer 1280, out0 oritech:motor x4
+  three of four ingredients: progress 0, recipe none, buffer still 10000 FE, out0 oritech:motor x4
+  five items in four slots: oritech:motor x2, the steel slot kept its spare (oritech:steel_ingot x1), and the craft cost exactly 6144 FE
+  oritech:magnetic_coil x6 in exactly 48 ticks for exactly 6144 FE
+  minecraft:blaze_rod x1 in exactly 96 ticks for exactly 12288 FE
+  minecraft:fire_charge x4 in exactly 96 ticks for exactly 12288 FE
+  minecraft:shroomlight x1 in exactly 96 ticks for exactly 12288 FE
+```
+
+The motor arithmetic: the jar's `time: 48` at its own `energyPerTick: 128` is `48 × 128 = 6,144 FE`;
+the mid-read lands ten ticks in with 0 FE left of the 1,280 primed, and the remaining 38 ticks cost
+`38 × 128 = 4,864`, so the whole craft is 6,144. The other four recipes are 48 or 96 ticks at the same
+rate: 6,144 / 12,288 FE, each asserted exactly, with every input slot emptied.
+
+### Traps this slice hit (new to this port; the next one must know)
+
+1. **An empty input slot wins over a matching stack.** `findLowestMatchingSlot` returns the first empty
+   slot *before* it considers a partial stack of the same item, so four feeds of four items fill four
+   slots and a second steel only merges when no slot is empty. The counterfactual leg (AS) was written
+   from that rule after the first version asserted the merge into an empty grid and failed with
+   `IN1 is 'oritech:steel_ingot x1'` — the assertion doing its job on the scenario, not the port.
+2. **A crafting recipe's pattern is the authority, not its ingredient list.** The assembler's own craft
+   was first written with three plating blocks because the `key` names `#oritech:plating`; the pattern
+   `sbs` puts **two motors** in the corners and one plating in the middle, and the in-game craft
+   refused the grid (`{"item": null}`) while every other case passed.
+3. **`processing_ticks` rounds the f32's 2/3 up.** With a speed addon a 48-tick recipe becomes **33**
+   ticks, not 32 (the 100-tick recipes round to 67, which hides it). The unit test pins 33.
+
+### Changelog for 0.2.10 (append to the retained update PR, do not rewrite 0.2.9)
+
+> **0.2.10 — the Assembler.** The mod's four-input machine: `oritech:assembler_block`, a controller
+> plus **three** cores (east, above, both), a **50,000 FE** buffer taking **1,024** an insert and
+> spending **128 FE a tick**, and the `oritech:assembler` recipe type — **five** of the jar's 57 files
+> carried, the 52 that name plastic plates, `geore` shards, an unported result family, `#c:fuels/bio`
+> or `#c:leathers` recorded with one reason each. One nickel + one steel + two coils become **two
+> motors in 48 ticks for exactly 6,144 FE**; a slot holding a spare pays one item per ingredient and
+> keeps the rest; a missing ingredient makes nothing and spends nothing. The block is craftable at a
+> table (3 copper + 2 crafters + adamant + 2 motors + any plating), with **adamant** (2 nickel + 2
+> diamond) carried as its one new item. The multiblock facts became a list (`Assembly.cores`), so the
+> furnace/chiller/lava generator save and read a one-entry list and print the same lines as before.
+> 19 crafting recipes now craft in a real table (the 17 from 0.2.9, adamant and the assembler).
+> Package: 258 entries incl. `Cargo.lock`, **212,959 B**, sha256
+> `8c39bc526b3dbb0457d4c4f3ea71126214c3267acc51e2f328990a82b107bb6e`; `check` and both `fits` exit 0;
+> 108 tests; in game `PASS` + `EXIT:0`, control `EXIT:1`, `SELFTEST_ASSEMBLER=1` `EXIT:1`.
+
+### What slice 8 covered, and by which phase
+
+| Family | Status | Evidence |
+|---|---|---|
+| `oritech:assembler_block` | tested | AO (no core, full grid, nothing), AP (three cores, 48 ticks, 6,144 FE, `oritech:motor x2`), AQ (exactly 6,144 spent, 1,280 kept), AR (one coil short: nothing, no FE), AS (a stack of two steel pays one), AT (the four other recipes); W its loot table |
+| `oritech:adamant_ingot` | tested | AM: 2 nickel + 2 diamonds → 1, ingredients consumed; the assembler's own craft takes one |
+| `oritech:motor` | tested | AM (its crafting recipe), AP/AQ/AS (the assembler's `motor` recipe makes two), AT |
+| `oritech:magnetic_coil` | tested | AM (craft), AT (`assembler/magnet` makes six) |
+| `oritech:assembler/motor` | tested | AP (48 ticks, exactly 6,144 FE, two motors, four slots emptied) |
+| `oritech:assembler/magnet` | tested | AT (48 ticks, exactly 6,144 FE, six coils) |
+| `oritech:assembler/blazerod` | tested | AT (96 ticks, exactly 12,288 FE, one blaze rod) |
+| `oritech:assembler/fireball` | tested | AT (96 ticks, exactly 12,288 FE, four fire charges) |
+| `oritech:assembler/shroomlight` | tested | AT (96 ticks, exactly 12,288 FE, one shroomlight) |
+| `oritech:crafting/assembleralt` | tested | AM: the assembler block crafts in a real table |
+| `oritech:crafting/alloy/adamant` | tested | AM |
+| `multiblock` | tested | AP: three cores at (0,0,1), (0,1,0), (0,1,1), one empty-hand click, `assembled yes core a+b+c quality 2` |
+| `block_entity` | tested | the saved compound round-trip (unit) and the readout after every feed |
+| `recipe:oritech:assembler` | not ported | the other 52 of the jar's 57 (see *The recipe set* above); the five that resolve are tested above |
+| `*` | not ported | the remaining multiblocks (atomic forge, foundry, refinery, centrifuge, the accelerator ring, the reactor), the ore-processing chain and its dusts, the special addons, the augment stations, the jetpack, the pipes/network and the ores. Named one by one in the gap lists above |
+
+`## Upstream defects fixed` (slice 8): none found. The three `plating*` recipes' plastic plate is a
+content dependency of a family this port does not carry, not a defect; the absent `c:leathers` tag is
+recorded as a gap.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
 ## Next slice
 
-The assembler (`oritech:assembler_block`) is now **workable**, and it is the family this slice was the
-prerequisite for. Slice 7 gave the package every component its recipe type takes — `oritech:motor`,
-`oritech:magnetic_coil`, `oritech:machine_plating_block`/`iron`/`nickel`, and the ingots their own recipes
-consume — so the assembler's recipe family can be carried **without dead data** for the first time (the
-0.2.8 report's reason for deferring it was exactly that the 57 `oritech:assembler` files take components
-this package did not declare).
+The **centrifuge** (`oritech:centrifuge_block`) is the next family the port's own gaps name, and it is
+the one the assembler slice left half-open: **13 of the 52 refused assembler recipes** wait on
+`#c:plates/plastic`, and the plastic chain itself starts at the centrifuge's **carbon fibre**, which is
+also what `crafting/core3`, `crafting/carbon` and the Auxiliary Processing Chamber's own recipe need.
 
-- **The family**: the `oritech:assembler` machine block, its block entity and its recipe type
-  (`oritech:assembler`: `ingredients` × up to 4, `results`, `time`, the jar's `assembler/*.json`), and
-  the subset of its 57 recipes whose ingredients all resolve — from the jar's files, `assembler/motor`
-  (2 motors from nickel + steel + 2 coils), `assembler/magnet` (6 coils), `assembler/plating`,
-  `platingiron`, `platingnickel`, `battery` (needs `c:plates/plastic`: **not** carried) — so the
-  carried set is the four that pass the slice-7 rule and the rest are recorded, one reason each.
-- **Why it fits the tier**: the machine shape this port already has four times over (a block entity, a
-  declared container and FE buffer, one custom recipe type, a tick); `horizon/docs/modpacks.md`'s
-  `machines` tier, no renderer, no GUI.
-- **The in-game assertion**: place the assembler, prime it with exactly the motor recipe's cost, feed
-  one nickel + two steel + two coils through its four input slots, tick to completion, and assert
-  **`out0` is `oritech:motor x2`**, the buffer fell by exactly `time × energyPerTick`, and the input
-  slots emptied; the differential is the same grid with a coil missing (no result, no FE spent). The
-  figure comes from the jar: `OritechConfig.processingMachines.assemblerData` and the recipe's
-  `time: 48`. `SELFTEST_ASSEMBLER=1` flips the output count.
-- **Also still open, in order**: the **centrifuge** (93 recipes; unlocks carbon fibre → carbon plating,
-  the metal girder and the burst addon), the **foundry** (29) and **refinery** (22) (the plastic chain →
-  six addon recipes), the **grinder** (143) with the ore-processing dusts, the **atomic forge** (23) and
-  the **deep drill/resource nodes**, the **augment stations and the jetpack**, and the **ores**
-  themselves — `blocked(configured-feature-not-registered)` at this pin, to be re-checked at every new
-  pin before any of the ore-fed families is scheduled.
+- **The family**: `oritech:centrifuge_block` and its recipe type — `oritech:centrifuge` (93 files, an
+  item input plus a **fluid** input, the shared `recipeInputMatchesTank` rule slice 3 already
+  implements) and `oritech:centrifuge_fluid` (49 files, fluid in and fluid out; it needs the mod's own
+  fluids, so it is scheduled only if the pin can declare them). From the jar,
+  `centrifuge/carbonfibre` and the ore-byproduct recipes whose inputs this package can already make
+  are the ones to carry.
+- **Why it fits the tier**: the same machine shape as the assembler and the chiller — a block entity, a
+  declared container, a declared FE buffer and (for the fluid half) a declared tank, one custom recipe
+  type, a tick. No renderer, no GUI.
+- **The in-game assertion**: place the centrifuge, assemble it with its cores, feed one carried
+  recipe's input, and prime it with **exactly `time × energyPerTick`** (read both from the jar's file
+  and `OritechConfig.processingMachines.centrifugeData` first — do not guess), tick to completion,
+  assert the output id and count, that the buffer fell by exactly that figure and the input slot
+  emptied; the differential is the same grid with a wrong-ratio input (no result, no FE spent), and
+  `SELFTEST_CENTRIFUGE=1` flips the output count. The fluid half's assertion is a tank holding exactly
+  the recipe's millibuckets, filled through `/oritech fluid`.
+- **Also still open, in order**: the **foundry** (29) and **refinery** (22) (the plastic chain → six
+  addon recipes and the 13 plastic assembler recipes), the **grinder** (143) with the ore-processing
+  dusts, the **atomic forge** (23), the **deep drill/resource nodes**, the **augment stations and the
+  jetpack**, the **special addons** (the control unit's four comparator modes, fluid, proxy, extender,
+  combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), and the **ores** themselves —
+  `blocked(configured-feature-not-registered)` at this pin, to be re-checked at every new pin before
+  any of the ore-fed families is scheduled.

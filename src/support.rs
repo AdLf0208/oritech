@@ -18,17 +18,19 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    ADDON_BLOCKS, ADDON_MODE, Addons, Burst, COOLER_CAPACITY, COOLER_CORE_OFFSET,
-    COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler, CoolerRecipe,
-    EnergyTarget, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED,
-    FluidInput, Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY,
-    LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe,
-    LavaGenerator, MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
+    ADDON_BLOCKS, ADDON_MODE, ASSEMBLER_CAPACITY, ASSEMBLER_CORE_OFFSETS,
+    ASSEMBLER_ENERGY_PER_TICK, ASSEMBLER_INPUTS, ASSEMBLER_MAX_INSERT, ASSEMBLER_SLOTS, Addons,
+    Assembler, AssemblerRecipe, Burst, COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK,
+    COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler, CoolerRecipe, EnergyTarget,
+    FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput,
+    Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
+    LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator,
+    MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
     PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, Work, addon_names,
     addon_settings, addon_slots, after_consuming, after_draining, can_output, clamp_energy,
-    cooler_output_fits, core_quality, efficiency_multiplier, energy_usage, generator_burn_ticks,
-    generator_output, is_fuel, lava_output_targets, output_fits, processing_ticks,
-    redstone_disables, speed_multiplier, tank_matches,
+    cooler_output_fits, core_quality, craft_plan, efficiency_multiplier, energy_usage,
+    generator_burn_ticks, generator_output, insert_slot, is_fuel, lava_output_targets, output_fits,
+    processing_ticks, redstone_disables, speed_multiplier, tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
@@ -37,6 +39,10 @@ pub(crate) const FURNACE: &str = "oritech:powered_furnace_block";
 pub(crate) const COOLER: &str = "oritech:cooler_block";
 /// The Lava Generator (`BlockContent.LAVA_GENERATOR_BLOCK`) — slice 4.
 pub(crate) const LAVA: &str = "oritech:lava_generator_block";
+/// The Assembler (`BlockContent.ASSEMBLER_BLOCK`) — slice 8.
+pub(crate) const ASSEMBLER: &str = "oritech:assembler_block";
+/// The recipe type the jar's `data/oritech/recipe/assembler/*.json` names.
+pub(crate) const ASSEMBLER_RECIPE: &str = "oritech:assembler";
 /// The vanilla recipe table the furnace reads (upstream's
 /// `RecipeType.SMELTING`); nothing is registered, the game already has it.
 pub(crate) const SMELTING_RECIPE: &str = "minecraft:smelting";
@@ -59,6 +65,7 @@ pub(crate) const PULVERIZER_TYPE: &str = "pulverizer";
 pub(crate) const FURNACE_TYPE: &str = "powered_furnace";
 pub(crate) const COOLER_TYPE: &str = "cooler";
 pub(crate) const LAVA_TYPE: &str = "lava_generator";
+pub(crate) const ASSEMBLER_TYPE: &str = "assembler";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -70,6 +77,9 @@ const OUTPUT_TWO: usize = 2;
 /// The cooler's `InventorySlotAssignment(0, 0, 0, 1)` counts its slots from 0:
 /// one output and no input, so its result slot is the first one.
 const COOLER_OUTPUT: usize = 0;
+/// The assembler's `InventorySlotAssignment(0, 4, 4, 1)`: slots 0–3 are inputs,
+/// slot 4 is the one output.
+const ASSEMBLER_OUTPUT: usize = ASSEMBLER_INPUTS;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
@@ -199,6 +209,12 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
         // `InventorySlotAssignment(0, 0, 0, 1)`: no input, one output — the
         // chiller's input is the fluid tank below, not a slot.
         COOLER => (COOLER_SLOTS, vec![], vec![COOLER_OUTPUT]),
+        // `InventorySlotAssignment(0, 4, 4, 1)`: four inputs, one output.
+        ASSEMBLER => (
+            ASSEMBLER_SLOTS,
+            (0..ASSEMBLER_INPUTS).collect(),
+            vec![ASSEMBLER_OUTPUT],
+        ),
         _ => return None,
     };
     Some(ModContainer {
@@ -213,8 +229,8 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
 /// The FE buffers: the generator's `BasicMachineConfig(50_000, 0, 256, 32)`,
 /// the pulverizer's `(25_000, 256, 0, 32)`, the furnace's
 /// `FurnaceConfig(10_000, 256, —, 32)`, the cooler's
-/// `BasicMachineConfig(50_000, 256, 0, 32)` and the lava generator's
-/// `(100_000, 0, 512, 64)`.
+/// `BasicMachineConfig(50_000, 256, 0, 32)`, the lava generator's
+/// `(100_000, 0, 512, 64)` and the assembler's `(50_000, 1024, 0, 128)`.
 pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
     let (capacity, max_insert, max_extract) = match block {
         GENERATOR => (GENERATOR_CAPACITY, 0, GENERATOR_MAX_EXTRACT),
@@ -222,6 +238,7 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         FURNACE => (FURNACE_CAPACITY, FURNACE_MAX_INSERT, 0),
         COOLER => (COOLER_CAPACITY, COOLER_MAX_INSERT, 0),
         LAVA => (LAVA_CAPACITY, 0, LAVA_MAX_EXTRACT),
+        ASSEMBLER => (ASSEMBLER_CAPACITY, ASSEMBLER_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -271,8 +288,9 @@ pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
 // The machine addon system (slice 5)
 // ---------------------------------------------------------------------------
 
-/// The most addon slots any delivered machine has (`LavaGeneratorEntity`'s two).
-const MAX_ADDON_SLOTS: usize = 2;
+/// The most addon slots any delivered machine has (the assembler's three; the
+/// lava generator has two).
+const MAX_ADDON_SLOTS: usize = 3;
 
 /// The addon block ids at a machine's own `getAddonSlots`, in slot order.
 /// Upstream keeps the connected list in the block entity and fills it on a
@@ -485,12 +503,13 @@ fn write_float(nbt: &mut Compound, key: &str, value: f32) {
 /// The multiblock facts upstream keeps on the block (`MultiblockMachine`'s
 /// `machine_assembled` state) and on the cores: their offsets
 /// (`connectedCores`) and their average tier (`coreQuality`).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Assembly {
     /// `MultiblockMachine.ASSEMBLED` — a blockstate upstream, saved here.
     pub(crate) assembled: bool,
-    /// The connected core's offset from the controller (`connectedCores`).
-    pub(crate) core: Option<[i32; 3]>,
+    /// The connected cores' offsets from the controller (`connectedCores`): the
+    /// furnace's, chiller's and lava generator's one, the assembler's three.
+    pub(crate) cores: Vec<[i32; 3]>,
     /// `coreQuality`: the average of the connected cores' tiers.
     pub(crate) quality: f32,
 }
@@ -506,8 +525,8 @@ pub(crate) struct FurnaceSaved {
     pub(crate) assembly: Assembly,
 }
 
-/// The multiblock facts in a compound: the assembled byte, the one connected
-/// core's offset and its quality.
+/// The multiblock facts in a compound: the assembled byte, the connected cores'
+/// offsets and their average quality.
 fn multiblock_state(nbt: &Compound) -> Assembly {
     let cores = match nbt.get(&KEY_CORES.into()) {
         Some(Tag::List(entries)) => entries.as_slice(),
@@ -515,23 +534,27 @@ fn multiblock_state(nbt: &Compound) -> Assembly {
     };
     Assembly {
         assembled: matches!(nbt.get(&KEY_ASSEMBLED.into()), Some(Tag::Byte(1))),
-        core: cores.iter().find_map(core_offset),
+        cores: cores.iter().filter_map(core_offset).collect(),
         quality: read_float(nbt, KEY_QUALITY),
     }
 }
 
 /// Write the multiblock facts back: the assembled byte, `connectedCores` as a
-/// list of one offset, and `coreQuality`.
-fn store_multiblock(nbt: &mut Compound, assembly: Assembly) {
+/// list of offsets, and `coreQuality`.
+fn store_multiblock(nbt: &mut Compound, assembly: &Assembly) {
     let assembled = i8::from(assembly.assembled);
     nbt.insert(KEY_ASSEMBLED.into(), Tag::Byte(assembled));
-    let cores = assembly.core.map_or_else(Vec::new, |[x, y, z]| {
-        vec![Tag::compound([
-            ("x", Tag::Int(x)),
-            ("y", Tag::Int(y)),
-            ("z", Tag::Int(z)),
-        ])]
-    });
+    let cores = assembly
+        .cores
+        .iter()
+        .map(|[x, y, z]| {
+            Tag::compound([
+                ("x", Tag::Int(*x)),
+                ("y", Tag::Int(*y)),
+                ("z", Tag::Int(*z)),
+            ])
+        })
+        .collect();
     nbt.insert(KEY_CORES.into(), Tag::List(cores));
     write_float(nbt, KEY_QUALITY, assembly.quality);
 }
@@ -564,12 +587,35 @@ fn core_offset(entry: &Tag) -> Option<[i32; 3]> {
     Some(offset)
 }
 
+/// The cores a controller is assembled with, as the readout prints them: their
+/// block ids joined with `+` and a whole-number quality. One core reports that
+/// block's own tier (the line every earlier slice printed); several report the
+/// average of their tiers, upstream's `sumCoreQuality / coreBlocks.size()`,
+/// rounded down because the field is an integer. Resolved from the world, so a
+/// line cannot name a core that is gone.
+fn core_view(
+    host: &dyn Host,
+    level: LevelRef,
+    pos: [i32; 3],
+    assembly: &Assembly,
+) -> Option<(String, i32)> {
+    let mut ids = Vec::with_capacity(assembly.cores.len());
+    let mut total = 0;
+    for offset in &assembly.cores {
+        let id = block_at(host, level, offset_pos(pos, *offset))?;
+        total += core_quality(&id)?;
+        ids.push(id);
+    }
+    let count = i32::try_from(ids.len()).ok()?;
+    (count > 0).then(|| (ids.join("+"), total / count))
+}
+
 /// Write the furnace's tick result back.
 pub(crate) fn store_furnace(nbt: &mut Compound, saved: &FurnaceSaved) {
     write_int(nbt, KEY_ENERGY, saved.machine.energy);
     write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
     write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
-    store_multiblock(nbt, saved.assembly);
+    store_multiblock(nbt, &saved.assembly);
 }
 
 /// What the readout prints about a furnace: its saved state plus what the world
@@ -612,7 +658,7 @@ pub(crate) fn store_cooler(nbt: &mut Compound, saved: &CoolerSaved) {
     write_int(nbt, KEY_ENERGY, saved.machine.energy);
     write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
     write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
-    store_multiblock(nbt, saved.assembly);
+    store_multiblock(nbt, &saved.assembly);
     store_tank(
         nbt,
         saved
@@ -656,7 +702,7 @@ pub(crate) fn store_lava(nbt: &mut Compound, saved: &LavaSaved) {
     write_int(nbt, KEY_PROGRESS, saved.machine.progress);
     write_int(nbt, KEY_STORED_BURN, saved.machine.max_burn);
     write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
-    store_multiblock(nbt, saved.assembly);
+    store_multiblock(nbt, &saved.assembly);
     store_tank(
         nbt,
         saved
@@ -720,6 +766,45 @@ pub(crate) struct CoolerView<'a> {
 pub(crate) struct LavaView<'a> {
     pub(crate) saved: &'a LavaSaved,
     pub(crate) core: Option<(&'a str, i32)>,
+}
+
+/// The Assembler saved in a block entity's compound: the machine's three values
+/// and the multiblock facts (three cores).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct AssemblerSaved {
+    /// The buffer, progress and recipe the pure state machine keeps.
+    pub(crate) machine: Assembler,
+    /// The assembly: assembled flag, the cores' offsets, their average quality.
+    pub(crate) assembly: Assembly,
+}
+
+/// The assembler saved in a block entity's compound; a fresh one is unassembled.
+pub(crate) fn assembler_state(nbt: &Compound, capacity: i32) -> AssemblerSaved {
+    AssemblerSaved {
+        machine: Assembler {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+    }
+}
+
+/// Write the assembler's tick result back: the same keys every machine uses.
+pub(crate) fn store_assembler(nbt: &mut Compound, saved: &AssemblerSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, &saved.assembly);
+}
+
+/// What the readout prints about an assembler: its saved state, its three cores
+/// and its five slots.
+pub(crate) struct AssemblerView<'a> {
+    pub(crate) saved: &'a AssemblerSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
+    pub(crate) inputs: [Option<(&'a str, u32)>; ASSEMBLER_INPUTS],
+    pub(crate) output: Option<(&'a str, u32)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -878,6 +963,12 @@ const COOLER_PROFILE: MachineProfile = MachineProfile {
     base_speed: 1.0,
     divisor: 1.0,
 };
+/// `assemblerData`: 128 FE a tick, no speed multiplier and no divisor.
+const ASSEMBLER_PROFILE: MachineProfile = MachineProfile {
+    base_energy: ASSEMBLER_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
 
 /// The addon side of one tick: the machine's gathered addons, its effective
 /// speed (base, addons and the current burst bonus), its per-tick cost, and its
@@ -931,7 +1022,7 @@ pub(crate) fn tick_furnace(
     // The core is the assembly: a controller whose core block is gone (broken,
     // replaced, or never there) is not assembled, and its progress is kept —
     // upstream's `onCoreBroken` clears the assembly, not the operation.
-    recheck_core(&*host, level, pos, &mut saved.assembly);
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
     // `MachineBlockEntity.serverTick`: a redstone-disabled machine returns before
     // its recipe, so the core's assembly is the other gate on the same tick.
@@ -1001,15 +1092,19 @@ fn count_of(stack: &ItemStack) -> i32 {
 
 /// `MultiblockMachineController.onCoreBroken`: a controller whose core block is
 /// gone (broken, replaced, or never there) is no longer assembled, and its
-/// operation's progress is kept.
-fn recheck_core(host: &dyn Host, level: LevelRef, pos: [i32; 3], assembly: &mut Assembly) {
+/// operation's progress is kept. A machine with several cores (the assembler's
+/// three) loses the whole assembly when any one of them goes, exactly as
+/// upstream clears `ASSEMBLED` and every entry of `connectedCores`.
+fn recheck_cores(host: &dyn Host, level: LevelRef, pos: [i32; 3], assembly: &mut Assembly) {
     if !assembly.assembled {
         return;
     }
-    let core_alive = assembly.core.is_some_and(|offset| {
-        block_at(host, level, offset_pos(pos, offset)).is_some_and(|id| core_quality(&id).is_some())
-    });
-    if !core_alive {
+    let all_alive = !assembly.cores.is_empty()
+        && assembly.cores.iter().all(|offset| {
+            block_at(host, level, offset_pos(pos, *offset))
+                .is_some_and(|id| core_quality(&id).is_some())
+        });
+    if !all_alive {
         *assembly = Assembly::default();
     }
 }
@@ -1036,7 +1131,7 @@ pub(crate) fn tick_cooler(
     let before = cooler_state(nbt, capacity);
     let before_burst = burst;
     let mut saved = before.clone();
-    recheck_core(&*host, level, pos, &mut saved.assembly);
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
     let mut step = Step::Idle;
     if saved.assembly.assembled && !disabled {
         // `getRecipe()` picks a recipe whose fluid the tank holds
@@ -1139,7 +1234,7 @@ pub(crate) fn tick_lava_generator(
     let capacity = addons.capacity(LAVA_CAPACITY);
     let before = lava_state(nbt, capacity);
     let mut saved = before.clone();
-    recheck_core(&*host, level, pos, &mut saved.assembly);
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
     let mut produced = 0;
     if saved.assembly.assembled && !disabled {
         // `UpgradableGeneratorBlockEntity.serverTick`: `tryConsumeInput` runs
@@ -1190,6 +1285,103 @@ fn drain_tank(tank: &mut Option<(String, i32)>, input: &FluidInput) {
         return;
     }
     *tank = after_draining(amount, input.amount).map(|left| (fluid, left));
+}
+
+/// One server tick of the Assembler: the same assembly gate as the other
+/// multiblocks (three cores), then one `oritech:assembler` craft from the four
+/// input slots. A finished craft takes one item per ingredient and grants the
+/// recipe's result into the one output slot.
+pub(crate) fn tick_assembler(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != ASSEMBLER_SLOTS;
+    if resized {
+        items.resize(ASSEMBLER_SLOTS, None);
+    }
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, ASSEMBLER, pos, nbt, ASSEMBLER_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, ASSEMBLER, pos, nbt);
+    let capacity = addons.capacity(ASSEMBLER_CAPACITY);
+    let before = assembler_state(nbt, capacity);
+    let before_burst = burst;
+    let mut saved = before.clone();
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled && !disabled {
+        // `getRecipe()` → `complexMatch`: the first recipe the four slots can
+        // pay for, then `canOutputRecipe` for the one output slot.
+        let candidate = assembler_plan(&*host, items);
+        let work = candidate.as_ref().and_then(|(recipe, _)| {
+            assembler_output_fits(&*host, items, &recipe.result).then_some(Work {
+                id: &recipe.id,
+                time: processing_ticks(recipe.time, speed),
+            })
+        });
+        step = saved.machine.tick_with(work, cost);
+        if step == Step::Finished
+            && let Some((recipe, plan)) = candidate.as_ref()
+        {
+            finish_assembler(&*host, items, plan, recipe);
+            // `UpgradableMachineBlockEntity.craftItem`'s chamber loop: another
+            // matching grid and output room means one more craft.
+            for _ in 0..addons.chambers {
+                let Some((next, next_plan)) = assembler_plan(&*host, items) else {
+                    break;
+                };
+                if next.id != recipe.id || !assembler_output_fits(&*host, items, &next.result) {
+                    break;
+                }
+                finish_assembler(&*host, items, &next_plan, &next);
+            }
+        }
+    }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
+    store_assembler(nbt, &saved);
+    store_burst(nbt, burst);
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
+}
+
+/// Whether an assembler recipe's result still fits the one output slot
+/// (`canOutputRecipe` over a one-slot output view).
+fn assembler_output_fits(
+    host: &dyn Host,
+    items: &[Option<ItemStack>],
+    result: &RecipeResult,
+) -> bool {
+    let output = items
+        .get(ASSEMBLER_OUTPUT)
+        .and_then(Option::as_ref)
+        .map(|stack| (stack.item().id(host), count_of(stack)));
+    output_fits(
+        output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+        result,
+        max_stack(host, &result.item),
+    )
+}
+
+/// `MachineBlockEntity.craftItem` for the assembler: one item out of each slot
+/// the plan names, then the result into the one output slot. The input leaves
+/// before the output is granted, the order every machine in this port uses, so a
+/// slot the SDK refuses cannot leave the output granted from an unconsumed item.
+fn finish_assembler(
+    host: &dyn Host,
+    items: &mut [Option<ItemStack>],
+    plan: &[usize],
+    recipe: &AssemblerRecipe,
+) {
+    for slot in plan {
+        if !consume_one(items, *slot) {
+            return;
+        }
+    }
+    grow_output(host, items, ASSEMBLER_OUTPUT, &recipe.result);
 }
 
 /// `LavaGeneratorEntity.outputEnergy`'s plan for a generator block: the most one
@@ -1309,7 +1501,16 @@ static SMELTING_RECIPES: Mutex<Option<Vec<Resolved<SmeltingRecipe>>>> = Mutex::n
 /// generator's.
 static COOLER_RECIPES: Mutex<Option<Vec<CoolerRecipe>>> = Mutex::new(None);
 static LAVA_RECIPES: Mutex<Option<Vec<LavaGenRecipe>>> = Mutex::new(None);
+/// The assembler's recipes keep *four* resolved ingredients each, so they have
+/// their own cache entry shape: [`cached_recipe`] resolves exactly one.
+static ASSEMBLER_RECIPES: Mutex<Option<Vec<AssemblerResolved>>> = Mutex::new(None);
 static RECIPE_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// One parsed assembler recipe with every ingredient the engine resolved for it.
+struct AssemblerResolved {
+    recipe: AssemblerRecipe,
+    ingredients: Vec<Ingredient>,
+}
 
 /// The first recipe of `kind` whose ingredient takes `input`: the pin's
 /// recipe table, parsed by [`crate::runtime`] and matched by the engine's own
@@ -1433,6 +1634,100 @@ fn find_lavagen(host: &dyn Host, fluid: &str, amount: i32) -> Option<LavaGenReci
         .cloned()
 }
 
+/// The assembler's recipe cache: every `oritech:assembler` file the pin loaded,
+/// parsed and with all of its ingredients resolved by the engine. A file with an
+/// ingredient the engine cannot resolve is dropped here, exactly as the recipe
+/// loader would have dropped it. `look` runs under the lock, so the cache is
+/// loaded once and read without a second copy.
+fn with_assembler_recipes<R>(host: &dyn Host, look: impl FnOnce(&[AssemblerResolved]) -> R) -> R {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = ASSEMBLER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let mut resolved = Vec::new();
+        for recipe in host.recipes_of_type(ASSEMBLER_RECIPE).iter() {
+            let Ok(parsed) = AssemblerRecipe::parse(&recipe.id, &recipe.json.to_string()) else {
+                continue;
+            };
+            let mut ingredients = Vec::with_capacity(parsed.ingredients.len());
+            let mut complete = true;
+            for ingredient in &parsed.ingredients {
+                match host.recipe_ingredient(&ingredient.to_string()) {
+                    Ok(Some(resolved_ingredient)) => ingredients.push(resolved_ingredient),
+                    _ => {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            if complete {
+                resolved.push(AssemblerResolved {
+                    recipe: parsed,
+                    ingredients,
+                });
+            }
+        }
+        *cache = Some(resolved);
+    }
+    look(cache.as_deref().unwrap_or(&[]))
+}
+
+/// The assembler recipe the four input slots can pay for, with the slots one
+/// craft drains (`OritechRecipe.complexMatch` → `MachineBlockEntity.craftItem`).
+/// The first recipe in the table's order that matches wins, as `getRecipeFor`
+/// answers.
+fn assembler_plan(
+    host: &dyn Host,
+    items: &[Option<ItemStack>],
+) -> Option<(AssemblerRecipe, Vec<usize>)> {
+    let stacks: Vec<Option<ItemStack>> = (0..ASSEMBLER_INPUTS)
+        .map(|slot| items.get(slot).cloned().flatten())
+        .collect();
+    let counts: Vec<u32> = stacks
+        .iter()
+        .map(|stack| stack.as_ref().map_or(0, ItemStack::count))
+        .collect();
+    if counts.iter().all(|count| *count == 0) {
+        return None;
+    }
+    with_assembler_recipes(host, |recipes| {
+        recipes.iter().find_map(|resolved| {
+            let fits: Vec<Vec<bool>> = resolved
+                .ingredients
+                .iter()
+                .map(|ingredient| {
+                    stacks
+                        .iter()
+                        .map(|stack| {
+                            stack
+                                .as_ref()
+                                .is_some_and(|stack| ingredient.test(host, stack))
+                        })
+                        .collect()
+                })
+                .collect();
+            craft_plan(&counts, &fits).map(|plan| (resolved.recipe.clone(), plan))
+        })
+    })
+}
+
+/// Whether any loaded assembler recipe names `stack` in one of its ingredients:
+/// the click's "is this an input of this machine" test, the assembler's version
+/// of the pulverizer's `find_recipe(...).is_none()` refusal.
+fn assembler_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
+    with_assembler_recipes(host, |recipes| {
+        recipes.iter().any(|resolved| {
+            resolved
+                .ingredients
+                .iter()
+                .any(|ingredient| ingredient.test(host, stack))
+        })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // The generator's energy push
 // ---------------------------------------------------------------------------
@@ -1546,7 +1841,7 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     let Some(name) = block_at(&*server, level, pos) else {
         return Flow::Continue;
     };
-    let is_multiblock = name == FURNACE || name == COOLER || name == LAVA;
+    let is_multiblock = name == FURNACE || name == COOLER || name == LAVA || name == ASSEMBLER;
     if !is_multiblock && name != GENERATOR && name != PULVERIZER {
         return Flow::Continue;
     }
@@ -1559,8 +1854,8 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     }
     *event.cancellation_result = InteractionResult::Success;
     let Some(held) = click.stack.cloned() else {
-        if let Some(offset) = core_offset_for(&name)
-            && let Some(message) = try_assemble(server, level, pos, offset)
+        if let Some(offsets) = core_offsets_for(&name)
+            && let Some(message) = try_assemble(server, level, pos, offsets)
         {
             say(server, click.player, &message);
         }
@@ -1581,11 +1876,11 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     }
     if is_multiblock {
         // `MultiblockMachineController.tryPlaceNextCore`: a core in the hand
-        // fills the empty core position instead of the machine's own slots.
+        // fills the next missing core position instead of the machine's slots.
         if core_quality(&held_id).is_some()
-            && let Some(offset) = core_offset_for(&name)
+            && let Some(offsets) = core_offsets_for(&name)
         {
-            let message = place_core(server, level, pos, click.player, click.hand, &held, offset);
+            let message = place_core(server, level, pos, click.player, click.hand, &held, offsets);
             say(server, click.player, &message);
             return Flow::Cancel;
         }
@@ -1649,6 +1944,24 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         );
         return Flow::Cancel;
     }
+    if name == ASSEMBLER {
+        // The assembler's click is `findLowestMatchingSlot` over its four input
+        // slots: the first empty one, else the slot holding the fewest of the
+        // same item. It takes any item one of its loaded recipes names.
+        let held_id = held.item().id(&*server);
+        if !assembler_accepts(&*server, &held) {
+            let message = format!("{held_id} is not an ingredient of an assembling recipe");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        }
+        let Some(slot) = assembler_input_slot(&*server, level, pos, &held_id) else {
+            let message = format!("{held_id} has no room in the assembler's four input slots");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        };
+        insert_held(server, level, pos, click.player, click.hand, &held, slot);
+        return Flow::Cancel;
+    }
     if name == GENERATOR {
         if !is_fuel(burn_time(&*server, &held)) {
             let message = format!("{} is not a fuel", held.item().id(&*server));
@@ -1669,21 +1982,24 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     Flow::Cancel
 }
 
-/// The core offset a multiblock controller assembles at: the furnace's one
-/// block above, the chiller's one block north. `None` for anything else, which
-/// is the click path's "not a machine" test.
-fn core_offset_for(block: &str) -> Option<[i32; 3]> {
+/// The core offsets a multiblock controller assembles from: the furnace's one
+/// block above, the chiller's one block north, the lava generator's one above,
+/// the assembler's three. `None` for anything else, which is the click path's
+/// "not a machine" test.
+fn core_offsets_for(block: &str) -> Option<&'static [[i32; 3]]> {
     match block {
-        FURNACE => Some(CORE_OFFSET),
-        COOLER => Some(COOLER_CORE_OFFSET),
-        LAVA => Some(LAVA_CORE_OFFSET),
+        FURNACE => Some(&[CORE_OFFSET]),
+        COOLER => Some(&[COOLER_CORE_OFFSET]),
+        LAVA => Some(&[LAVA_CORE_OFFSET]),
+        ASSEMBLER => Some(&ASSEMBLER_CORE_OFFSETS),
         _ => None,
     }
 }
 
 /// `MultiblockMachineController.tryPlaceNextCore`: put the held machine core in
-/// the controller's missing core position (`offset`), and take it out of the
-/// hand (a creative hand gives for free). Answers the line to print.
+/// the controller's first missing core position (`getNextMissingCore`), and take
+/// it out of the hand (a creative hand gives for free). Answers the line to
+/// print.
 fn place_core(
     host: &mut dyn ServerHost,
     level: LevelRef,
@@ -1691,16 +2007,16 @@ fn place_core(
     player: u128,
     hand: mod_api::Hand,
     held: &ItemStack,
-    offset: [i32; 3],
+    offsets: &[[i32; 3]],
 ) -> String {
-    let target = offset_pos(pos, offset);
     let held_id = held.item().id(&*host);
-    match block_at(&*host, level, target) {
-        Some(occupied) if occupied != "minecraft:air" => {
-            return format!("the core position holds {occupied}");
-        }
-        _ => {}
-    }
+    let target = offsets
+        .iter()
+        .map(|offset| offset_pos(pos, *offset))
+        .find(|target| block_at(&*host, level, *target).is_none_or(|id| id == "minecraft:air"));
+    let Some(target) = target else {
+        return format!("{held_id} has no missing core position on this machine");
+    };
     let Some(state) = host.block_state_id(&held_id) else {
         return format!("{held_id} is not a placeable block");
     };
@@ -1759,39 +2075,80 @@ fn place_addon(
     format!("placed {id} at {target:?} (the machine scans its slot on its next tick)")
 }
 
-/// `MultiblockMachineController.initMultiblock` on a click: the block at
-/// `offset` from the controller must be one of the seven machine cores; then the
-/// machine is assembled and the core recorded. Answers the line to print.
+/// `MultiblockMachineController.initMultiblock` on a click: every position in
+/// `offsets` must hold one of the seven machine cores, and then the machine is
+/// assembled with all of them recorded and their average tier as the quality.
+/// Answers the line to print.
 fn try_assemble(
     host: &mut dyn ServerHost,
     level: LevelRef,
     pos: [i32; 3],
-    offset: [i32; 3],
+    offsets: &[[i32; 3]],
 ) -> Option<String> {
     let entity = host.block_entity(level, pos)?;
     let nbt = entity.data(&*host)?;
     let saved = multiblock_state(&nbt);
-    let core_pos = offset_pos(pos, offset);
-    let core_id = block_at(&*host, level, core_pos)?;
-    let Some(quality) = core_quality(&core_id) else {
-        return Some(format!(
-            "missing core: place a machine core at {core_pos:?} (it holds {core_id})"
-        ));
-    };
-    if saved.assembled && saved.core == Some(offset) {
-        return Some(format!("already assembled with {core_id}"));
+    let mut cores = Vec::with_capacity(offsets.len());
+    let mut names = Vec::with_capacity(offsets.len());
+    let mut total = 0;
+    for offset in offsets {
+        let core_pos = offset_pos(pos, *offset);
+        let core_id = block_at(&*host, level, core_pos)?;
+        let Some(quality) = core_quality(&core_id) else {
+            return Some(format!(
+                "missing core: place a machine core at {core_pos:?} (it holds {core_id})"
+            ));
+        };
+        total += quality;
+        cores.push(*offset);
+        names.push(core_id);
     }
+    if saved.assembled && saved.cores == cores {
+        return Some(format!("already assembled with {}", names.join("+")));
+    }
+    let count = i32::try_from(cores.len()).unwrap_or(1).max(1);
     let updated = Assembly {
         assembled: true,
-        core: Some(offset),
-        quality: f32::from(i16::try_from(quality).unwrap_or(0)),
+        cores,
+        quality: f32::from(i16::try_from(total / count).unwrap_or(0)),
     };
     let mut patch = Compound::new();
-    store_multiblock(&mut patch, updated);
+    store_multiblock(&mut patch, &updated);
     // `merge_data` is `/data merge block`: it loads the patch and marks the
     // chunk changed, which is the `setChanged` an assembled machine needs.
     entity.merge_data(host, patch).ok()?;
-    Some(format!("assembled with {core_id} (quality {quality})"))
+    Some(format!(
+        "assembled with {} (quality {})",
+        names.join("+"),
+        total / count
+    ))
+}
+
+/// `MachineBlockEntity.findLowestMatchingSlot` over the assembler's four input
+/// slots: the slot a click puts `item` in, or `None` when every slot is full of
+/// something else.
+fn assembler_input_slot(
+    host: &dyn Host,
+    level: LevelRef,
+    pos: [i32; 3],
+    item: &str,
+) -> Option<usize> {
+    let entity = host.block_entity(level, pos)?;
+    let held: Vec<Option<(String, u32)>> = (0..ASSEMBLER_INPUTS)
+        .map(|slot| {
+            entity
+                .item_slot(host, u32::try_from(slot).ok()?)
+                .ok()
+                .flatten()
+                .map(|stack| (stack.item().id(host), stack.count()))
+        })
+        .collect();
+    let borrowed: Vec<Option<(&str, u32)>> = held
+        .iter()
+        .map(|slot| slot.as_ref().map(|(id, count)| (id.as_str(), *count)))
+        .collect();
+    let limit = u32::try_from(max_stack(host, item).max(0)).unwrap_or(0);
+    insert_slot(&borrowed, item, limit)
 }
 
 /// Put `held` into the machine's input slot and take what went in out of the
@@ -1916,11 +2273,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
             let saved = furnace_state(&nbt, capacity);
             // The core comes from the world, not from the saved offset, so a
             // line cannot name a core that is no longer there.
-            let core = saved
-                .assembly
-                .core
-                .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
-                .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
+            let core = core_view(&*host, level, pos, &saved.assembly);
             let input = slot(INPUT_SLOT);
             let output = slot(OUTPUT_ONE);
             Some(furnace_line(
@@ -1942,11 +2295,7 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
             let burst = burst_state(&nbt).clamped(addons.burst_ticks);
             let capacity = addons.capacity(COOLER_CAPACITY);
             let saved = cooler_state(&nbt, capacity);
-            let core = saved
-                .assembly
-                .core
-                .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
-                .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
+            let core = core_view(&*host, level, pos, &saved.assembly);
             let output = slot(COOLER_OUTPUT);
             Some(cooler_line(
                 pos,
@@ -1966,16 +2315,43 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
             let burst = burst_state(&nbt).clamped(addons.burst_ticks);
             let capacity = addons.capacity(LAVA_CAPACITY);
             let saved = lava_state(&nbt, capacity);
-            let core = saved
-                .assembly
-                .core
-                .and_then(|offset| block_at(&*host, level, offset_pos(pos, offset)))
-                .and_then(|id| core_quality(&id).map(|quality| (id, quality)));
+            let core = core_view(&*host, level, pos, &saved.assembly);
             Some(lava_line(
                 pos,
                 &LavaView {
                     saved: &saved,
                     core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
+                time,
+            ))
+        }
+        ASSEMBLER => {
+            let found = connected_addons(&*host, level, ASSEMBLER, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(ASSEMBLER_CAPACITY);
+            let saved = assembler_state(&nbt, capacity);
+            let core = core_view(&*host, level, pos, &saved.assembly);
+            let in0 = slot(0);
+            let in1 = slot(1);
+            let in2 = slot(2);
+            let in3 = slot(3);
+            let output = slot(ASSEMBLER_OUTPUT);
+            let inputs = [
+                in0.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                in1.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                in2.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                in3.as_ref().map(|(id, count)| (id.as_str(), *count)),
+            ];
+            Some(assembler_line(
+                pos,
+                &AssemblerView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                    inputs,
+                    output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
                 },
                 capacity,
                 &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
@@ -2002,6 +2378,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         FURNACE => addons.capacity(FURNACE_CAPACITY),
         COOLER => addons.capacity(COOLER_CAPACITY),
         LAVA => addons.capacity(LAVA_CAPACITY),
+        ASSEMBLER => addons.capacity(ASSEMBLER_CAPACITY),
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -2073,6 +2450,9 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *LAVA_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *ASSEMBLER_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     RECIPE_TICKS.store(0, Ordering::Relaxed);
@@ -2166,6 +2546,45 @@ pub(crate) fn furnace_line(
         },
         saved.machine.progress,
         slot_text(view.input),
+        slot_text(view.output),
+        addons.text(),
+    )
+}
+
+/// The assembler's line: the assembly first (three cores here), then its four
+/// input slots and the one output.
+pub(crate) fn assembler_line(
+    pos: [i32; 3],
+    view: &AssemblerView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    let [in0, in1, in2, in3] = view.inputs;
+    format!(
+        "Assembler at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, in0 {}, in1 {}, in2 {}, in3 {}, out0 {}, {}, t={t}",
+        saved.machine.energy,
+        capacity,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress,
+        slot_text(in0),
+        slot_text(in1),
+        slot_text(in2),
+        slot_text(in3),
         slot_text(view.output),
         addons.text(),
     )
@@ -2492,7 +2911,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(CORE_OFFSET),
+                cores: vec![CORE_OFFSET],
                 quality: 2.0,
             },
         };
@@ -2553,7 +2972,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(CORE_OFFSET),
+                cores: vec![CORE_OFFSET],
                 quality: 2.0,
             },
         };
@@ -2655,24 +3074,29 @@ mod tests {
     }
 
     #[test]
-    fn each_multiblock_assembles_at_its_own_core_offset() {
+    fn each_multiblock_assembles_at_its_own_core_offsets() {
         assert_eq!(
-            core_offset_for(FURNACE),
-            Some(CORE_OFFSET),
+            core_offsets_for(FURNACE),
+            Some(&[CORE_OFFSET][..]),
             "the furnace's core is one block above"
         );
         assert_eq!(
-            core_offset_for(COOLER),
-            Some(COOLER_CORE_OFFSET),
+            core_offsets_for(COOLER),
+            Some(&[COOLER_CORE_OFFSET][..]),
             "the chiller's core is one block north"
         );
         assert_eq!(
-            core_offset_for(GENERATOR),
+            core_offsets_for(ASSEMBLER),
+            Some(&ASSEMBLER_CORE_OFFSETS[..]),
+            "the assembler takes three cores: east, above, and both"
+        );
+        assert_eq!(
+            core_offsets_for(GENERATOR),
             None,
             "a plain machine has no core"
         );
-        assert_eq!(core_offset_for(PULVERIZER), None);
-        assert_eq!(core_offset_for("minecraft:stone"), None);
+        assert_eq!(core_offsets_for(PULVERIZER), None);
+        assert_eq!(core_offsets_for("minecraft:stone"), None);
     }
 
     #[test]
@@ -2691,7 +3115,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(COOLER_CORE_OFFSET),
+                cores: vec![COOLER_CORE_OFFSET],
                 quality: 2.0,
             },
             tank: Some(("minecraft:water".to_owned(), 1_000)),
@@ -2769,7 +3193,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(COOLER_CORE_OFFSET),
+                cores: vec![COOLER_CORE_OFFSET],
                 quality: 2.0,
             },
             tank: Some(("minecraft:water".to_owned(), 1_000)),
@@ -2894,7 +3318,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(LAVA_CORE_OFFSET),
+                cores: vec![LAVA_CORE_OFFSET],
                 quality: 2.0,
             },
             tank: None,
@@ -2960,7 +3384,7 @@ mod tests {
             },
             assembly: Assembly {
                 assembled: true,
-                core: Some(LAVA_CORE_OFFSET),
+                cores: vec![LAVA_CORE_OFFSET],
                 quality: 2.0,
             },
             tank: Some(("minecraft:lava".to_owned(), 100)),
@@ -3307,8 +3731,8 @@ mod tests {
         let recipes = engine_recipes();
         assert_eq!(
             recipes.len(),
-            18,
-            "the slice carries seventeen crafting recipes and one smelting recipe: {} found ({:?})",
+            20,
+            "the port carries nineteen crafting recipes and one smelting recipe: {} found ({:?})",
             recipes.len(),
             recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
@@ -3339,6 +3763,38 @@ mod tests {
         }
     }
 
+    /// Whether one written ingredient resolves here: a vanilla id the engine has, an id this
+    /// package declares, or a tag whose every value resolves. Panics with the recipe's path, so a
+    /// broken file names itself.
+    fn ingredient_resolves(path: &str, id: &str) {
+        match id.strip_prefix('#') {
+            Some(tag) if tag.starts_with("minecraft:") => {
+                // The engine ships vanilla's tags (coals, planks, sand, logs, *_ores).
+            }
+            Some(tag) => {
+                let values = tag_values(tag).unwrap_or_else(|| {
+                    panic!(
+                        "{path}: the tag #{tag} is not in this package — the ingredient \
+                         resolves to nothing and 26.3 drops the recipe"
+                    )
+                });
+                assert!(!values.is_empty(), "{path}: the tag #{tag} has no value");
+                for value in values {
+                    let value = value.trim_start_matches('#');
+                    assert!(
+                        value.starts_with("minecraft:") || declared(value),
+                        "{path}: #{tag} names {value}, which neither the engine nor this \
+                         package declares"
+                    );
+                }
+            }
+            None => assert!(
+                id.starts_with("minecraft:") || declared(id),
+                "{path}: the ingredient {id} is not declared by this package"
+            ),
+        }
+    }
+
     #[test]
     fn every_carried_recipe_resolves_in_this_package() {
         let recipes = engine_recipes();
@@ -3348,32 +3804,7 @@ mod tests {
                 let Some(id) = ingredient.as_str() else {
                     continue;
                 };
-                match id.strip_prefix('#') {
-                    Some(tag) if tag.starts_with("minecraft:") => {
-                        // The engine ships vanilla's tags (coals, planks, sand, *_ores).
-                    }
-                    Some(tag) => {
-                        let values = tag_values(tag).unwrap_or_else(|| {
-                            panic!(
-                                "{path}: the tag #{tag} is not in this package — the ingredient \
-                                 resolves to nothing and 26.3 drops the recipe"
-                            )
-                        });
-                        assert!(!values.is_empty(), "{path}: the tag #{tag} has no value");
-                        for value in values {
-                            let value = value.trim_start_matches('#');
-                            assert!(
-                                value.starts_with("minecraft:") || declared(value),
-                                "{path}: #{tag} names {value}, which neither the engine nor this \
-                                 package declares"
-                            );
-                        }
-                    }
-                    None => assert!(
-                        id.starts_with("minecraft:") || declared(id),
-                        "{path}: the ingredient {id} is not declared by this package"
-                    ),
-                }
+                ingredient_resolves(path, id);
             }
             let result = recipe["result"]["id"].as_str().unwrap_or_default();
             assert!(
@@ -3418,6 +3849,194 @@ mod tests {
             recipe["result"],
             serde_json::json!({"count": 1, "id": "oritech:basic_generator_block"}),
             "{path}: one generator"
+        );
+    }
+
+    #[test]
+    fn every_carried_assembler_recipe_has_four_bare_ingredients_and_resolves() {
+        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+            .into_iter()
+            .filter(|(_, recipe)| recipe["type"] == "oritech:assembler")
+            .collect();
+        assert_eq!(
+            recipes.len(),
+            5,
+            "the slice carries five assembler recipes whose ingredients and results resolve: {} \
+             found ({:?})",
+            recipes.len(),
+            recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        for (path, recipe) in &recipes {
+            let ingredients = recipe["ingredients"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no ingredients"));
+            assert_eq!(ingredients.len(), ASSEMBLER_INPUTS, "{path}: four inputs");
+            for ingredient in ingredients {
+                let id = ingredient.as_str().unwrap_or_else(|| {
+                    panic!(
+                        "{path}: the ingredient {ingredient} is not the bare form — a 1.21.1 \
+                         object is what 26.3's loader refuses"
+                    )
+                });
+                ingredient_resolves(path, id);
+            }
+            let results = recipe["results"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no results"));
+            assert_eq!(results.len(), 1, "{path}: the machine has one output slot");
+            let result = results[0]["id"].as_str().unwrap_or_default();
+            assert!(
+                result.starts_with("minecraft:") || declared(result),
+                "{path}: the result {result} is not declared by this package"
+            );
+            assert!(
+                results[0]["count"].as_u64().is_some_and(|count| count >= 1),
+                "{path}: the result has no positive count"
+            );
+            assert!(
+                recipe["time"].as_u64().is_some_and(|time| time > 0),
+                "{path}: no positive time"
+            );
+        }
+        // The motor recipe the in-game leg primes: 48 ticks, two motors.
+        let (path, motor) = recipes
+            .iter()
+            .find(|(path, _)| path == "assembler/motor.json")
+            .expect("the motor recipe is carried");
+        assert_eq!(motor["time"], 48, "{path}: the jar's time");
+        assert_eq!(
+            motor["results"][0],
+            serde_json::json!({"count": 2, "id": "oritech:motor"}),
+            "{path}: two motors"
+        );
+    }
+
+    #[test]
+    fn the_assembler_declares_four_inputs_one_output_and_its_own_buffer() {
+        let container = container(ASSEMBLER).expect("the assembler has a container");
+        assert_eq!(container.slots, ASSEMBLER_SLOTS, "five slots");
+        assert_eq!(container.inputs, vec![0, 1, 2, 3], "four inputs");
+        assert_eq!(container.outputs, vec![4], "one output");
+        assert_eq!(
+            container.faces,
+            std::array::from_fn(|_| (0..ASSEMBLER_SLOTS).collect::<Vec<usize>>()),
+            "automation reaches every slot from every face"
+        );
+        let battery = battery(ASSEMBLER).expect("the assembler has a buffer");
+        assert_eq!(battery.capacity, ASSEMBLER_CAPACITY);
+        assert_eq!(battery.capacity, 50_000);
+        assert_eq!(battery.max_insert, ASSEMBLER_MAX_INSERT);
+        assert_eq!(battery.max_insert, 1_024, "the jar's 128 * 8");
+        assert_eq!(battery.max_extract, 0, "the machine gives no energy out");
+        assert_eq!(battery.insert_faces, [true; 6]);
+        assert_eq!(
+            addon_slots(ASSEMBLER),
+            &[[0, 0, -1], [0, 0, 2], [1, 0, 0]],
+            "three addon slots, the most any delivered machine has"
+        );
+        assert!(
+            fluids(ASSEMBLER).is_none(),
+            "the assembler has no tank: /oritech fluid must refuse it"
+        );
+    }
+
+    #[test]
+    fn the_assembler_s_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        let fresh = assembler_state(&nbt, ASSEMBLER_CAPACITY);
+        assert_eq!(
+            fresh,
+            AssemblerSaved::default(),
+            "a fresh assembler is empty"
+        );
+
+        let saved = AssemblerSaved {
+            machine: Assembler {
+                energy: 6_144,
+                progress: 11,
+                recipe: "oritech:assembler/motor".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: ASSEMBLER_CORE_OFFSETS.to_vec(),
+                quality: 2.0,
+            },
+        };
+        store_assembler(&mut nbt, &saved);
+        assert_eq!(assembler_state(&nbt, ASSEMBLER_CAPACITY), saved);
+        assert_eq!(
+            read_int(&nbt, KEY_PROGRESS),
+            11,
+            "upstream's own progress key"
+        );
+        assert_eq!(
+            read_string(&nbt, KEY_RECIPE),
+            "oritech:assembler/motor",
+            "the recipe the operation belongs to"
+        );
+    }
+
+    #[test]
+    fn the_assembler_line_prints_its_three_cores_its_four_inputs_and_its_output() {
+        let saved = AssemblerSaved {
+            machine: Assembler {
+                energy: 6_144,
+                progress: 0,
+                recipe: "oritech:assembler/motor".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: ASSEMBLER_CORE_OFFSETS.to_vec(),
+                quality: 2.0,
+            },
+        };
+        assert_eq!(
+            assembler_line(
+                [0, 100, 12],
+                &AssemblerView {
+                    saved: &saved,
+                    core: Some((
+                        "oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3",
+                        2
+                    )),
+                    inputs: [
+                        Some(("oritech:nickel_ingot", 1)),
+                        Some(("oritech:steel_ingot", 2)),
+                        Some(("oritech:magnetic_coil", 2)),
+                        None,
+                    ],
+                    output: None,
+                },
+                ASSEMBLER_CAPACITY,
+                &AddonView::none(),
+                42,
+            ),
+            "Assembler at [0, 100, 12]: 6144/50000 FE, assembled yes core \
+             oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, \
+             progress 0 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, \
+             in1 oritech:steel_ingot x2, in2 oritech:magnetic_coil x2, in3 empty, out0 empty, \
+             addons none, t=42"
+        );
+        // An unassembled machine says so and names no core.
+        let idle = AssemblerSaved {
+            machine: Assembler::new(),
+            assembly: Assembly::default(),
+        };
+        let line = assembler_line(
+            [4, 100, 12],
+            &AssemblerView {
+                saved: &idle,
+                core: None,
+                inputs: [None; ASSEMBLER_INPUTS],
+                output: None,
+            },
+            ASSEMBLER_CAPACITY,
+            &AddonView::none(),
+            43,
+        );
+        assert!(
+            line.contains("assembled no core empty quality 0, progress 0 recipe none"),
+            "{line}"
         );
     }
 }

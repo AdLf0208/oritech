@@ -1,0 +1,16 @@
+{
+  "ingredients": [
+    "#c:ingots/steel",
+    "#c:ingots/nickel",
+    "#c:ingots/nickel",
+    "#c:ingots/copper"
+  ],
+  "results": [
+    {
+      "count": 6,
+      "id": "oritech:magnetic_coil"
+    }
+  ],
+  "time": 48,
+  "type": "oritech:assembler"
+}

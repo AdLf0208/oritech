@@ -1,4 +1,5 @@
 {
+  "block.oritech.assembler_block": "Assembler",
   "block.oritech.basic_generator_block": "Basic Generator",
   "block.oritech.cooler_block": "Industrial Chiller",
   "block.oritech.iron_plating_block": "Iron Reinforced Plating",
@@ -21,6 +22,7 @@
   "block.oritech.nickel_plating_block": "Nickel Reinforced Plating",
   "block.oritech.powered_furnace_block": "Powered Furnace",
   "block.oritech.pulverizer_block": "Pulverizer",
+  "item.oritech.adamant_ingot": "Adamant Ingot",
   "item.oritech.electrum_ingot": "Electrum Ingot",
   "item.oritech.magnetic_coil": "Magnetic Coil",
   "item.oritech.motor": "Motor",

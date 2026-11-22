@@ -1,0 +1,16 @@
+{
+  "ingredients": [
+    "#minecraft:logs",
+    "minecraft:glowstone",
+    "minecraft:glowstone",
+    "minecraft:glowstone"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "minecraft:shroomlight"
+    }
+  ],
+  "time": 96,
+  "type": "oritech:assembler"
+}

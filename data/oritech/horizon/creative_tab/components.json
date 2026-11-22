@@ -7,7 +7,8 @@
     "oritech:raw_silicon",
     "oritech:silicon",
     "oritech:magnetic_coil",
-    "oritech:motor"
+    "oritech:motor",
+    "oritech:adamant_ingot"
   ],
   "title": "itemgroup.oritech.components"
 }

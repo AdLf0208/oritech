@@ -9,6 +9,7 @@ The lines are (see `src/support.rs`, the readout section):
     Powered Furnace at [8, 100, 0]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe …, input …, out …, t=424
     Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=424
     Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 60/120 ticks recipe oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424
+    Assembler at [0, 100, 12]: 6144/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, in1 oritech:steel_ingot x2, in2 oritech:magnetic_coil x2, in3 empty, out0 empty, addons none, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
 
 Usage: `eval "$(python3 tools/parse_info.py "$line")"`; `ok=1` when it parsed.
@@ -33,6 +34,10 @@ FIELDS = (
     "INPUT",
     "OUT0",
     "OUT1",
+    "IN0",
+    "IN1",
+    "IN2",
+    "IN3",
     "ASSEMBLED",
     "CORE",
     "QUALITY",
@@ -104,6 +109,18 @@ LAVA = re.compile(
     r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, " + ADDON_FIELD
 )
 
+# Slice 8: the assembler's line. Its `core` field is the three cores' ids joined
+# with `+` (the group is non-greedy, so the ` quality ` that follows is the end),
+# and its four input slots are `in0`–`in3`.
+ASSEMBLER = re.compile(
+    r"^Assembler at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"in0 (?P<IN0>.+?), in1 (?P<IN1>.+?), in2 (?P<IN2>.+?), in3 (?P<IN3>.+?), "
+    r"out0 (?P<OUT0>.+?), " + ADDON_FIELD
+)
+
 
 def main(argv: list[str]) -> int:
     line = " ".join(argv).strip()
@@ -113,6 +130,7 @@ def main(argv: list[str]) -> int:
         ("furnace", FURNACE),
         ("cooler", COOLER),
         ("lava", LAVA),
+        ("assembler", ASSEMBLER),
         ("fluid", FLUID),
     ):
         match = pattern.match(line)
@@ -124,6 +142,10 @@ def main(argv: list[str]) -> int:
         )
         if kind == "generator":
             out.setdefault("INPUT", out["FUEL"])
+        if kind == "assembler":
+            # The four input slots are one field each; `INPUT` is the first one,
+            # so `machine_holds` can look at the machine like the others.
+            out.setdefault("INPUT", out["IN0"])
         for field in FIELDS:
             out.setdefault(field, "")
         for key, value in out.items():

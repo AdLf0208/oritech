@@ -1,6 +1,7 @@
-//! Oritech for Horizon — slices 1 to 6: the Basic Generator, the Pulverizer, the
+//! Oritech for Horizon — slices 1 to 8: the Basic Generator, the Pulverizer, the
 //! Powered Furnace, the Industrial Chiller, the Lava Generator, the machine addon
-//! system and the Control Unit Addon's redstone gate.
+//! system, the Control Unit Addon's redstone gate, the material and component
+//! chain and the Assembler.
 //!
 //! One flat SDK package (mod API 0.2): the carried machines, their models,
 //! textures, lang, loot tables, recipes, tags and creative tab are this
@@ -56,12 +57,18 @@ impl Hooks for Mod {
         // reason (and the same startup failure without it).
         registrar.register_recipe_type(support::LAVA_RECIPE);
         registrar.register_raw_recipe_serializer(support::LAVA_RECIPE, support::LAVA_RECIPE);
+        // The assembler's five carried recipes name `oritech:assembler`, with four ingredients
+        // each and one result; the port reads them with its own parser for the same reason.
+        registrar.register_recipe_type(support::ASSEMBLER_RECIPE);
+        registrar
+            .register_raw_recipe_serializer(support::ASSEMBLER_RECIPE, support::ASSEMBLER_RECIPE);
         for block in [
             support::GENERATOR,
             support::PULVERIZER,
             support::FURNACE,
             support::COOLER,
             support::LAVA,
+            support::ASSEMBLER,
         ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
@@ -94,6 +101,10 @@ impl Hooks for Mod {
             .block_entity_type(support::LAVA_TYPE)
             .blocks(&[support::LAVA])
             .build();
+        let assembler = registrar
+            .block_entity_type(support::ASSEMBLER_TYPE)
+            .blocks(&[support::ASSEMBLER])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -107,6 +118,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&lava, LavaPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&assembler, AssemblerPart) {
             context.refuse(&error.to_string());
         }
     }
@@ -221,6 +235,8 @@ struct FurnacePart;
 struct CoolerPart;
 /// The Lava Generator's block entity.
 struct LavaPart;
+/// The Assembler's block entity.
+struct AssemblerPart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -386,6 +402,39 @@ impl BlockEntityPart for LavaPart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_lava_generator(host, level, pos, &mut nbt);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for AssemblerPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for AssemblerPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the three-core assembly gate, then one `oritech:assembler`
+    /// craft from the four input slots into the one output.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_assembler(host, level, pos, &mut nbt, &mut event.entity.items);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

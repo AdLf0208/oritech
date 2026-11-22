@@ -2,10 +2,10 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.9"
-description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 7: the Basic Generator, the Pulverizer, the Powered
+version = "0.2.10"
+description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 8: the Basic Generator, the Pulverizer, the Powered
 Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
-Unit Addon and the material and component chain. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
+Unit Addon, the material and component chain and the Assembler. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
 buffer that accepts no inserts and gives 256 FE a call; the pulverizer spends 32 FE a tick and turns one
 input into its recipe's results in the recipe's time, reading the jar's own `oritech:pulverizer` files;
 the powered furnace is a controller plus one of the seven machine cores above it that smelts any vanilla
@@ -19,6 +19,9 @@ machine's own addon slots and are scanned every tick: they multiply its speed an
 the jar's shipped default), add chambers, capacity and insert rate, or charge a burst that runs a machine
 eight times as fast. The seventh addon, the Control Unit Addon, gates its machine: a redstone signal at
 the addon holds the whole tick (no recipe, no progress, no FE) until the signal goes.
+The assembler is the mod's four-input machine: a controller plus three cores that matches its recipe's
+ingredients in any slot order, spends 128 FE a tick, and turns one nickel, one steel and two coils into
+two motors in 48 ticks for 6,144 FE from the jar's own `oritech:assembler` files.
 Every buffer is a real block energy capability another mod's cable can read, every tank a real block
 fluid handler another mod's pipe can fill, and a fuelled generator pushes its FE to the machines beside
 it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the special

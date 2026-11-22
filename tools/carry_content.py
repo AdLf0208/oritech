@@ -41,6 +41,9 @@ CARRIED = [
     "assets/oritech/textures/block/models/cooler_block.png",
     # Slice 4's lava generator: the same placeholder blockstate and `.geo` model.
     "assets/oritech/textures/block/models/lava_generator_block.png",
+    # Slice 8's assembler: the same placeholder blockstate (it names the
+    # `machine_speed_addon` model) and the same kind of `.geo` model.
+    "assets/oritech/textures/block/models/assembler_block.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -131,6 +134,9 @@ ITEMS = {
     "silicon": ("Silicon", "minecraft:iron_ingot"),
     "magnetic_coil": ("Magnetic Coil", "minecraft:iron_ingot"),
     "motor": ("Motor", "minecraft:iron_ingot"),
+    # Slice 8: the assembler's own recipe takes one, so the item slice 7 left out
+    # (nothing consumed it then) is carried and craftable now.
+    "adamant_ingot": ("Adamant Ingot", "minecraft:iron_ingot"),
 }
 PLATING = {
     # The jar's lang names them "… Reinforced Plating"; upstream copies
@@ -195,6 +201,26 @@ CHAIN_RECIPES = [
     # furnace's 0.5 speed makes it 30).
     "data/oritech/recipe/silicon_from_smelting_raw_silicon.json",
 ]
+
+# Slice 8's recipes: the five `oritech:assembler` files whose ingredients *and*
+# result resolve here (see `notes.md` for the other 52), the assembler block's
+# own craft (the jar's alt, which takes any `#oritech:plating`), and the adamant
+# ingot that craft needs. Every one is the jar's file with the bare-ingredient
+# rewrite only.
+ASSEMBLER_RECIPES = [
+    # The two component recipes this slice is about: two motors from a nickel, a
+    # steel and two coils; six coils from steel, two nickel and copper.
+    "data/oritech/recipe/assembler/motor.json",
+    "data/oritech/recipe/assembler/magnet.json",
+    # Three vanilla-only assemblies, free once the machine exists.
+    "data/oritech/recipe/assembler/blazerod.json",
+    "data/oritech/recipe/assembler/fireball.json",
+    "data/oritech/recipe/assembler/shroomlight.json",
+    # The machine itself, and its one non-plating-only ingredient.
+    "data/oritech/recipe/crafting/assembleralt.json",
+    "data/oritech/recipe/crafting/alloy/adamant.json",
+]
+REWRITTEN_RECIPES += ASSEMBLER_RECIPES
 REWRITTEN_RECIPES += CHAIN_RECIPES
 
 # Slice 7's tags. The jar's own `c:ingots/*` files list items this package does
@@ -261,6 +287,13 @@ BLOCKS = {
     "lava_generator_block": {
         "name": "Lava Generator",
         "texture": "oritech:block/models/lava_generator_block",
+    },
+    # Slice 8: the Assembler (`block.oritech.assembler_block` is "Assembler" in
+    # the jar's lang). Its jar blockstate names the `machine_speed_addon` model
+    # and its item model is `builtin/entity`, so both are authored here.
+    "assembler_block": {
+        "name": "Assembler",
+        "texture": "oritech:block/models/assembler_block",
     },
 }
 CORE_NAMES = [

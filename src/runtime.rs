@@ -1246,6 +1246,7 @@ pub fn addon_slots(block: &str) -> &'static [[i32; 3]] {
         "oritech:powered_furnace_block" => &[[0, -1, 0]],
         "oritech:cooler_block" => &[[0, 0, -2]],
         "oritech:lava_generator_block" => &[[1, 0, 0], [1, 1, 0]],
+        "oritech:assembler_block" => &[[0, 0, -1], [0, 0, 2], [1, 0, 0]],
         _ => &[],
     }
 }
@@ -1409,6 +1410,233 @@ impl Burst {
         Self {
             remaining: self.remaining.clamp(-max, max),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The Assembler (slice 8)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.assemblerData.energyCapacity`.
+pub const ASSEMBLER_CAPACITY: i32 = 50_000;
+/// ...`.maxEnergyInsertion` (`128 * 8`): the most one insert moves.
+pub const ASSEMBLER_MAX_INSERT: i32 = 1_024;
+/// ...`.energyPerTick`: FE one working tick spends (the port's highest).
+pub const ASSEMBLER_ENERGY_PER_TICK: i32 = 128;
+/// `AssemblerBlockEntity.getSlotAssignments`'s `InventorySlotAssignment(0, 4, 4, 1)`:
+/// four input slots and one output.
+pub const ASSEMBLER_INPUTS: usize = 4;
+/// The one output slot (`getInventorySize` is 5).
+pub const ASSEMBLER_OUTPUTS: usize = 1;
+/// The entity's whole inventory.
+pub const ASSEMBLER_SLOTS: usize = ASSEMBLER_INPUTS + ASSEMBLER_OUTPUTS;
+/// `AssemblerBlockEntity.getCorePositions`: three cores, at `(0,0,1)`, `(0,1,0)`
+/// and `(0,1,1)` in the machine's own frame.
+pub const ASSEMBLER_CORE_OFFSETS: [[i32; 3]; 3] = [[0, 0, 1], [0, 1, 0], [0, 1, 1]];
+
+/// `MachineBlockEntity.calculateEnergyUsage` for the assembler:
+/// `energyPerTick * efficiency(1) * (1 / speed(1))` = 128 FE.
+#[must_use]
+pub fn assembler_energy_usage() -> i32 {
+    energy_usage(ASSEMBLER_ENERGY_PER_TICK, 1.0, 1.0, 1.0)
+}
+
+/// `MachineBlockEntity.checkCraftingFinished`'s duration for an assembler
+/// recipe: `progress >= time * speed`, the speed being the addons' (1 with none).
+#[must_use]
+pub fn assembler_ticks(time: u32) -> u32 {
+    processing_ticks(time, 1.0)
+}
+
+/// Which input slot each of a recipe's ingredients drains, in the order
+/// `MachineBlockEntity.craftItem` consumes them; `None` when the slots cannot
+/// pay for every ingredient.
+///
+/// `OritechRecipe.complexMatch` only asks whether the multiset can pay, and
+/// `craftItem` then finds each ingredient again from a rotating start offset so
+/// two stacks of the same item drain evenly. Both are the same walk, so this one
+/// function answers both: a plan exists exactly when the grid matches.
+///
+/// `fits[ingredient][slot]` is the engine's own `Ingredient.test` for that pair
+/// (a pure function cannot test a stack, so the glue resolves the matrix);
+/// `counts[slot]` is what the slot holds. One item leaves each slot the plan
+/// names, so a slot holding two of an ingredient pays for one and keeps one —
+/// upstream's `shrink(1)`.
+#[must_use]
+pub fn craft_plan(counts: &[u32], fits: &[Vec<bool>]) -> Option<Vec<usize>> {
+    let mut left = counts.to_vec();
+    let mut plan = Vec::with_capacity(fits.len());
+    // `craftItem`'s `startOffset`: it moves one slot per ingredient that was
+    // taken, so it is the ingredient's own index, and two ingredients of the
+    // same item drain different slots.
+    for (start, ingredient) in fits.iter().enumerate() {
+        if left.is_empty() {
+            return None;
+        }
+        let mut taken = None;
+        for step in 0..left.len() {
+            let slot = (start + step) % left.len();
+            if left[slot] > 0 && ingredient.get(slot).copied().unwrap_or(false) {
+                taken = Some(slot);
+                break;
+            }
+        }
+        let slot = taken?;
+        left[slot] -= 1;
+        plan.push(slot);
+    }
+    Some(plan)
+}
+
+/// `MachineBlockEntity.findLowestMatchingSlot` over a machine's input slots: the
+/// first empty slot, else the slot holding the fewest of `item` (and still able
+/// to take one more), else `None`. `slots[slot]` is `(item id, count)`.
+#[must_use]
+pub fn insert_slot(slots: &[Option<(&str, u32)>], item: &str, max_stack: u32) -> Option<usize> {
+    let mut matching: Option<(usize, u32)> = None;
+    for (index, slot) in slots.iter().enumerate() {
+        match slot {
+            // Upstream answers the *first* empty slot before it looks at a
+            // partial stack, so four feeds of four items fill four slots.
+            None => return Some(index),
+            Some((held, count)) => {
+                if *held == item
+                    && *count < max_stack
+                    && matching.is_none_or(|(_, fewest)| *count < fewest)
+                {
+                    matching = Some((index, *count));
+                }
+            }
+        }
+    }
+    matching.map(|(index, _)| index)
+}
+
+/// Why an `oritech:assembler` recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssemblerError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `ingredients`, or more than the four input slots.
+    WrongInputCount,
+    /// No `results`, or more than the one output slot.
+    WrongResultCount,
+    /// A result without an item id or with a count outside 1..=99.
+    BadResult,
+    /// No positive `time`.
+    BadTime,
+}
+
+impl std::fmt::Display for AssemblerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::WrongInputCount => "no ingredient or more than four",
+            Self::WrongResultCount => "no result or more than one",
+            Self::BadResult => "a result without an item id or with a bad count",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for AssemblerError {}
+
+/// An `oritech:assembler` recipe: up to four order-independent ingredients, one
+/// result and a duration, read from the pin's custom-recipe table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssemblerRecipe {
+    /// The recipe id.
+    pub id: String,
+    /// Its ingredients, as the pin's `native_recipe_ingredient` reads them.
+    pub ingredients: Vec<Value>,
+    /// Its result (the machine has one output slot).
+    pub result: RecipeResult,
+    /// `time`, in ticks.
+    pub time: u32,
+}
+
+impl AssemblerRecipe {
+    /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
+    /// the data pack wrote it.
+    pub fn parse(id: &str, json: &str) -> Result<Self, AssemblerError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| AssemblerError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(AssemblerError::Unreadable);
+        }
+        let ingredients = value
+            .get("ingredients")
+            .and_then(Value::as_array)
+            .ok_or(AssemblerError::WrongInputCount)?;
+        if ingredients.is_empty() || ingredients.len() > ASSEMBLER_INPUTS {
+            return Err(AssemblerError::WrongInputCount);
+        }
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(AssemblerError::WrongResultCount)?;
+        if results.len() != ASSEMBLER_OUTPUTS {
+            return Err(AssemblerError::WrongResultCount);
+        }
+        let entry = &results[0];
+        let item = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|item| !item.is_empty())
+            .ok_or(AssemblerError::BadResult)?;
+        let count = entry.get("count").and_then(Value::as_i64).unwrap_or(1);
+        if !(1..=99).contains(&count) {
+            return Err(AssemblerError::BadResult);
+        }
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(AssemblerError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            ingredients: ingredients.iter().map(ingredient_json).collect(),
+            result: RecipeResult {
+                item: item.to_owned(),
+                count: i32::try_from(count).unwrap_or(i32::MAX),
+            },
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Assembler's state: the buffer, the progress toward the current recipe and
+/// the recipe it belongs to — the same three values every processing machine
+/// keeps, advanced by the one shared [`advance`] step.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Assembler {
+    /// Stored FE.
+    pub energy: i32,
+    /// Ticks done toward the current craft.
+    pub progress: u32,
+    /// The recipe being worked on; empty when none.
+    pub recipe: String,
+}
+
+impl Assembler {
+    /// An empty assembler.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick at the machine's (or its addons') per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            cost,
+        )
     }
 }
 
@@ -2888,5 +3116,258 @@ mod tests {
         );
         assert_eq!(generator_output(LAVA_ENERGY_PER_TICK, 1.0, 1.0), 64);
         assert_eq!(generator_burn_ticks(120, 1.0, 1.0), 120);
+    }
+
+    /// The jar's `assembler/motor.json`, as the data pack ships it.
+    const MOTOR_RECIPE: &str = r#"{
+      "type": "oritech:assembler",
+      "ingredients": [
+        {"tag": "c:ingots/nickel"},
+        {"tag": "c:ingots/steel"},
+        {"item": "oritech:magnetic_coil"},
+        {"item": "oritech:magnetic_coil"}
+      ],
+      "results": [{"count": 2, "id": "oritech:motor"}],
+      "time": 48
+    }"#;
+
+    #[test]
+    fn the_assembler_spends_the_jars_128_fe_a_tick_and_runs_a_recipes_time() {
+        assert_eq!(assembler_energy_usage(), ASSEMBLER_ENERGY_PER_TICK);
+        assert_eq!(
+            energy_usage(ASSEMBLER_ENERGY_PER_TICK, 1.0, 1.0, 1.0),
+            ASSEMBLER_ENERGY_PER_TICK
+        );
+        // No addon: the recipe's own `time`.
+        assert_eq!(assembler_ticks(48), 48);
+        assert_eq!(assembler_ticks(96), 96);
+        // The speed addon's additive figures: `processing_ticks` rounds 48 ×
+        // (1/1.5) up from the f32's 0.6666667 to 33 ticks, at ceil(128 × 1.2 ×
+        // 3/2) = 231 FE a tick. The assembler is the first delivered machine
+        // whose base cost is not 32, so the formula is pinned here rather than
+        // assumed from the others (the game leg runs the base path only).
+        let addons = Addons::gather(&[SPEED_ADDON], ADDON_MODE);
+        assert_eq!(
+            energy_usage(
+                ASSEMBLER_ENERGY_PER_TICK,
+                1.0,
+                speed_multiplier(&addons, 1.0, 1.0),
+                efficiency_multiplier(&addons, 1.0),
+            ),
+            231
+        );
+        assert_eq!(
+            processing_ticks(48, speed_multiplier(&addons, 1.0, 1.0)),
+            33
+        );
+    }
+
+    /// The engine's `Ingredient.test` for one ingredient against four slots.
+    fn fits(accepts: [usize; 4]) -> Vec<bool> {
+        (0..4).map(|slot| accepts.contains(&slot)).collect()
+    }
+
+    #[test]
+    fn the_assembler_matches_its_ingredients_in_any_slot_order() {
+        // The motor's four items, one per slot, in the recipe's own order.
+        let counts = [1, 1, 1, 1];
+        let ordered = vec![
+            fits([0, 0, 0, 0]),
+            fits([1, 1, 1, 1]),
+            fits([2, 3, 2, 3]),
+            fits([2, 3, 2, 3]),
+        ];
+        assert_eq!(craft_plan(&counts, &ordered), Some(vec![0, 1, 2, 3]));
+
+        // The same grid with the ingredients in the opposite order: a machine
+        // that only read slot *i* for ingredient *i* would refuse it.
+        let reversed = vec![
+            fits([2, 3, 2, 3]),
+            fits([0, 0, 0, 0]),
+            fits([1, 1, 1, 1]),
+            fits([2, 3, 2, 3]),
+        ];
+        assert_eq!(craft_plan(&counts, &reversed), Some(vec![2, 0, 1, 3]));
+
+        // One coil short: the fourth ingredient has no slot left to take from.
+        let short = vec![
+            fits([0, 0, 0, 0]),
+            fits([1, 1, 1, 1]),
+            fits([2, 3, 2, 3]),
+            fits([2, 3, 2, 3]),
+        ];
+        assert_eq!(craft_plan(&[1, 1, 1, 0], &short), None);
+        // An empty grid starts nothing.
+        assert_eq!(craft_plan(&[0, 0, 0, 0], &short), None);
+    }
+
+    #[test]
+    fn a_slot_with_a_spare_item_pays_one_per_ingredient_and_keeps_the_rest() {
+        // The brief's grid: one nickel, two steel in one slot, two coils — five
+        // items in four slots. The recipe takes one nickel, one steel and two
+        // coils, so the steel slot is drained once and keeps its spare.
+        let counts = [1, 2, 2, 0];
+        let plan = vec![
+            fits([0, 0, 0, 0]),
+            fits([1, 1, 1, 1]),
+            fits([2, 3, 2, 3]),
+            fits([2, 3, 2, 3]),
+        ];
+        let assignment = craft_plan(&counts, &plan).expect("five items pay for four ingredients");
+        assert_eq!(assignment.len(), ASSEMBLER_INPUTS);
+        assert_eq!(
+            assignment.iter().filter(|slot| **slot == 1).count(),
+            1,
+            "the two steel pay for one ingredient, not both"
+        );
+        assert_eq!(
+            assignment.iter().filter(|slot| **slot == 2).count(),
+            2,
+            "the two coils pay for two ingredients"
+        );
+    }
+
+    #[test]
+    fn an_assembler_recipe_takes_one_to_four_ingredients_and_one_result() {
+        let recipe = AssemblerRecipe::parse("oritech:assembler/motor", MOTOR_RECIPE)
+            .expect("the jar's motor recipe parses");
+        assert_eq!(recipe.ingredients.len(), ASSEMBLER_INPUTS);
+        assert_eq!(
+            recipe.ingredients[0],
+            Value::String("#c:ingots/nickel".to_owned()),
+            "the tag form the engine resolves"
+        );
+        assert_eq!(
+            recipe.ingredients[2],
+            Value::String("oritech:magnetic_coil".to_owned())
+        );
+        assert_eq!(
+            recipe.result,
+            RecipeResult {
+                item: "oritech:motor".to_owned(),
+                count: 2
+            }
+        );
+        assert_eq!(recipe.time, 48);
+
+        let five = MOTOR_RECIPE.replace(
+            r#"{"item": "oritech:magnetic_coil"}"#,
+            r#"{"item": "oritech:magnetic_coil"}, {"item": "minecraft:iron_ingot"}"#,
+        );
+        assert_eq!(
+            AssemblerRecipe::parse("x", &five),
+            Err(AssemblerError::WrongInputCount),
+            "a fifth ingredient has no slot"
+        );
+        let two_results = MOTOR_RECIPE.replace(
+            r#""results": [{"count": 2, "id": "oritech:motor"}]"#,
+            r#""results": [{"count": 2, "id": "oritech:motor"}, {"count": 1, "id": "minecraft:iron_ingot"}]"#,
+        );
+        assert_eq!(
+            AssemblerRecipe::parse("x", &two_results),
+            Err(AssemblerError::WrongResultCount),
+            "the machine has one output slot"
+        );
+        assert_eq!(
+            AssemblerRecipe::parse("x", &MOTOR_RECIPE.replace("\"time\": 48", "\"time\": 0")),
+            Err(AssemblerError::BadTime)
+        );
+        assert_eq!(
+            AssemblerRecipe::parse("x", r#"{"ingredients": [], "results": [], "time": 48}"#),
+            Err(AssemblerError::Unreadable)
+        );
+    }
+
+    #[test]
+    fn an_assembler_craft_costs_exactly_its_time_times_its_rate() {
+        let mut machine = Assembler::new();
+        assert_eq!(
+            machine.tick_with(None, ASSEMBLER_ENERGY_PER_TICK),
+            Step::Idle
+        );
+        assert_eq!(machine.energy, 0);
+
+        machine.energy = assembler_ticks(48) as i32 * ASSEMBLER_ENERGY_PER_TICK;
+        assert_eq!(machine.energy, 6_144);
+        let mut step = Step::Working;
+        for _ in 0..48 {
+            step = machine.tick_with(
+                work("oritech:assembler/motor", 48),
+                ASSEMBLER_ENERGY_PER_TICK,
+            );
+        }
+        assert_eq!(step, Step::Finished);
+        assert_eq!(machine.energy, 0, "48 ticks at 128 FE is exactly 6,144");
+        assert_eq!(machine.progress, 0);
+
+        // One FE short: the last tick starves and the progress is kept.
+        machine.energy = 6_143;
+        for _ in 0..47 {
+            machine.tick_with(
+                work("oritech:assembler/motor", 48),
+                ASSEMBLER_ENERGY_PER_TICK,
+            );
+        }
+        assert_eq!(
+            machine.tick_with(
+                work("oritech:assembler/motor", 48),
+                ASSEMBLER_ENERGY_PER_TICK
+            ),
+            Step::Starved
+        );
+        assert_eq!(machine.energy, 127);
+        assert_eq!(machine.progress, 47);
+    }
+
+    #[test]
+    fn a_click_fills_the_first_empty_input_slot_then_the_lowest_matching_stack() {
+        // `findLowestMatchingSlot`: an empty slot wins over a partial stack of
+        // the same item, which is why four feeds of four items fill four slots.
+        assert_eq!(
+            insert_slot(&[Some(("a", 1)), None, None, None], "a", 64),
+            Some(1)
+        );
+        assert_eq!(
+            insert_slot(
+                &[
+                    Some(("a", 1)),
+                    Some(("b", 2)),
+                    Some(("c", 1)),
+                    Some(("d", 1))
+                ],
+                "b",
+                64
+            ),
+            Some(1),
+            "no empty slot: the matching stack takes it"
+        );
+        assert_eq!(
+            insert_slot(
+                &[
+                    Some(("a", 1)),
+                    Some(("b", 2)),
+                    Some(("c", 1)),
+                    Some(("d", 1))
+                ],
+                "e",
+                64
+            ),
+            None,
+            "a full grid of other items takes nothing"
+        );
+        assert_eq!(
+            insert_slot(
+                &[
+                    Some(("a", 1)),
+                    Some(("b", 64)),
+                    Some(("c", 1)),
+                    Some(("d", 1))
+                ],
+                "b",
+                64
+            ),
+            None,
+            "a matching stack at the item's limit takes nothing"
+        );
     }
 }

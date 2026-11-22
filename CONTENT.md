@@ -4,7 +4,7 @@
 [`tools/carry_content.py`](tools/carry_content.py) from the ATM10 jar
 `oritech-neoforge-1.21.1-1.2.13.jar`
 (SHA-256 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`).
-The script is deterministic (`--check` exits 1 on any drift) and writes **230
+The script is deterministic (`--check` exits 1 on any drift) and writes **248
 files** at the root; since 0.2.0 they travel in the same SDK package as `src/`,
 so there is no separate content `.hmod` and no manifest here (the root
 `horizon-mod.toml` is the only one).
@@ -56,6 +56,27 @@ declaration (the `minecraft:iron_block` copy, opaque), self-drop loot table, lan
 `crafting/addon/redstone` and `silicon_from_smelting_raw_silicon`. The rewrite touches the shaped
 `key`, the shapeless `ingredients` and the smelting `ingredient` only; results, counts, patterns, times
 and `experience` are the jar's. A *list* ingredient is refused by the tool (26.3 drops such a file).
+## Slice 8: the Assembler, the adamant ingot and the assembler recipes (18 files)
+
+**Carried byte for byte**: the assembler block's own texture
+(`assets/oritech/textures/block/models/assembler_block.png` — its blockstate names the
+`machine_speed_addon` placeholder and its item model is `builtin/entity`, so both are authored here),
+and the adamant ingot's item model and texture
+(`assets/oritech/models/item/adamant_ingot.json`, `assets/oritech/textures/item/adamant_ingot.png`).
+
+**Authored**: the assembler's one-variant blockstate and `cube_all` block model, its item model
+(`{parent: oritech:block/assembler_block}`), its 26.3 item definition, its block declaration (the
+`minecraft:iron_block` copy with `occludes: false`, like the other machines), its self-drop loot table,
+its lang name (`block.oritech.assembler_block` → "Assembler"), its place in the machines tab and the
+pickaxe / stone-tool tags; the adamant ingot's 26.3 definition, `horizon/item` declaration
+(`minecraft:iron_ingot`) and lang name, and its place in the components tab.
+
+**Recipes**: the five `data/oritech/recipe/assembler/*.json` whose ingredients *and* result resolve
+(`motor`, `magnet`, `blazerod`, `fireball`, `shroomlight`), plus `crafting/alloy/adamant.json` and
+`crafting/assembleralt.json` — each the jar's file with only the bare-ingredient rewrite, and each
+crafted in game (`notes.md` → *Slice 8*). The other 52 assembler files are refused one reason per
+family in *The recipe set* there.
+
 Which files were taken and which left, with a reason each, is `notes.md` → *Slice 7* → *The recipe
 table*.
 

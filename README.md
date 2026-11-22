@@ -1,12 +1,12 @@
-# Oritech for Horizon — slices 1 to 7
+# Oritech for Horizon — slices 1 to 8
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
-Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon** and the
-**material and component chain** of
+Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon**, the
+**material and component chain** and the **Assembler** of
 [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for Horizon at the
 campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
-One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the five block-entity
+One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the six block-entity
 Parts and the rules in `src/runtime.rs`, beside the carried `assets/` and `data/` (blocks, items,
 models, textures, recipes, loot, lang, tags).
 
@@ -67,6 +67,15 @@ models, textures, recipes, loot, lang, tags).
   furnace. The seven items and the three blocks are declared items with the jar's own models and
   textures, in the **Oritech Components** and **Oritech Machines** creative tabs, with the
   conventional `c:` item tags their recipes name.
+- **Assembler** (`oritech:assembler_block`) — the mod's four-input machine: a controller plus **three
+  cores** (east, above, and both) that matches an `oritech:assembler` recipe's ingredients **in any
+  slot order**, spends **128 FE a tick** from a **50,000 FE** buffer, and grants the recipe's result
+  into its one output slot. The jar's own files: **one nickel + one steel + two coils → two motors in
+  48 ticks for exactly 6,144 FE**, steel + two nickel + copper → six coils, and three vanilla
+  assemblies (four blaze powder → a blaze rod, gunpowder + blaze powder + two coal → four fire
+  charges, a log + three glowstone → a shroomlight). A slot holding a spare pays one item per
+  ingredient and keeps the rest. The machine itself is craftable at a table from copper, crafters,
+  **adamant** (2 nickel + 2 diamond), two motors and any plating.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and

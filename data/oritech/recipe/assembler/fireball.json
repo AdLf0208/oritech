@@ -1,0 +1,16 @@
+{
+  "ingredients": [
+    "minecraft:gunpowder",
+    "minecraft:blaze_powder",
+    "#minecraft:coals",
+    "#minecraft:coals"
+  ],
+  "results": [
+    {
+      "count": 4,
+      "id": "minecraft:fire_charge"
+    }
+  ],
+  "time": 96,
+  "type": "oritech:assembler"
+}

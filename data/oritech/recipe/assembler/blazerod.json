@@ -1,0 +1,16 @@
+{
+  "ingredients": [
+    "minecraft:blaze_powder",
+    "minecraft:blaze_powder",
+    "minecraft:blaze_powder",
+    "minecraft:blaze_powder"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "minecraft:blaze_rod"
+    }
+  ],
+  "time": 96,
+  "type": "oritech:assembler"
+}
