@@ -46,6 +46,9 @@ CARRIED = [
     "assets/oritech/textures/block/models/assembler_block.png",
     # Slice 9's centrifuge: the same placeholder blockstate and `.geo` model.
     "assets/oritech/textures/block/models/centrifuge_block.png",
+    # Slice 10's foundry: the same placeholder blockstate (`blockstates/foundry_block.json`
+    # names the `machine_speed_addon` model) and the same kind of `.geo` model.
+    "assets/oritech/textures/block/models/foundry_block.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -84,6 +87,16 @@ REWRITTEN_RECIPES = [
     "data/oritech/recipe/centrifuge/carbon.json",
     "data/oritech/recipe/centrifuge/fluid/clay.json",
     "data/oritech/recipe/crafting/core3.json",
+    # Slice 10: the foundry's four alloys whose result and every ingredient
+    # resolve here, and the block's own crafting recipe. The other 25 alloys are
+    # refused — `notes.md` has the per-family reasons, and the refinery's whole
+    # 22 files are blocked on the mod's own fluids (`#c:naphtha` names no mod in
+    # this pack and the pin has no fluid-tag query).
+    "data/oritech/recipe/foundry/alloy/steel.json",
+    "data/oritech/recipe/foundry/alloy/electrum.json",
+    "data/oritech/recipe/foundry/alloy/adamant.json",
+    "data/oritech/recipe/foundry/alloy/netherite.json",
+    "data/oritech/recipe/crafting/foundry.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -323,6 +336,12 @@ BLOCKS = {
     "centrifuge_block": {
         "name": "Centrifuge",
         "texture": "oritech:block/models/centrifuge_block",
+    },
+    # Slice 10: the Foundry (`block.oritech.foundry_block` is "Foundry" in the
+    # jar's lang), the same GeckoLib placeholder blockstate a third time.
+    "foundry_block": {
+        "name": "Foundry",
+        "texture": "oritech:block/models/foundry_block",
     },
 }
 CORE_NAMES = [

@@ -1,7 +1,7 @@
-//! Oritech for Horizon — slices 1 to 8: the Basic Generator, the Pulverizer, the
+//! Oritech for Horizon — slices 1 to 10: the Basic Generator, the Pulverizer, the
 //! Powered Furnace, the Industrial Chiller, the Lava Generator, the machine addon
 //! system, the Control Unit Addon's redstone gate, the material and component
-//! chain and the Assembler.
+//! chain, the Assembler, the Centrifuge and the Foundry.
 //!
 //! One flat SDK package (mod API 0.2): the carried machines, their models,
 //! textures, lang, loot tables, recipes, tags and creative tab are this
@@ -62,6 +62,12 @@ impl Hooks for Mod {
         registrar.register_recipe_type(support::ASSEMBLER_RECIPE);
         registrar
             .register_raw_recipe_serializer(support::ASSEMBLER_RECIPE, support::ASSEMBLER_RECIPE);
+        // The foundry's four carried alloys name `oritech:foundry`; without its serializer the
+        // game refuses the whole data pack at load ("unregistered recipe serializer
+        // oritech:foundry") and never opens the world — the same hard startup error the
+        // pulverizer's and the centrifuge's notes record.
+        registrar.register_recipe_type(support::FOUNDRY_RECIPE);
+        registrar.register_raw_recipe_serializer(support::FOUNDRY_RECIPE, support::FOUNDRY_RECIPE);
         // The centrifuge's two carried recipes name its item and fluid tables
         // (`oritech:centrifuge`, `oritech:centrifuge_fluid`); without both serializers the
         // game refuses the files at load, the same hard startup error as the pulverizer's.
@@ -81,6 +87,7 @@ impl Hooks for Mod {
             support::LAVA,
             support::ASSEMBLER,
             support::CENTRIFUGE,
+            support::FOUNDRY,
         ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
@@ -121,6 +128,10 @@ impl Hooks for Mod {
             .block_entity_type(support::CENTRIFUGE_TYPE)
             .blocks(&[support::CENTRIFUGE])
             .build();
+        let foundry = registrar
+            .block_entity_type(support::FOUNDRY_TYPE)
+            .blocks(&[support::FOUNDRY])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -140,6 +151,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&centrifuge, CentrifugePart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&foundry, FoundryPart) {
             context.refuse(&error.to_string());
         }
     }
@@ -258,6 +272,8 @@ struct LavaPart;
 struct AssemblerPart;
 /// The Centrifuge's block entity.
 struct CentrifugePart;
+/// The Foundry's block entity.
+struct FoundryPart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -464,7 +480,40 @@ impl BlockEntityPart for AssemblerPart {
 }
 
 #[mod_api::horizon_part]
+impl BlockPart for FoundryPart {}
+
+#[mod_api::horizon_part]
 impl BlockPart for CentrifugePart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for FoundryPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the three-core assembly gate, then one `oritech:foundry`
+    /// alloy from the two input slots into the one output.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_foundry(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
 
 #[mod_api::horizon_part]
 impl BlockEntityPart for CentrifugePart {

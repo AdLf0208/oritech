@@ -24,8 +24,10 @@ use crate::runtime::{
     CENTRIFUGE_ENERGY_PER_TICK, CENTRIFUGE_MAX_INSERT, CENTRIFUGE_SLOTS, CENTRIFUGE_TANK,
     COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK,
     CORE_OFFSET, Centrifuge, CentrifugeRecipe, Cooler, CoolerRecipe, EnergyTarget, FLUID_ADDON,
-    FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput,
-    Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
+    FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS, FOUNDRY_ENERGY_PER_TICK, FOUNDRY_INPUTS,
+    FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK,
+    FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput, Foundry, FoundryRecipe, Furnace,
+    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
     LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator,
     MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
     PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, Work, addon_names,
@@ -35,6 +37,8 @@ use crate::runtime::{
     is_fuel, lava_output_targets, output_fits, processing_ticks, redstone_disables,
     speed_multiplier, tank_matches,
 };
+
+use serde_json::Value;
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
 pub(crate) const FURNACE: &str = "oritech:powered_furnace_block";
@@ -46,8 +50,12 @@ pub(crate) const LAVA: &str = "oritech:lava_generator_block";
 pub(crate) const ASSEMBLER: &str = "oritech:assembler_block";
 /// The Centrifuge (`BlockContent.CENTRIFUGE_BLOCK`) — slice 9.
 pub(crate) const CENTRIFUGE: &str = "oritech:centrifuge_block";
+/// The Foundry (`BlockContent.FOUNDRY_BLOCK`) — slice 10.
+pub(crate) const FOUNDRY: &str = "oritech:foundry_block";
 /// The recipe type the jar's `data/oritech/recipe/assembler/*.json` names.
 pub(crate) const ASSEMBLER_RECIPE: &str = "oritech:assembler";
+/// The recipe type the jar's `data/oritech/recipe/foundry/**` files name.
+pub(crate) const FOUNDRY_RECIPE: &str = "oritech:foundry";
 /// The recipe type the jar's `data/oritech/recipe/centrifuge/**` item files name.
 pub(crate) const CENTRIFUGE_RECIPE: &str = "oritech:centrifuge";
 /// The recipe type its `fluid/**` files name; it runs only with the Fluid Addon.
@@ -76,6 +84,7 @@ pub(crate) const COOLER_TYPE: &str = "cooler";
 pub(crate) const LAVA_TYPE: &str = "lava_generator";
 pub(crate) const ASSEMBLER_TYPE: &str = "assembler";
 pub(crate) const CENTRIFUGE_TYPE: &str = "centrifuge";
+pub(crate) const FOUNDRY_TYPE: &str = "foundry";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -92,6 +101,8 @@ const COOLER_OUTPUT: usize = 0;
 const ASSEMBLER_OUTPUT: usize = ASSEMBLER_INPUTS;
 /// The centrifuge's `InventorySlotAssignment(0, 1, 1, 2)`: slot 0 in, slots 1–2 out.
 const CENTRIFUGE_OUTPUT: usize = 1;
+/// The foundry's `InventorySlotAssignment(0, 2, 2, 1)`: slots 0–1 in, slot 2 out.
+const FOUNDRY_OUTPUT: usize = FOUNDRY_INPUTS;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
@@ -233,6 +244,12 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
             vec![INPUT_SLOT],
             vec![CENTRIFUGE_OUTPUT, CENTRIFUGE_OUTPUT + 1],
         ),
+        // `InventorySlotAssignment(0, 2, 2, 1)`: two inputs, one output.
+        FOUNDRY => (
+            FOUNDRY_SLOTS,
+            (0..FOUNDRY_INPUTS).collect(),
+            vec![FOUNDRY_OUTPUT],
+        ),
         _ => return None,
     };
     Some(ModContainer {
@@ -258,6 +275,7 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         LAVA => (LAVA_CAPACITY, 0, LAVA_MAX_EXTRACT),
         ASSEMBLER => (ASSEMBLER_CAPACITY, ASSEMBLER_MAX_INSERT, 0),
         CENTRIFUGE => (CENTRIFUGE_CAPACITY, CENTRIFUGE_MAX_INSERT, 0),
+        FOUNDRY => (FOUNDRY_CAPACITY, FOUNDRY_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -828,6 +846,45 @@ pub(crate) struct AssemblerView<'a> {
     pub(crate) output: Option<(&'a str, u32)>,
 }
 
+/// The Foundry saved in a block entity's compound: the machine's three values
+/// and the multiblock facts (three cores).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct FoundrySaved {
+    /// The buffer, progress and recipe the pure state machine keeps.
+    pub(crate) machine: Foundry,
+    /// The assembly: assembled flag, the cores' offsets, their average quality.
+    pub(crate) assembly: Assembly,
+}
+
+/// The foundry saved in a block entity's compound; a fresh one is unassembled.
+pub(crate) fn foundry_state(nbt: &Compound, capacity: i32) -> FoundrySaved {
+    FoundrySaved {
+        machine: Foundry {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+    }
+}
+
+/// Write the foundry's tick result back: the same keys every machine uses.
+pub(crate) fn store_foundry(nbt: &mut Compound, saved: &FoundrySaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, &saved.assembly);
+}
+
+/// What the readout prints about a foundry: its saved state, its three cores
+/// and its three slots.
+pub(crate) struct FoundryView<'a> {
+    pub(crate) saved: &'a FoundrySaved,
+    pub(crate) core: Option<(&'a str, i32)>,
+    pub(crate) inputs: [Option<(&'a str, u32)>; FOUNDRY_INPUTS],
+    pub(crate) output: Option<(&'a str, u32)>,
+}
+
 /// The Centrifuge saved in a block entity's compound: the machine's three values,
 /// the multiblock facts (one core) and the Fluid Addon's one tank.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1044,6 +1101,12 @@ const ASSEMBLER_PROFILE: MachineProfile = MachineProfile {
 /// `centrifugeData`: 64 FE a tick, no speed multiplier and no divisor.
 const CENTRIFUGE_PROFILE: MachineProfile = MachineProfile {
     base_energy: CENTRIFUGE_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
+/// `foundryData`: 128 FE a tick, no speed multiplier and no divisor.
+const FOUNDRY_PROFILE: MachineProfile = MachineProfile {
+    base_energy: FOUNDRY_ENERGY_PER_TICK,
     base_speed: 1.0,
     divisor: 1.0,
 };
@@ -1734,7 +1797,9 @@ static COOLER_RECIPES: Mutex<Option<Vec<CoolerRecipe>>> = Mutex::new(None);
 static LAVA_RECIPES: Mutex<Option<Vec<LavaGenRecipe>>> = Mutex::new(None);
 /// The assembler's recipes keep *four* resolved ingredients each, so they have
 /// their own cache entry shape: [`cached_recipe`] resolves exactly one.
-static ASSEMBLER_RECIPES: Mutex<Option<Vec<AssemblerResolved>>> = Mutex::new(None);
+static ASSEMBLER_RECIPES: Mutex<Option<Vec<MultiResolved<AssemblerRecipe>>>> = Mutex::new(None);
+/// The foundry's recipes keep *two* resolved ingredients each — the same shape.
+static FOUNDRY_RECIPES: Mutex<Option<Vec<MultiResolved<FoundryRecipe>>>> = Mutex::new(None);
 /// The centrifuge's two tables: both have one resolved ingredient each, so both
 /// use the [`Resolved`] shape (the item table for the click's "is this an
 /// ingredient" test, not only the tick's first match).
@@ -1742,10 +1807,46 @@ static CENTRIFUGE_RECIPES: Mutex<Option<Vec<Resolved<CentrifugeRecipe>>>> = Mute
 static CENTRIFUGE_FLUID_RECIPES: Mutex<Option<Vec<Resolved<CentrifugeRecipe>>>> = Mutex::new(None);
 static RECIPE_TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// One parsed assembler recipe with every ingredient the engine resolved for it.
-struct AssemblerResolved {
-    recipe: AssemblerRecipe,
+/// One parsed recipe with several item ingredients, and every ingredient the
+/// engine resolved for it (the assembler's four, the foundry's two).
+struct MultiResolved<T> {
+    recipe: T,
     ingredients: Vec<Ingredient>,
+}
+
+/// Every recipe of `kind` this port can parse and the engine can fully resolve,
+/// in the table's own order. `parse` answers the pure recipe and its ingredient
+/// JSON; a recipe with one unresolved ingredient is dropped, because the game
+/// drops it too and it could never craft.
+fn multi_table<T>(
+    host: &dyn Host,
+    kind: &str,
+    parse: impl Fn(&str, &str) -> Option<(T, Vec<Value>)>,
+) -> Vec<MultiResolved<T>> {
+    let mut resolved = Vec::new();
+    for recipe in host.recipes_of_type(kind).iter() {
+        let Some((parsed, ingredients)) = parse(&recipe.id, &recipe.json.to_string()) else {
+            continue;
+        };
+        let mut engine = Vec::with_capacity(ingredients.len());
+        let mut complete = true;
+        for ingredient in &ingredients {
+            match host.recipe_ingredient(&ingredient.to_string()) {
+                Ok(Some(one)) => engine.push(one),
+                _ => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if complete {
+            resolved.push(MultiResolved {
+                recipe: parsed,
+                ingredients: engine,
+            });
+        }
+    }
+    resolved
 }
 
 /// The first recipe of `kind` whose ingredient takes `input`: the pin's
@@ -1964,7 +2065,10 @@ fn centrifuge_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
 /// ingredient the engine cannot resolve is dropped here, exactly as the recipe
 /// loader would have dropped it. `look` runs under the lock, so the cache is
 /// loaded once and read without a second copy.
-fn with_assembler_recipes<R>(host: &dyn Host, look: impl FnOnce(&[AssemblerResolved]) -> R) -> R {
+fn with_assembler_recipes<R>(
+    host: &dyn Host,
+    look: impl FnOnce(&[MultiResolved<AssemblerRecipe>]) -> R,
+) -> R {
     let due = RECIPE_TICKS
         .fetch_add(1, Ordering::Relaxed)
         .is_multiple_of(RECIPE_CACHE_TICKS);
@@ -1972,30 +2076,13 @@ fn with_assembler_recipes<R>(host: &dyn Host, look: impl FnOnce(&[AssemblerResol
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     if cache.is_none() || due {
-        let mut resolved = Vec::new();
-        for recipe in host.recipes_of_type(ASSEMBLER_RECIPE).iter() {
-            let Ok(parsed) = AssemblerRecipe::parse(&recipe.id, &recipe.json.to_string()) else {
-                continue;
-            };
-            let mut ingredients = Vec::with_capacity(parsed.ingredients.len());
-            let mut complete = true;
-            for ingredient in &parsed.ingredients {
-                match host.recipe_ingredient(&ingredient.to_string()) {
-                    Ok(Some(resolved_ingredient)) => ingredients.push(resolved_ingredient),
-                    _ => {
-                        complete = false;
-                        break;
-                    }
-                }
-            }
-            if complete {
-                resolved.push(AssemblerResolved {
-                    recipe: parsed,
-                    ingredients,
-                });
-            }
-        }
-        *cache = Some(resolved);
+        let table = multi_table(host, ASSEMBLER_RECIPE, |id, json| {
+            AssemblerRecipe::parse(id, json).ok().map(|recipe| {
+                let ingredients = recipe.ingredients.clone();
+                (recipe, ingredients)
+            })
+        });
+        *cache = Some(table);
     }
     look(cache.as_deref().unwrap_or(&[]))
 }
@@ -2051,6 +2138,182 @@ fn assembler_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
                 .any(|ingredient| ingredient.test(host, stack))
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// Slice 10: the Foundry (`oritech:foundry_block`)
+// ---------------------------------------------------------------------------
+
+/// The foundry's parsed table: two resolved ingredients per recipe, cached the
+/// same way the assembler's is.
+fn with_foundry_recipes<R>(
+    host: &dyn Host,
+    look: impl FnOnce(&[MultiResolved<FoundryRecipe>]) -> R,
+) -> R {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = FOUNDRY_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let table = multi_table(host, FOUNDRY_RECIPE, |id, json| {
+            FoundryRecipe::parse(id, json).ok().map(|recipe| {
+                let ingredients = recipe.ingredients.clone();
+                (recipe, ingredients)
+            })
+        });
+        *cache = Some(table);
+    }
+    look(cache.as_deref().unwrap_or(&[]))
+}
+
+/// The foundry recipe the two input slots can pay for, with the slots one craft
+/// drains (`OritechRecipe.complexMatch` → `MachineBlockEntity.craftItem`). The
+/// first recipe in the table's order that matches wins, as `getRecipeFor`
+/// answers, and the pair is not slot-bound.
+fn foundry_plan(
+    host: &dyn Host,
+    items: &[Option<ItemStack>],
+) -> Option<(FoundryRecipe, Vec<usize>)> {
+    let stacks: Vec<Option<ItemStack>> = (0..FOUNDRY_INPUTS)
+        .map(|slot| items.get(slot).cloned().flatten())
+        .collect();
+    let counts: Vec<u32> = stacks
+        .iter()
+        .map(|stack| stack.as_ref().map_or(0, ItemStack::count))
+        .collect();
+    if counts.iter().all(|count| *count == 0) {
+        return None;
+    }
+    with_foundry_recipes(host, |recipes| {
+        recipes.iter().find_map(|resolved| {
+            let fits: Vec<Vec<bool>> = resolved
+                .ingredients
+                .iter()
+                .map(|ingredient| {
+                    stacks
+                        .iter()
+                        .map(|stack| {
+                            stack
+                                .as_ref()
+                                .is_some_and(|stack| ingredient.test(host, stack))
+                        })
+                        .collect()
+                })
+                .collect();
+            craft_plan(&counts, &fits).map(|plan| (resolved.recipe.clone(), plan))
+        })
+    })
+}
+
+/// Whether any loaded foundry recipe names `stack`: the click's "is this an
+/// input of this machine" test.
+fn foundry_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
+    with_foundry_recipes(host, |recipes| {
+        recipes.iter().any(|resolved| {
+            resolved
+                .ingredients
+                .iter()
+                .any(|ingredient| ingredient.test(host, stack))
+        })
+    })
+}
+
+/// Whether a foundry recipe's result still fits the one output slot
+/// (`canOutputRecipe` over a one-slot output view).
+fn foundry_output_fits(
+    host: &dyn Host,
+    items: &[Option<ItemStack>],
+    result: &RecipeResult,
+) -> bool {
+    let output = items
+        .get(FOUNDRY_OUTPUT)
+        .and_then(Option::as_ref)
+        .map(|stack| (stack.item().id(host), count_of(stack)));
+    output_fits(
+        output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+        result,
+        max_stack(host, &result.item),
+    )
+}
+
+/// `MachineBlockEntity.craftItem` for the foundry: one item out of each slot the
+/// plan names, then the result into the one output slot. The items leave before
+/// the output is granted, the order every machine in this port uses.
+fn finish_foundry(
+    host: &dyn Host,
+    items: &mut [Option<ItemStack>],
+    plan: &[usize],
+    recipe: &FoundryRecipe,
+) {
+    for slot in plan {
+        if !consume_one(items, *slot) {
+            return;
+        }
+    }
+    grow_output(host, items, FOUNDRY_OUTPUT, &recipe.result);
+}
+
+/// One server tick of the Foundry: the assembler's assembly gate (three cores at
+/// the controller's own offsets), then one `oritech:foundry` alloy from the two
+/// input slots. A finished craft takes one item per ingredient and grants the
+/// recipe's result into the one output slot.
+pub(crate) fn tick_foundry(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != FOUNDRY_SLOTS;
+    if resized {
+        items.resize(FOUNDRY_SLOTS, None);
+    }
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, FOUNDRY, pos, nbt, FOUNDRY_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, FOUNDRY, pos, nbt);
+    let capacity = addons.capacity(FOUNDRY_CAPACITY);
+    let before = foundry_state(nbt, capacity);
+    let before_burst = burst;
+    let mut saved = before.clone();
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled && !disabled {
+        // `getRecipe()` → `complexMatch`: the first alloy the two slots can pay
+        // for, then `canOutputRecipe` for the one output slot.
+        let candidate = foundry_plan(&*host, items);
+        let work = candidate.as_ref().and_then(|(recipe, _)| {
+            foundry_output_fits(&*host, items, &recipe.result).then_some(Work {
+                id: &recipe.id,
+                time: processing_ticks(recipe.time, speed),
+            })
+        });
+        step = saved.machine.tick_with(work, cost);
+        if step == Step::Finished
+            && let Some((recipe, plan)) = candidate.as_ref()
+        {
+            finish_foundry(&*host, items, plan, recipe);
+            // `UpgradableMachineBlockEntity.craftItem`'s chamber loop: another
+            // matching pair and output room means one more craft.
+            for _ in 0..addons.chambers {
+                let Some((next, next_plan)) = foundry_plan(&*host, items) else {
+                    break;
+                };
+                if next.id != recipe.id || !foundry_output_fits(&*host, items, &next.result) {
+                    break;
+                }
+                finish_foundry(&*host, items, &next_plan, &next);
+            }
+        }
+    }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
+    store_foundry(nbt, &saved);
+    store_burst(nbt, burst);
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
 }
 
 // ---------------------------------------------------------------------------
@@ -2166,11 +2429,10 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     let Some(name) = block_at(&*server, level, pos) else {
         return Flow::Continue;
     };
-    let is_multiblock = name == FURNACE
-        || name == COOLER
-        || name == LAVA
-        || name == ASSEMBLER
-        || name == CENTRIFUGE;
+    // `core_offsets_for` is the multiblock table, so the click path claims
+    // exactly the controllers that assemble from cores — a machine added to one
+    // list and forgotten in the other is the bug this line prevents.
+    let is_multiblock = core_offsets_for(&name).is_some();
     if !is_multiblock && name != GENERATOR && name != PULVERIZER {
         return Flow::Continue;
     }
@@ -2334,6 +2596,24 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         insert_held(server, level, pos, click.player, click.hand, &held, slot);
         return Flow::Cancel;
     }
+    if name == FOUNDRY {
+        // The foundry's click is the same `findLowestMatchingSlot` over its two
+        // input slots: the first empty one, else the slot holding the fewest of
+        // the same item. It takes any item one of its loaded alloys names.
+        let held_id = held.item().id(&*server);
+        if !foundry_accepts(&*server, &held) {
+            let message = format!("{held_id} is not an ingredient of an alloying recipe");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        }
+        let Some(slot) = foundry_input_slot(&*server, level, pos, &held_id) else {
+            let message = format!("{held_id} has no room in the foundry's two input slots");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        };
+        insert_held(server, level, pos, click.player, click.hand, &held, slot);
+        return Flow::Cancel;
+    }
     if name == GENERATOR {
         if !is_fuel(burn_time(&*server, &held)) {
             let message = format!("{} is not a fuel", held.item().id(&*server));
@@ -2365,6 +2645,7 @@ fn core_offsets_for(block: &str) -> Option<&'static [[i32; 3]]> {
         LAVA => Some(&[LAVA_CORE_OFFSET]),
         ASSEMBLER => Some(&ASSEMBLER_CORE_OFFSETS),
         CENTRIFUGE => Some(&[CENTRIFUGE_CORE_OFFSET]),
+        FOUNDRY => Some(&FOUNDRY_CORE_OFFSETS),
         _ => None,
     }
 }
@@ -2506,8 +2787,30 @@ fn assembler_input_slot(
     pos: [i32; 3],
     item: &str,
 ) -> Option<usize> {
+    machine_input_slot(host, level, pos, ASSEMBLER_INPUTS, item)
+}
+
+/// The foundry's two input slots, by the same `findLowestMatchingSlot` rule.
+fn foundry_input_slot(
+    host: &dyn Host,
+    level: LevelRef,
+    pos: [i32; 3],
+    item: &str,
+) -> Option<usize> {
+    machine_input_slot(host, level, pos, FOUNDRY_INPUTS, item)
+}
+
+/// `MachineBlockEntity.findLowestMatchingSlot` over a machine's first `inputs`
+/// slots: the first empty slot, else the slot holding the fewest of `item`.
+fn machine_input_slot(
+    host: &dyn Host,
+    level: LevelRef,
+    pos: [i32; 3],
+    inputs: usize,
+    item: &str,
+) -> Option<usize> {
     let entity = host.block_entity(level, pos)?;
-    let held: Vec<Option<(String, u32)>> = (0..ASSEMBLER_INPUTS)
+    let held: Vec<Option<(String, u32)>> = (0..inputs)
         .map(|slot| {
             entity
                 .item_slot(host, u32::try_from(slot).ok()?)
@@ -2757,6 +3060,32 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 time,
             ))
         }
+        FOUNDRY => {
+            let found = connected_addons(&*host, level, FOUNDRY, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(FOUNDRY_CAPACITY);
+            let saved = foundry_state(&nbt, capacity);
+            let core = core_view(&*host, level, pos, &saved.assembly);
+            let in0 = slot(0);
+            let in1 = slot(1);
+            let output = slot(FOUNDRY_OUTPUT);
+            Some(foundry_line(
+                pos,
+                &FoundryView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                    inputs: [
+                        in0.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                        in1.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    ],
+                    output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
+                time,
+            ))
+        }
         other => Some(format!("{pos:?} is a {other}, not an Oritech machine.")),
     }
 }
@@ -2779,6 +3108,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         LAVA => addons.capacity(LAVA_CAPACITY),
         ASSEMBLER => addons.capacity(ASSEMBLER_CAPACITY),
         CENTRIFUGE => addons.capacity(CENTRIFUGE_CAPACITY),
+        FOUNDRY => addons.capacity(FOUNDRY_CAPACITY),
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -2991,6 +3321,43 @@ pub(crate) fn assembler_line(
         slot_text(in1),
         slot_text(in2),
         slot_text(in3),
+        slot_text(view.output),
+        addons.text(),
+    )
+}
+
+/// The foundry's line: the assembly first, then the two input slots and the one
+/// output (the assembler's field names, so `machine_holds` works on it too).
+pub(crate) fn foundry_line(
+    pos: [i32; 3],
+    view: &FoundryView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    let [in0, in1] = view.inputs;
+    format!(
+        "Foundry at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, in0 {}, in1 {}, out0 {}, {}, t={t}",
+        saved.machine.energy,
+        capacity,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress,
+        slot_text(in0),
+        slot_text(in1),
         slot_text(view.output),
         addons.text(),
     )
@@ -4182,8 +4549,8 @@ mod tests {
         let recipes = engine_recipes();
         assert_eq!(
             recipes.len(),
-            21,
-            "the port carries twenty crafting recipes and one smelting recipe: {} found ({:?})",
+            22,
+            "the port carries twenty-one crafting recipes and one smelting recipe: {} found ({:?})",
             recipes.len(),
             recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
@@ -4728,5 +5095,332 @@ mod tests {
             Some(("minecraft:water", 250)),
             false
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 10: the Foundry (`oritech:foundry_block`)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn every_controller_the_click_path_claims_has_core_offsets_and_declarations() {
+        // The click path claims a block when `core_offsets_for` answers its core
+        // positions, so the two tables cannot drift: a multiblock added to one
+        // and forgotten in the other would take no clicks at all (the foundry's
+        // first cut was exactly that bug).
+        for block in [FURNACE, COOLER, LAVA, ASSEMBLER, CENTRIFUGE, FOUNDRY] {
+            assert!(
+                core_offsets_for(block).is_some(),
+                "{block} is a multiblock controller"
+            );
+            // The lava generator is a fluid generator with no item slots, so a
+            // controller declares at least one capability, not both.
+            assert!(
+                container(block).is_some() || battery(block).is_some(),
+                "{block} declares a container or a buffer"
+            );
+            assert!(battery(block).is_some(), "{block} declares its buffer");
+            assert!(
+                addon_slots(block).len() <= MAX_ADDON_SLOTS,
+                "{block} has more addon slots than the scan reads"
+            );
+        }
+        for block in [GENERATOR, PULVERIZER, "minecraft:stone"] {
+            assert!(
+                core_offsets_for(block).is_none(),
+                "{block} is not a multiblock controller"
+            );
+        }
+    }
+
+    #[test]
+    fn the_foundry_declares_two_inputs_one_output_and_its_own_buffer() {
+        // `FoundryBlockEntity.getSlotAssignments` → `(0, 2, 2, 1)`, inventory 3.
+        let container = container(FOUNDRY).expect("the foundry has a container");
+        assert_eq!(container.slots, FOUNDRY_SLOTS, "three slots");
+        assert_eq!(container.inputs, vec![0, 1], "two inputs");
+        assert_eq!(container.outputs, vec![2], "one output");
+        assert_eq!(
+            container.faces,
+            std::array::from_fn(|_| (0..FOUNDRY_SLOTS).collect::<Vec<usize>>()),
+            "automation reaches every slot from every face"
+        );
+        let battery = battery(FOUNDRY).expect("the foundry has a buffer");
+        assert_eq!(battery.capacity, FOUNDRY_CAPACITY);
+        assert_eq!(battery.capacity, 50_000);
+        assert_eq!(battery.max_insert, FOUNDRY_MAX_INSERT);
+        assert_eq!(battery.max_insert, 1_024, "the jar's 128 * 8");
+        assert_eq!(battery.max_extract, 0, "the machine gives no energy out");
+        assert_eq!(battery.insert_faces, [true; 6]);
+        assert_eq!(
+            addon_slots(FOUNDRY),
+            &[[0, 0, -1], [0, 0, 2]],
+            "`FoundryBlockEntity.getAddonSlots`"
+        );
+        assert_eq!(
+            core_offsets_for(FOUNDRY),
+            Some(&FOUNDRY_CORE_OFFSETS[..]),
+            "three cores assemble it"
+        );
+        assert!(
+            fluids(FOUNDRY).is_none(),
+            "the foundry has no tank: /oritech fluid must refuse it"
+        );
+    }
+
+    #[test]
+    fn the_foundry_s_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        let fresh = foundry_state(&nbt, FOUNDRY_CAPACITY);
+        assert_eq!(fresh, FoundrySaved::default(), "a fresh foundry is empty");
+
+        let saved = FoundrySaved {
+            machine: Foundry {
+                energy: 3_328,
+                progress: 11,
+                recipe: "oritech:foundry/alloy/steel".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: FOUNDRY_CORE_OFFSETS.to_vec(),
+                quality: 2.0,
+            },
+        };
+        store_foundry(&mut nbt, &saved);
+        assert_eq!(foundry_state(&nbt, FOUNDRY_CAPACITY), saved);
+        assert_eq!(
+            read_int(&nbt, KEY_PROGRESS),
+            11,
+            "upstream's own progress key"
+        );
+        assert_eq!(
+            read_string(&nbt, KEY_RECIPE),
+            "oritech:foundry/alloy/steel",
+            "the recipe the operation belongs to"
+        );
+        // The buffer clamps to the machine's own capacity, addons or not.
+        let mut over = Compound::new();
+        write_int(&mut over, KEY_ENERGY, 99_999);
+        assert_eq!(
+            foundry_state(&over, FOUNDRY_CAPACITY).machine.energy,
+            50_000
+        );
+    }
+
+    #[test]
+    fn the_foundry_line_prints_its_three_cores_its_two_inputs_and_its_output() {
+        let saved = FoundrySaved {
+            machine: Foundry {
+                energy: 3_328,
+                progress: 0,
+                recipe: "oritech:foundry/alloy/steel".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: FOUNDRY_CORE_OFFSETS.to_vec(),
+                quality: 2.0,
+            },
+        };
+        assert_eq!(
+            foundry_line(
+                [4, 100, 12],
+                &FoundryView {
+                    saved: &saved,
+                    core: Some(("oritech:machine_core_2", 2)),
+                    inputs: [None, None],
+                    output: Some(("oritech:steel_ingot", 1)),
+                },
+                FOUNDRY_CAPACITY,
+                &AddonView::none(),
+                42,
+            ),
+            "Foundry at [4, 100, 12]: 3328/50000 FE, assembled yes core \
+             oritech:machine_core_2 quality 2, progress 0 recipe oritech:foundry/alloy/steel, \
+             in0 empty, in1 empty, out0 oritech:steel_ingot x1, addons none, t=42"
+        );
+        let idle = FoundrySaved::default();
+        let line = foundry_line(
+            [4, 100, 12],
+            &FoundryView {
+                saved: &idle,
+                core: None,
+                inputs: [
+                    Some(("minecraft:iron_ingot", 1)),
+                    Some(("oritech:coal_dust", 1)),
+                ],
+                output: None,
+            },
+            FOUNDRY_CAPACITY,
+            &AddonView::none(),
+            43,
+        );
+        assert!(
+            line.contains(
+                "assembled no core empty quality 0, progress 0 recipe none, \
+                 in0 minecraft:iron_ingot x1, in1 oritech:coal_dust x1, out0 empty, addons none"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn every_carried_foundry_recipe_has_two_bare_ingredients_and_resolves() {
+        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+            .into_iter()
+            .filter(|(_, recipe)| recipe["type"] == "oritech:foundry")
+            .collect();
+        assert_eq!(
+            recipes.len(),
+            4,
+            "the slice carries four foundry alloys whose result and every ingredient \
+             resolve: {} found ({:?})",
+            recipes.len(),
+            recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        for (path, recipe) in &recipes {
+            let ingredients = recipe["ingredients"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no ingredients"));
+            assert_eq!(ingredients.len(), FOUNDRY_INPUTS, "{path}: two inputs");
+            for ingredient in ingredients {
+                let id = ingredient.as_str().unwrap_or_else(|| {
+                    panic!(
+                        "{path}: the ingredient {ingredient} is not the bare form — a 1.21.1 \
+                         object is what 26.3's loader refuses"
+                    )
+                });
+                ingredient_resolves(path, id);
+            }
+            let results = recipe["results"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no results"));
+            assert_eq!(
+                results.len(),
+                crate::runtime::FOUNDRY_OUTPUTS,
+                "{path}: one output slot"
+            );
+            let result = results[0]["id"].as_str().unwrap_or_default();
+            assert!(
+                result.starts_with("minecraft:") || declared(result),
+                "{path}: the result {result} is not declared by this package"
+            );
+            assert!(
+                results[0]["count"].as_u64().is_some_and(|count| count >= 1),
+                "{path}: the result has no positive count"
+            );
+            assert!(
+                recipe["time"].as_u64().is_some_and(|time| time > 0),
+                "{path}: no positive time"
+            );
+            assert!(
+                recipe.get("fluidInput").is_none() && recipe.get("fluidOutputs").is_none(),
+                "{path}: a foundry recipe with a fluid cannot run here"
+            );
+        }
+        // The steel alloy the in-game leg primes: 26 ticks, one steel ingot.
+        let (path, steel) = recipes
+            .iter()
+            .find(|(path, _)| path == "foundry/alloy/steel.json")
+            .expect("the steel alloy is carried");
+        assert_eq!(steel["time"], 26, "{path}: the jar's time");
+        assert_eq!(
+            steel["results"][0],
+            serde_json::json!({"count": 1, "id": "oritech:steel_ingot"}),
+            "{path}: one steel ingot"
+        );
+        assert_eq!(
+            steel["ingredients"],
+            serde_json::json!(["#c:ingots/iron", "#c:dusts/coal"]),
+            "{path}: the pair the tag files name"
+        );
+    }
+
+    #[test]
+    fn every_carried_recipe_type_is_registered_by_the_mod() {
+        // A carried file whose `type` the mod does not register stops the game at
+        // load ("unregistered recipe serializer") and the world never opens — a
+        // hard startup error invisible to `check`, `fits` and every other unit
+        // test. The foundry shipped exactly that way once (found in game on the
+        // first e2e run of slice 10); this test is the pin, both on the content
+        // side and on the registration side.
+        let handled = [
+            PULVERIZER_RECIPE,
+            COOLER_RECIPE,
+            LAVA_RECIPE,
+            ASSEMBLER_RECIPE,
+            CENTRIFUGE_RECIPE,
+            CENTRIFUGE_FLUID_RECIPE,
+            FOUNDRY_RECIPE,
+        ];
+        for (path, recipe) in carried_recipes() {
+            let kind = recipe["type"].as_str().unwrap_or_default();
+            if kind.starts_with("oritech:") {
+                assert!(
+                    handled.contains(&kind),
+                    "{path}: the type {kind} is carried but this port neither parses nor \
+                     registers it"
+                );
+            }
+        }
+        let lib = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("the crate root is readable");
+        // Rustfmt wraps a long call onto several lines, so the search runs on the
+        // source with its whitespace collapsed.
+        let lib: String = lib.chars().filter(|c| !c.is_whitespace()).collect();
+        let constants = [
+            "PULVERIZER_RECIPE",
+            "COOLER_RECIPE",
+            "LAVA_RECIPE",
+            "ASSEMBLER_RECIPE",
+            "CENTRIFUGE_RECIPE",
+            "CENTRIFUGE_FLUID_RECIPE",
+            "FOUNDRY_RECIPE",
+        ];
+        for constant in constants {
+            let call = format!("register_recipe_type(support::{constant})");
+            assert!(
+                lib.contains(&call),
+                "src/lib.rs does not run {call}: its carried files stop the game at load"
+            );
+            // No closing paren: rustfmt leaves a trailing comma inside a wrapped call.
+            let serializer =
+                format!("register_raw_recipe_serializer(support::{constant},support::{constant}");
+            assert!(
+                lib.contains(&serializer),
+                "src/lib.rs does not run {serializer} …: its carried files stop the game at load"
+            );
+        }
+    }
+
+    #[test]
+    fn the_foundry_s_own_crafting_recipe_is_carried_and_resolves() {
+        // `crafting/foundry.json`: cauldron + motor + three copper + two electrum.
+        let (_, recipe) = carried_recipes()
+            .into_iter()
+            .find(|(path, _)| path == "crafting/foundry.json")
+            .expect("the foundry block's own recipe is carried");
+        assert_eq!(
+            recipe["result"],
+            serde_json::json!({"count": 1, "id": "oritech:foundry_block"})
+        );
+        for (symbol, count) in [("f", 5), ("c", 1), ("s", 2), ("b", 1)] {
+            let ingredient = recipe["key"][symbol]
+                .as_str()
+                .unwrap_or_else(|| panic!("{symbol} is not the bare form"));
+            ingredient_resolves("crafting/foundry.json", ingredient);
+            assert_eq!(
+                recipe["pattern"]
+                    .as_array()
+                    .expect("a pattern")
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .flat_map(str::chars)
+                    .filter(|cell| *cell == symbol.chars().next().expect("one char"))
+                    .count(),
+                count,
+                "{symbol} appears {count} times in the pattern"
+            );
+        }
     }
 }

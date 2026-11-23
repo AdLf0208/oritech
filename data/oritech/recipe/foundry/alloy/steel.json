@@ -1,0 +1,14 @@
+{
+  "ingredients": [
+    "#c:ingots/iron",
+    "#c:dusts/coal"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "oritech:steel_ingot"
+    }
+  ],
+  "time": 26,
+  "type": "oritech:foundry"
+}

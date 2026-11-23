@@ -85,6 +85,14 @@ models, textures, recipes, loot, lang, tags).
   `oritech:centrifuge_fluid` table: **250 mB of water + dirt → one clay in 100 ticks for exactly 6,400
   FE**, from its own **eight-bucket tank** (a real `horizon:fluids` handler). Without the addon the
   water and dirt make nothing.
+- **Foundry** (`oritech:foundry_block`) — the mod's alloying multiblock: a controller plus **three
+  cores** at (0,0,1), (0,1,0) and (0,1,1), **two input slots and one output**, a **50,000 FE** buffer
+  taking **1,024** an insert and spending **128 FE a tick**. Its `oritech:foundry` recipes match their
+  two ingredients **in any slot order**: one iron + one coal dust → one **steel** in **26 ticks for
+  exactly 3,328 FE**, a gold + a redstone → one **electrum**, a diamond + a nickel → one **adamant**,
+  and a gold + a netherite scrap → one **netherite ingot**, the last three in **80 ticks for exactly
+  10,240 FE** each. Two iron ingots make no alloy at all, and the foundry itself crafts at a table
+  from a cauldron, a motor, three copper and two electrum.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
@@ -105,15 +113,16 @@ quarry), no energy or item pipes, no comparator output, no cold-biome speed bonu
 on the chiller
 (the pin has no biome read), no bucket input *slots* on the lava generator (a
 bucket in the hand fills it), no other multiblock (atomic forge,
-foundry, refinery), no augment stations, no accelerator ring or
-reactor, no ore processing chain and no ores. `notes.md` lists every gate and
+refinery), no augment stations, no accelerator ring or
+reactor, no ore processing chain and no ores — and the **refinery is blocked** outright: its 22
+recipes all take or make a fluid this package cannot declare, `#c:naphtha` among them. `notes.md` lists every gate and
 deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ## Building
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules and the carried data: 122 tests
+cargo test --offline                       # the rules and the carried data: 138 tests
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod

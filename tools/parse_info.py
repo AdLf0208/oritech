@@ -11,6 +11,7 @@ The lines are (see `src/support.rs`, the readout section):
     Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 60/120 ticks recipe oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424
     Assembler at [0, 100, 12]: 6144/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, in1 oritech:steel_ingot x2, in2 oritech:magnetic_coil x2, in3 empty, out0 empty, addons none, t=424
     Centrifuge at [8, 100, 10]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe oritech:centrifuge/carbon, tank minecraft:water 250/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, out1 empty, addons none, t=424
+    Foundry at [4, 100, 14]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe none, in0 minecraft:iron_ingot x1, in1 oritech:coal_dust x1, out0 empty, addons none, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
 
 Usage: `eval "$(python3 tools/parse_info.py "$line")"`; `ok=1` when it parsed.
@@ -134,6 +135,18 @@ CENTRIFUGE = re.compile(
 )
 
 
+# Slice 10: the foundry's line carries the assembly, its two input slots and its
+# one output (the assembler's field names, so `machine_holds` works on it).
+FOUNDRY = re.compile(
+    r"^Foundry at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"in0 (?P<IN0>.+?), in1 (?P<IN1>.+?), "
+    r"out0 (?P<OUT0>.+?), " + ADDON_FIELD
+)
+
+
 def main(argv: list[str]) -> int:
     line = " ".join(argv).strip()
     for kind, pattern in (
@@ -144,6 +157,7 @@ def main(argv: list[str]) -> int:
         ("lava", LAVA),
         ("assembler", ASSEMBLER),
         ("centrifuge", CENTRIFUGE),
+        ("foundry", FOUNDRY),
         ("fluid", FLUID),
     ):
         match = pattern.match(line)
@@ -155,7 +169,7 @@ def main(argv: list[str]) -> int:
         )
         if kind == "generator":
             out.setdefault("INPUT", out["FUEL"])
-        if kind == "assembler":
+        if kind in ("assembler", "foundry"):
             # The four input slots are one field each; `INPUT` is the first one,
             # so `machine_holds` can look at the machine like the others.
             out.setdefault("INPUT", out["IN0"])

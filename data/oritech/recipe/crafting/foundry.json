@@ -1,0 +1,19 @@
+{
+  "category": "misc",
+  "key": {
+    "b": "minecraft:cauldron",
+    "c": "oritech:motor",
+    "f": "#c:ingots/copper",
+    "s": "#c:ingots/electrum"
+  },
+  "pattern": [
+    "fff",
+    "fcf",
+    "sbs"
+  ],
+  "result": {
+    "count": 1,
+    "id": "oritech:foundry_block"
+  },
+  "type": "minecraft:crafting_shaped"
+}

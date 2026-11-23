@@ -5,6 +5,38 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.12 — slice 10, the Foundry (pin `0a875da`, 2026-11-23)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline'` with the new bodies `todo!()` | **126 passed, 5 failed** — `not yet implemented` (four) and the addon-slot table (one) | `slice10-test-red.log` |
+| 2 | six targeted mutations of the declarations/buffer/tank/state/line/core table, then `cargo test --offline foundry` (`tools/slice10-glue-counterfactual.py`) | **9 passed, 3 failed** — the declarations test catches three of the six facts; the file restored byte-identically (`6a79f38c…`) | `slice10-glue-red-counterfactual.log` |
+| 3 | same, implemented | **138 passed, 0 failed**; the run regenerated `sdk-test.log` at 0.2.12 | `sdk-test.log` |
+| 4 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `slice10-fmt-clippy.log` |
+| 5 | `cd ports/oritech && cargo horizon-mod build` twice, the artifact deleted between | **246,112 B**, sha256 `f2da80ce2a2e7487c473c7c561cd47aa2900d383c00b1bfe3059695585d1ec81`, `cmp` identical, **298 entries incl. `Cargo.lock`** (8,841 B) | `slice10-build.log` |
+| 6 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.12 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `246112 bytes, SHA-256 f2da80ce…` | `slice10-check-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `slice10-check-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `slice10-check-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 10 | `python3 tools/carry_content.py --check` | `288 files, 0 differ` | stdout |
+| 11 | `cargo test --offline every_carried_recipe_type` with `register_recipe_type(support::FOUNDRY_RECIPE)` removed | **1 failed** — `src/lib.rs does not run register_recipe_type(support::FOUNDRY_RECIPE)`; the pin for the load-time defect the first e2e run found | `slice10-registration-counterfactual.log` |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.12; the stale `native-0a875da-40c13c1713ad` version folder and the export were removed first, because the launcher reuses a build by manifest alone) | `native-0a875da-9cd80bb5d51a`; `strings liboritech.so` shows `Foundry at `, `oritech:foundry` and `is not an ingredient of an alloying recipe` | — |
+| 13 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (FA–FE the foundry, the foundry block's own craft in AM, its loot table in W) | `e2e-slice10.log` |
+| 14 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no steel ingot and the foundry id stays air | `e2e-slice10-differential.log` |
+| 15 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice10-control.log` |
+| 16 | same with `SELFTEST=1` | **EXIT:1** — `91 ticks spent 2912 FE, expected 2944` | `e2e-slice10-selftest.log` |
+| 17 | same with `SELFTEST_FOUNDRY=1` (the output count flipped to 2) | **EXIT:1** — `OUT0 is 'oritech:steel_ingot x1', expected 'oritech:steel_ingot x2'` | `e2e-slice10-selftest-foundry.log` |
+| 18 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 47 logs, 47 ok, 0 bad | stdout |
+| 19 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 20 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The **first** run of 0.2.12 is worth keeping: it failed at load with
+`Horizon crashed: recipe data/oritech/recipe/foundry/alloy/adamant.json, unregistered recipe
+serializer oritech:foundry`. `check`, both `fits`, 137 unit tests and the carry check were green
+while the package could not open a world; the fix is `register_recipe_type` + the raw serializer in
+`src/lib.rs`, and step 11 is the counterfactual that proves the new pin catches it. The in-game
+assertions and what each can fail on are in `notes.md` → *Slice 10*.
+
 ## 0.2.11 — slice 9, the Centrifuge and the Fluid Addon (pin `0a875da`, 2026-11-23)
 
 | # | Command (from the campaign root) | Verdict | Log |

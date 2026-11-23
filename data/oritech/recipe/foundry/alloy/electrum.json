@@ -1,0 +1,14 @@
+{
+  "ingredients": [
+    "#c:ingots/gold",
+    "#c:dusts/redstone"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "oritech:electrum_ingot"
+    }
+  ],
+  "time": 80,
+  "type": "oritech:foundry"
+}

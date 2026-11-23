@@ -31,9 +31,10 @@ Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `cor
 `parse_fluid_input`), slice 5 the addon system's (`*_ADDON`, `ADDON_BLOCKS`, `AddonSettings`,
 `Addons`, `Burst`, `energy_usage`, `processing_ticks`, …), slice 6 the Control Unit Addon's
 (`REDSTONE_ADDON`, its neutral settings, `redstone_disables`) and slice 8 the Assembler's
-(`ASSEMBLER_*`, `craft_plan`, `insert_slot`, `AssemblerRecipe`, `Assembler`), and slice 9 the
+(`ASSEMBLER_*`, `craft_plan`, `insert_slot`, `AssemblerRecipe`, `Assembler`), slice 9 the
 Centrifuge's (`CENTRIFUGE_*`, `centrifuge_energy_usage`, `centrifuge_ticks`, `centrifuge_can_run`,
-`centrifuge_output_fits`, `CentrifugeRecipe`, `Centrifuge`, `FLUID_ADDON`). A declaration or
+`centrifuge_output_fits`, `CentrifugeRecipe`, `Centrifuge`, `FLUID_ADDON`) and slice 10 the
+Foundry's (`FOUNDRY_*`, `foundry_energy_usage`, `foundry_ticks`, `FoundryRecipe`, `Foundry`). A declaration or
 readout test belongs next to its code in `src/support.rs`.
 
 Validate, in this order, each inside a lease:

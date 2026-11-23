@@ -1,0 +1,14 @@
+{
+  "ingredients": [
+    "#c:ingots/gold",
+    "minecraft:netherite_scrap"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "minecraft:netherite_ingot"
+    }
+  ],
+  "time": 80,
+  "type": "oritech:foundry"
+}

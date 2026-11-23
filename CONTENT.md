@@ -4,7 +4,7 @@
 [`tools/carry_content.py`](tools/carry_content.py) from the ATM10 jar
 `oritech-neoforge-1.21.1-1.2.13.jar`
 (SHA-256 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`).
-The script is deterministic (`--check` exits 1 on any drift) and writes **276
+The script is deterministic (`--check` exits 1 on any drift) and writes **288
 files** at the root; since 0.2.0 they travel in the same SDK package as `src/`,
 so there is no separate content `.hmod` and no manifest here (the root
 `horizon-mod.toml` is the only one).
@@ -102,6 +102,23 @@ definition, declaration, loot table, lang `Fluid Addon`, machines tab and tool t
 only the bare-ingredient rewrite. The other 43 + 48 centrifuge files are refused one reason per family
 in `notes.md` → *Slice 9* → *The recipe sweep*.
 
+## Slice 10: the foundry (12 files)
+
+**Carried byte for byte**: the foundry's own texture
+(`assets/oritech/textures/block/models/foundry_block.png` — the jar's blockstate names the
+`machine_speed_addon` placeholder and its item model is `builtin/entity`, so both are authored here).
+
+**Authored**: the foundry's one-variant blockstate and `cube_all` block model, item model, 26.3 item
+definition, block declaration (`minecraft:iron_block` with `occludes: false`), self-drop loot table,
+lang `Foundry`, machines tab and tool tags.
+
+**Recipes** (the jar's files with only the bare-ingredient rewrite): the four alloys whose result and
+every ingredient resolve here — `foundry/alloy/{steel,electrum,adamant,netherite}.json` — and the
+block's own `crafting/foundry.json` (cauldron + motor + 3 `c:ingots/copper` + 2 `c:ingots/electrum`).
+The other 25 alloys are refused one reason per family in `notes.md` → *Slice 10* → *The recipe sweep*.
+The **whole refinery** (22 files) is measured and `blocked(fluid-whitelist: #c:naphtha)`: 4 are tag
+inputs the pin cannot match and 18 take or make the mod's own `oritech:still_*` fluids.
+
 ## The jar's pulverizer, chiller and lava generator recipes (10 files)
 
 `data/oritech/recipe/pulverizer/{bone,blaze,dripstone,glowstoneore,coalore,diamondore,lapisore}.json`
@@ -123,10 +140,10 @@ run: 100 mB of `minecraft:lava` for 120 ticks, with no item input and no item re
 it is not carried (the same recorded gap as `snow.json`).
 
 The other 117 pulverizer files (the coal one is slice 9's), and the other 60 assembler / the 91 of 93
-centrifuge / 29 foundry / 32 refinery recipes, name Oritech dusts, clumps, gems and fluids that are not
-carried here; they are a later slice (see `notes.md`, gaps).
+centrifuge / 25 of 29 foundry / all 22 refinery recipes, name Oritech dusts, clumps, gems and fluids
+that are not carried here; they are a later slice (see `notes.md`, gaps).
 
-## Authored by `tools/carry_content.py` (148 of the 276 files)
+## Authored by `tools/carry_content.py` (154 of the 288 files)
 
 Everything here is written from a value read out of the jar or the upstream
 source; `notes.md` records each one.

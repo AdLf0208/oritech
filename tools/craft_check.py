@@ -123,6 +123,14 @@ ASSEMBLER = {
     "oritech:motor": [106, 108],
     "oritech:machine_plating_block": [107],
 }
+# Slice 10: the Foundry's own recipe, `crafting/foundry.json` — "fff", "fcf", "sbs":
+# three copper across the top, copper-motor-copper, electrum-cauldron-electrum.
+FOUNDRY = {
+    "minecraft:copper_ingot": [100, 101, 102, 103, 105],
+    "oritech:motor": [104],
+    "oritech:electrum_ingot": [106, 108],
+    "minecraft:cauldron": [107],
+}
 CONTROL_UNIT = {
     "minecraft:redstone": [100, 101, 102, 103, 105],
     "minecraft:repeater": [106, 108],
@@ -171,6 +179,8 @@ CASES = [
      "want": ("oritech:adamant_ingot", 1)},
     {"label": "the Assembler: 3 copper + 2 crafters + 1 adamant + 2 motors + 1 plating",
      "place": ASSEMBLER, "want": ("oritech:assembler_block", 1)},
+    {"label": "the Foundry: 5 copper + 1 motor + 2 electrum + 1 cauldron",
+     "place": FOUNDRY, "want": ("oritech:foundry_block", 1)},
 ]
 
 # The generator's grid one nickel short: a stick where the fifth nickel belongs.

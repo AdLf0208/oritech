@@ -2,10 +2,10 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.11"
-description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 9: the Basic Generator, the Pulverizer, the Powered
+version = "0.2.12"
+description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 10: the Basic Generator, the Pulverizer, the Powered
 Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
-Unit Addon, the material and component chain, the Assembler and the Centrifuge. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
+Unit Addon, the material and component chain, the Assembler, the Centrifuge and the Foundry. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
 buffer that accepts no inserts and gives 256 FE a call; the pulverizer spends 32 FE a tick and turns one
 input into its recipe's results in the recipe's time, reading the jar's own `oritech:pulverizer` files;
 the powered furnace is a controller plus one of the seven machine cores above it that smelts any vanilla
@@ -27,9 +27,16 @@ turns a coal dust into a carbon fibre strand in 50 ticks for 3,200 FE, and — w
 Fluid Addon, in one of its two slots — runs the jar's `oritech:centrifuge_fluid` table too: 250 mB of
 water and a dirt become one clay in 100 ticks for 6,400 FE. The pulverizer's coal recipe and the
 centrifuge's carbon recipe feed `core3`, so the chain is craftable from the components down.
+The foundry is the mod's alloying multiblock: a controller plus three cores, two input slots and one
+output, that spends 128 FE a tick and matches its recipe's two ingredients in any slot order — one
+iron and one coal dust become one steel in 26 ticks for 3,328 FE, a gold and a redstone one electrum,
+a diamond and a nickel one adamant, and a gold and a netherite scrap one netherite, each in 80 ticks
+for 10,240 FE, from the jar's own `oritech:foundry` files.
 Every buffer is a real block energy capability another mod's cable can read, every tank a real block
 fluid handler another mod's pipe can fill, and a fuelled generator pushes its FE to the machines beside
-it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the special
+it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the refinery
+and the oil chain (blocked: `#c:naphtha` is a conventional tag no mod in this pack declares and the pin
+has no fluid-tag query), the special
 addons (the control unit's four comparator modes, proxy, extender), the other multiblock
 machines, and the ores themselves — the ingots' worldgen cannot generate at this nightly, so the chain
 is craftable from the components down and the ore is the next slice."""

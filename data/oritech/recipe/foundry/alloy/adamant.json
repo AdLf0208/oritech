@@ -1,0 +1,14 @@
+{
+  "ingredients": [
+    "#c:gems/diamond",
+    "#c:ingots/nickel"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "oritech:adamant_ingot"
+    }
+  ],
+  "time": 80,
+  "type": "oritech:foundry"
+}

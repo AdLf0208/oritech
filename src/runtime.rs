@@ -1256,6 +1256,7 @@ pub fn addon_slots(block: &str) -> &'static [[i32; 3]] {
         "oritech:lava_generator_block" => &[[1, 0, 0], [1, 1, 0]],
         "oritech:assembler_block" => &[[0, 0, -1], [0, 0, 2], [1, 0, 0]],
         "oritech:centrifuge_block" => &[[0, 0, -1], [0, 0, 1]],
+        "oritech:foundry_block" => &[[0, 0, -1], [0, 0, 2]],
         _ => &[],
     }
 }
@@ -1855,6 +1856,183 @@ pub struct Centrifuge {
 
 impl Centrifuge {
     /// An empty centrifuge.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick at the machine's (or its addons') per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            cost,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 10: the Foundry (`oritech:foundry_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.foundryData.energyCapacity`.
+pub const FOUNDRY_CAPACITY: i32 = 50_000;
+/// ...`.maxEnergyInsertion` (`128 * 8`): the most one insert moves.
+pub const FOUNDRY_MAX_INSERT: i32 = 1_024;
+/// ...`.energyPerTick`: FE one working tick spends.
+pub const FOUNDRY_ENERGY_PER_TICK: i32 = 128;
+/// `FoundryBlockEntity.getCorePositions`: three cores, north-above-right of the
+/// controller — the same three offsets the assembler uses.
+pub const FOUNDRY_CORE_OFFSETS: [[i32; 3]; 3] = [[0, 0, 1], [0, 1, 0], [0, 1, 1]];
+/// The two input slots (`InventorySlotAssignment(0, 2, 2, 1)`).
+pub const FOUNDRY_INPUTS: usize = 2;
+/// Its one output slot.
+pub const FOUNDRY_OUTPUTS: usize = 1;
+/// The entity's whole inventory (`getInventorySize` is 3).
+pub const FOUNDRY_SLOTS: usize = FOUNDRY_INPUTS + FOUNDRY_OUTPUTS;
+
+/// `MachineBlockEntity.calculateEnergyUsage` for the foundry:
+/// `energyPerTick * efficiency(1) * (1 / speed(1))` = 128 FE.
+#[must_use]
+pub fn foundry_energy_usage() -> i32 {
+    energy_usage(FOUNDRY_ENERGY_PER_TICK, 1.0, 1.0, 1.0)
+}
+
+/// `MachineBlockEntity.checkCraftingFinished`'s duration for a foundry recipe:
+/// `progress >= time * speed`, the speed being the addons' (1 with none).
+#[must_use]
+pub fn foundry_ticks(time: u32) -> u32 {
+    processing_ticks(time, 1.0)
+}
+
+/// Why an `oritech:foundry` recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundryError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `ingredients`, or more than the two input slots.
+    WrongInputCount,
+    /// No `results`, or more than the one output slot.
+    WrongResultCount,
+    /// A result without an item id or with a count outside 1..=99.
+    BadResult,
+    /// No positive `time`.
+    BadTime,
+    /// A `fluidInput` / `fluidOutputs`: the foundry declares no tank, so such a
+    /// file would consume its items and produce nothing.
+    Fluid,
+}
+
+impl std::fmt::Display for FoundryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::WrongInputCount => "no ingredient or more than two",
+            Self::WrongResultCount => "no result or more than one",
+            Self::BadResult => "a result without an item id or with a bad count",
+            Self::BadTime => "no positive time",
+            Self::Fluid => "a fluid input or output this machine cannot store",
+        })
+    }
+}
+
+/// One `oritech:foundry` recipe: up to two item ingredients, one result and a
+/// duration, read from the pin's custom-recipe table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundryRecipe {
+    /// The recipe id.
+    pub id: String,
+    /// Its ingredients, as the pin's `native_recipe_ingredient` reads them.
+    pub ingredients: Vec<Value>,
+    /// Its result (the machine has one output slot).
+    pub result: RecipeResult,
+    /// `time`, in ticks.
+    pub time: u32,
+}
+
+impl FoundryRecipe {
+    /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
+    /// the data pack wrote it.
+    pub fn parse(id: &str, json: &str) -> Result<Self, FoundryError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| FoundryError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(FoundryError::Unreadable);
+        }
+        // `FoundryBlockEntity` is a `MultiblockMachineEntity` with no fluid
+        // storage: a recipe that needs a tank would load and then consume its
+        // items without producing anything, so it is refused at parse time.
+        let fluid_input = value
+            .get("fluidInput")
+            .is_some_and(|input| !input.is_null());
+        let fluid_output = value
+            .get("fluidOutputs")
+            .and_then(Value::as_array)
+            .is_some_and(|outputs| !outputs.is_empty());
+        if fluid_input || fluid_output {
+            return Err(FoundryError::Fluid);
+        }
+        let ingredients = value
+            .get("ingredients")
+            .and_then(Value::as_array)
+            .ok_or(FoundryError::WrongInputCount)?;
+        if ingredients.is_empty() || ingredients.len() > FOUNDRY_INPUTS {
+            return Err(FoundryError::WrongInputCount);
+        }
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(FoundryError::WrongResultCount)?;
+        if results.len() != FOUNDRY_OUTPUTS {
+            return Err(FoundryError::WrongResultCount);
+        }
+        let entry = &results[0];
+        let item = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|item| !item.is_empty())
+            .ok_or(FoundryError::BadResult)?;
+        let count = entry.get("count").and_then(Value::as_i64).unwrap_or(1);
+        if !(1..=99).contains(&count) {
+            return Err(FoundryError::BadResult);
+        }
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(FoundryError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            ingredients: ingredients.iter().map(ingredient_json).collect(),
+            result: RecipeResult {
+                item: item.to_owned(),
+                count: i32::try_from(count).unwrap_or(i32::MAX),
+            },
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Foundry's state: the buffer, the progress toward the current craft and
+/// the recipe it belongs to — the same three values every processing machine
+/// keeps, advanced by the one shared [`advance`] step.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Foundry {
+    /// Stored FE.
+    pub energy: i32,
+    /// Ticks done toward the current craft.
+    pub progress: u32,
+    /// The recipe being worked on; empty when none.
+    pub recipe: String,
+}
+
+impl Foundry {
+    /// An empty foundry.
     #[must_use]
     #[allow(
         dead_code,
@@ -3808,6 +3986,218 @@ mod tests {
         assert!(
             !centrifuge_output_fits(&two, [None, Some(("oritech:small_gold_dust", 62))], stack),
             "62 + 3 passes one 64 stack"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 10: the Foundry (`oritech:foundry_block`)
+    // -----------------------------------------------------------------------
+
+    /// The jar's `data/oritech/recipe/foundry/alloy/steel.json`, verbatim.
+    const STEEL_ALLOY: &str = r#"{
+      "type": "oritech:foundry",
+      "ingredients": [
+        {"tag": "c:ingots/iron"},
+        {"tag": "c:dusts/coal"}
+      ],
+      "results": [{"count": 1, "id": "oritech:steel_ingot"}],
+      "time": 26
+    }"#;
+
+    #[test]
+    fn the_foundry_holds_the_jars_numbers() {
+        // `OritechConfig.processingMachines.foundryData` is
+        // `BasicMachineConfig(b, "foundryData", 50_000, 128 * 8, 0, 128)`.
+        assert_eq!(FOUNDRY_CAPACITY, 50_000);
+        assert_eq!(FOUNDRY_MAX_INSERT, 1_024);
+        assert_eq!(FOUNDRY_ENERGY_PER_TICK, 128);
+        // `FoundryBlockEntity.getSlotAssignments` → `(0, 2, 2, 1)` and
+        // `getInventorySize` 3.
+        assert_eq!(FOUNDRY_INPUTS, 2);
+        assert_eq!(FOUNDRY_OUTPUTS, 1);
+        assert_eq!(FOUNDRY_SLOTS, 3);
+        // `getCorePositions`: three cores, the assembler's own shape.
+        assert_eq!(FOUNDRY_CORE_OFFSETS, [[0, 0, 1], [0, 1, 0], [0, 1, 1]]);
+    }
+
+    #[test]
+    fn the_foundry_spends_the_jars_128_fe_a_tick_and_runs_a_recipes_time() {
+        assert_eq!(foundry_energy_usage(), FOUNDRY_ENERGY_PER_TICK);
+        assert_eq!(
+            energy_usage(FOUNDRY_ENERGY_PER_TICK, 1.0, 1.0, 1.0),
+            FOUNDRY_ENERGY_PER_TICK
+        );
+        // With no addon the recipe's own `time` is the tick count.
+        assert_eq!(foundry_ticks(26), 26);
+        assert_eq!(foundry_ticks(80), 80);
+    }
+
+    #[test]
+    fn a_foundry_recipe_is_two_ingredients_and_one_result() {
+        let recipe = FoundryRecipe::parse("oritech:foundry/alloy/steel", STEEL_ALLOY)
+            .expect("the jar's steel alloy parses");
+        assert_eq!(
+            recipe.ingredients,
+            vec![
+                Value::String("#c:ingots/iron".to_owned()),
+                Value::String("#c:dusts/coal".to_owned()),
+            ],
+            "`ingredient_json` turns the jar's objects into the engine's bare form"
+        );
+        assert_eq!(
+            recipe.result,
+            RecipeResult {
+                item: "oritech:steel_ingot".to_owned(),
+                count: 1,
+            }
+        );
+        assert_eq!(recipe.time, 26);
+    }
+
+    #[test]
+    fn a_foundry_recipe_refuses_what_the_foundry_cannot_run() {
+        // Three ingredients have no third slot.
+        let three = STEEL_ALLOY.replace(
+            r#"{"tag": "c:dusts/coal"}"#,
+            r#"{"tag": "c:dusts/coal"}, {"item": "minecraft:redstone"}"#,
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &three),
+            Err(FoundryError::WrongInputCount)
+        );
+        let none = STEEL_ALLOY.replace(
+            r#""ingredients": [
+        {"tag": "c:ingots/iron"},
+        {"tag": "c:dusts/coal"}
+      ],"#,
+            r#""ingredients": [],"#,
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &none),
+            Err(FoundryError::WrongInputCount),
+            "no ingredient is no alloy"
+        );
+        // One output slot only.
+        let two = STEEL_ALLOY.replace(
+            r#""results": [{"count": 1, "id": "oritech:steel_ingot"}]"#,
+            r#""results": [{"count": 1, "id": "oritech:steel_ingot"}, {"count": 1, "id": "minecraft:iron_ingot"}]"#,
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &two),
+            Err(FoundryError::WrongResultCount)
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &STEEL_ALLOY.replace("\"time\": 26", "\"time\": 0")),
+            Err(FoundryError::BadTime)
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", r#"{"ingredients": [], "results": [], "time": 26}"#),
+            Err(FoundryError::Unreadable)
+        );
+        // The foundry declares no tank: a file that needs one would consume its
+        // items and produce nothing, so it is refused rather than loaded.
+        let fluid_in = STEEL_ALLOY.replace(
+            r#""ingredients": ["#,
+            r#""fluidInput": {"amount": 250, "fluid": "minecraft:water"}, "ingredients": ["#,
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &fluid_in),
+            Err(FoundryError::Fluid)
+        );
+        let fluid_out = STEEL_ALLOY.replace(
+            r#""results": ["#,
+            r#""fluidOutputs": [{"amount": 100, "fluid": "minecraft:lava"}], "results": ["#,
+        );
+        assert_eq!(
+            FoundryRecipe::parse("x", &fluid_out),
+            Err(FoundryError::Fluid)
+        );
+    }
+
+    #[test]
+    fn the_foundry_pays_for_its_two_ingredients_in_any_slot_order() {
+        // `OritechRecipe.complexMatch`: the ingredients are not slot-bound. Slot
+        // 0 holds the coal dust, slot 1 the iron — the reverse of the file.
+        let counts = [1, 1];
+        let reversed = vec![vec![false, true], vec![true, false]];
+        assert_eq!(craft_plan(&counts, &reversed), Some(vec![1, 0]));
+        let ordered = vec![vec![true, false], vec![false, true]];
+        assert_eq!(craft_plan(&counts, &ordered), Some(vec![0, 1]));
+    }
+
+    #[test]
+    fn one_of_a_pair_is_not_enough_and_none_is_no_recipe() {
+        // The differential the in-game leg carries: only the iron, no coal dust.
+        let one = [1, 0];
+        let fits_iron_only = vec![vec![true, false], vec![false, false]];
+        assert_eq!(craft_plan(&one, &fits_iron_only), None);
+        // An empty machine never gets as far as the table.
+        assert_eq!(
+            craft_plan(&[0, 0], &[vec![false, false], vec![false, false]]),
+            None
+        );
+        // Two of the same item in one slot is a pair only when the counts pay.
+        assert_eq!(
+            craft_plan(&[1, 0], &[vec![true, false], vec![true, false]]),
+            None,
+            "one diamond cannot pay for two diamond ingredients"
+        );
+    }
+
+    #[test]
+    fn two_of_the_same_item_in_one_slot_pay_for_a_two_ingredient_recipe() {
+        // Upstream's `mithrilscrap` names `c:raw_materials/mithril` twice; one
+        // slot holding two of them pays both, as `complexMatch` does.
+        let counts = [2, 0];
+        let same = vec![vec![true, false], vec![true, false]];
+        assert_eq!(craft_plan(&counts, &same), Some(vec![0, 0]));
+    }
+
+    #[test]
+    fn a_foundry_craft_costs_exactly_its_time_times_its_rate() {
+        let mut machine = Foundry::new();
+        assert_eq!(machine.tick_with(None, FOUNDRY_ENERGY_PER_TICK), Step::Idle);
+        assert_eq!(machine.energy, 0);
+
+        // Steel: 26 ticks at 128 FE is exactly 3,328.
+        machine.energy = foundry_ticks(26) as i32 * FOUNDRY_ENERGY_PER_TICK;
+        assert_eq!(machine.energy, 3_328);
+        let mut step = Step::Working;
+        for _ in 0..26 {
+            step = machine.tick_with(
+                work("oritech:foundry/alloy/steel", 26),
+                FOUNDRY_ENERGY_PER_TICK,
+            );
+        }
+        assert_eq!(step, Step::Finished);
+        assert_eq!(machine.energy, 0, "26 ticks at 128 FE is exactly 3,328");
+        assert_eq!(machine.progress, 0);
+
+        // One FE short: the last tick starves and the progress is kept.
+        machine.energy = 3_327;
+        for _ in 0..25 {
+            machine.tick_with(
+                work("oritech:foundry/alloy/steel", 26),
+                FOUNDRY_ENERGY_PER_TICK,
+            );
+        }
+        assert_eq!(
+            machine.tick_with(
+                work("oritech:foundry/alloy/steel", 26),
+                FOUNDRY_ENERGY_PER_TICK
+            ),
+            Step::Starved
+        );
+        assert_eq!(machine.energy, 127);
+        assert_eq!(machine.progress, 25);
+    }
+
+    #[test]
+    fn the_foundry_names_the_two_addon_slots_the_jar_gives_it() {
+        // `FoundryBlockEntity.getAddonSlots`: (0, 0, -1) and (0, 0, 2).
+        assert_eq!(
+            addon_slots("oritech:foundry_block"),
+            &[[0, 0, -1], [0, 0, 2]]
         );
     }
 }
