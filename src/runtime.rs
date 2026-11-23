@@ -16,7 +16,7 @@
 //   pulverizer 25,000 FE / 256 insert / 0 extract / 32 per tick.
 // See `FINDINGS.md` for the file names and the exact lines of each value.
 
-use serde_json::Value;
+use crate::json::Value;
 
 /// `OritechConfig.generators.basicGeneratorData.energyCapacity`.
 pub const GENERATOR_CAPACITY: i32 = 50_000;
@@ -220,7 +220,7 @@ impl PulverizerRecipe {
     /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
     /// the data pack wrote it.
     pub fn parse(id: &str, json: &str) -> Result<Self, RecipeError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| RecipeError::Unreadable)?;
+        let value = Value::parse(json).ok_or(RecipeError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(RecipeError::Unreadable);
         }
@@ -506,7 +506,7 @@ impl SmeltingRecipe {
     /// ingredient, result}`, the 26.3 shape (a bare id, a list, `{item}` or
     /// `{tag}` for the ingredient; `{id, count}` for the result).
     pub fn parse(id: &str, json: &str) -> Result<Self, SmeltError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| SmeltError::Unreadable)?;
+        let value = Value::parse(json).ok_or(SmeltError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(SmeltError::Unreadable);
         }
@@ -518,7 +518,7 @@ impl SmeltingRecipe {
         let result = value.get("result").ok_or(SmeltError::BadResult)?;
         let item = ["id", "item"]
             .iter()
-            .find_map(|key| result.get(*key).and_then(Value::as_str))
+            .find_map(|key| result.get(key).and_then(Value::as_str))
             .filter(|item| !item.is_empty())
             .ok_or(SmeltError::BadResult)?;
         let count = result.get("count").and_then(Value::as_i64).unwrap_or(1);
@@ -693,7 +693,7 @@ impl CoolerRecipe {
     /// Parse one `oritech:cooler` file: `{type, fluidInput: {fluid, amount?},
     /// results: [{id, count}], time}`.
     pub fn parse(id: &str, json: &str) -> Result<Self, CoolerError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| CoolerError::Unreadable)?;
+        let value = Value::parse(json).ok_or(CoolerError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(CoolerError::Unreadable);
         }
@@ -996,7 +996,7 @@ impl LavaGenRecipe {
     /// Parse one `oritech:lava_generator` file:
     /// `{type, fluidInput: {fluid, amount?}, ingredients: [], results: [], time}`.
     pub fn parse(id: &str, json: &str) -> Result<Self, LavaGenError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| LavaGenError::Unreadable)?;
+        let value = Value::parse(json).ok_or(LavaGenError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(LavaGenError::Unreadable);
         }
@@ -1570,7 +1570,7 @@ impl AssemblerRecipe {
     /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
     /// the data pack wrote it.
     pub fn parse(id: &str, json: &str) -> Result<Self, AssemblerError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| AssemblerError::Unreadable)?;
+        let value = Value::parse(json).ok_or(AssemblerError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(AssemblerError::Unreadable);
         }
@@ -1835,7 +1835,7 @@ impl CentrifugeRecipe {
     /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
     /// the data pack wrote it.
     pub fn parse(id: &str, json: &str) -> Result<Self, CentrifugeError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| CentrifugeError::Unreadable)?;
+        let value = Value::parse(json).ok_or(CentrifugeError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(CentrifugeError::Unreadable);
         }
@@ -2017,7 +2017,7 @@ impl FoundryRecipe {
     /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
     /// the data pack wrote it.
     pub fn parse(id: &str, json: &str) -> Result<Self, FoundryError> {
-        let value: Value = serde_json::from_str(json).map_err(|_| FoundryError::Unreadable)?;
+        let value = Value::parse(json).ok_or(FoundryError::Unreadable)?;
         if value.get("type").and_then(Value::as_str).is_none() {
             return Err(FoundryError::Unreadable);
         }
@@ -2114,6 +2114,11 @@ impl Foundry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test value read through the package's own reader (there is no registry dependency).
+    fn json(text: &str) -> Value {
+        Value::parse(text).unwrap_or_else(|| panic!("the test JSON is malformed: {text}"))
+    }
 
     fn work(id: &'static str, time: u32) -> Option<Work<'static>> {
         Some(Work { id, time })
@@ -2460,22 +2465,19 @@ mod tests {
     #[test]
     fn an_ingredient_mapping_covers_item_tag_and_list() {
         assert_eq!(
-            ingredient_json(&serde_json::json!({"item": "minecraft:bone"})),
+            ingredient_json(&json(r#"{"item": "minecraft:bone"}"#)),
             Value::String("minecraft:bone".to_owned())
         );
         assert_eq!(
-            ingredient_json(&serde_json::json!({"tag": "minecraft:coals"})),
+            ingredient_json(&json(r#"{"tag": "minecraft:coals"}"#)),
             Value::String("#minecraft:coals".to_owned())
         );
         assert_eq!(
-            ingredient_json(&serde_json::json!([
-                "minecraft:bone",
-                "minecraft:blaze_rod"
-            ])),
-            serde_json::json!(["minecraft:bone", "minecraft:blaze_rod"])
+            ingredient_json(&json(r#"["minecraft:bone", "minecraft:blaze_rod"]"#)),
+            json(r#"["minecraft:bone", "minecraft:blaze_rod"]"#)
         );
         assert_eq!(
-            ingredient_json(&serde_json::json!("minecraft:bone")),
+            ingredient_json(&json(r#""minecraft:bone""#)),
             Value::String("minecraft:bone".to_owned())
         );
     }
@@ -2602,7 +2604,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             nuggets.ingredient,
-            serde_json::json!(["minecraft:copper_pickaxe", "minecraft:copper_shovel"])
+            json(r#"["minecraft:copper_pickaxe", "minecraft:copper_shovel"]"#)
         );
         assert_eq!(nuggets.result.count, 3);
 

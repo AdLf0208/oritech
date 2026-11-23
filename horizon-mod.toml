@@ -2,7 +2,7 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.13"
+version = "0.2.14"
 description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 10: the Basic Generator, the Pulverizer, the Powered
 Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
 Unit Addon, the material and component chain, the Assembler, the Centrifuge and the Foundry. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE

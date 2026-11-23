@@ -38,7 +38,7 @@ use crate::runtime::{
     processing_ticks, redstone_disables, speed_multiplier, tank_matches,
 };
 
-use serde_json::Value;
+use crate::json::Value;
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
 pub(crate) const FURNACE: &str = "oritech:powered_furnace_block";
@@ -3621,6 +3621,11 @@ mod tests {
     use super::*;
     use crate::runtime::SPEED_ADDON;
 
+    /// A test value read through the package's own reader (there is no registry dependency).
+    fn json(text: &str) -> Value {
+        Value::parse(text).unwrap_or_else(|| panic!("the test JSON is malformed: {text}"))
+    }
+
     #[test]
     fn the_generator_declares_one_insert_only_slot() {
         let slots = container(GENERATOR).expect("the generator has a container");
@@ -4569,7 +4574,7 @@ mod tests {
     // they read the files the package ships (`data/` travels beside `src/` in the crate root).
 
     /// The recipe files this package ships, as `(path under the recipe root, parsed json)`.
-    fn carried_recipes() -> Vec<(String, serde_json::Value)> {
+    fn carried_recipes() -> Vec<(String, Value)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -4593,8 +4598,8 @@ mod tests {
             .map(|path| {
                 let text = std::fs::read_to_string(&path)
                     .unwrap_or_else(|e| panic!("{} is unreadable: {e}", path.display()));
-                let recipe = serde_json::from_str(&text)
-                    .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+                let recipe =
+                    Value::parse(&text).unwrap_or_else(|| panic!("{} is not JSON", path.display()));
                 let name = path
                     .strip_prefix(&root)
                     .expect("walked from the recipe root")
@@ -4606,7 +4611,7 @@ mod tests {
     }
 
     /// Every ingredient of a vanilla-typed recipe, as written in the file.
-    fn ingredients_of(recipe: &serde_json::Value) -> Vec<&serde_json::Value> {
+    fn ingredients_of(recipe: &Value) -> Vec<&Value> {
         let mut out = Vec::new();
         if let Some(key) = recipe.get("key").and_then(|k| k.as_object()) {
             out.extend(key.values());
@@ -4637,7 +4642,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("data/{namespace}/tags/item/{name}.json"));
         let text = std::fs::read_to_string(path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let json: Value = Value::parse(&text)?;
         Some(
             json["values"]
                 .as_array()?
@@ -4650,7 +4655,7 @@ mod tests {
     /// The recipes a vanilla crafting, cooking or table type loads. The mod's own machine
     /// recipes (`oritech:pulverizer`, `oritech:cooler`, `oritech:lava_generator`) have their own
     /// parser in `runtime.rs` and are crafted by the machines, not by the engine's crafting copy.
-    fn engine_recipes() -> Vec<(String, serde_json::Value)> {
+    fn engine_recipes() -> Vec<(String, Value)> {
         carried_recipes()
             .into_iter()
             .filter(|(_, recipe)| {
@@ -4759,7 +4764,7 @@ mod tests {
             .expect("the generator's crafting recipe is carried");
         assert_eq!(
             recipe["pattern"],
-            serde_json::json!(["fff", "fcf", "sbs"]),
+            json(r#"["fff", "fcf", "sbs"]"#),
             "{path}: the jar's pattern"
         );
         assert_eq!(
@@ -4783,14 +4788,14 @@ mod tests {
         assert_eq!(pattern.matches('s').count(), 2, "{path}: two coils");
         assert_eq!(
             recipe["result"],
-            serde_json::json!({"count": 1, "id": "oritech:basic_generator_block"}),
+            json(r#"{"count": 1, "id": "oritech:basic_generator_block"}"#),
             "{path}: one generator"
         );
     }
 
     #[test]
     fn every_carried_assembler_recipe_has_four_bare_ingredients_and_resolves() {
-        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+        let recipes: Vec<(String, Value)> = carried_recipes()
             .into_iter()
             .filter(|(_, recipe)| recipe["type"] == "oritech:assembler")
             .collect();
@@ -4842,7 +4847,7 @@ mod tests {
         assert_eq!(motor["time"], 48, "{path}: the jar's time");
         assert_eq!(
             motor["results"][0],
-            serde_json::json!({"count": 2, "id": "oritech:motor"}),
+            json(r#"{"count": 2, "id": "oritech:motor"}"#),
             "{path}: two motors"
         );
     }
@@ -5106,7 +5111,7 @@ mod tests {
 
     #[test]
     fn every_carried_centrifuge_recipe_is_the_bare_form_and_resolves() {
-        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+        let recipes: Vec<(String, Value)> = carried_recipes()
             .into_iter()
             .filter(|(_, recipe)| {
                 recipe["type"]
@@ -5161,7 +5166,7 @@ mod tests {
         assert_eq!(carbon["time"], 50, "{path}: the jar's time");
         assert_eq!(
             carbon["results"][0],
-            serde_json::json!({"count": 1, "id": "oritech:carbon_fibre_strands"}),
+            json(r#"{"count": 1, "id": "oritech:carbon_fibre_strands"}"#),
             "{path}: one carbon fibre strand"
         );
         let (path, clay) = recipes
@@ -5171,12 +5176,12 @@ mod tests {
         assert_eq!(clay["time"], 100, "{path}: the jar's time");
         assert_eq!(
             clay["fluidInput"],
-            serde_json::json!({"amount": 250, "fluid": "minecraft:water"}),
+            json(r#"{"amount": 250, "fluid": "minecraft:water"}"#),
             "{path}: 250 mB of water"
         );
         assert_eq!(
             clay["results"][0],
-            serde_json::json!({"count": 1, "id": "minecraft:clay"}),
+            json(r#"{"count": 1, "id": "minecraft:clay"}"#),
             "{path}: one clay"
         );
     }
@@ -5382,7 +5387,7 @@ mod tests {
 
     #[test]
     fn every_carried_foundry_recipe_has_two_bare_ingredients_and_resolves() {
-        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+        let recipes: Vec<(String, Value)> = carried_recipes()
             .into_iter()
             .filter(|(_, recipe)| recipe["type"] == "oritech:foundry")
             .collect();
@@ -5442,12 +5447,12 @@ mod tests {
         assert_eq!(steel["time"], 26, "{path}: the jar's time");
         assert_eq!(
             steel["results"][0],
-            serde_json::json!({"count": 1, "id": "oritech:steel_ingot"}),
+            json(r#"{"count": 1, "id": "oritech:steel_ingot"}"#),
             "{path}: one steel ingot"
         );
         assert_eq!(
             steel["ingredients"],
-            serde_json::json!(["#c:ingots/iron", "#c:dusts/coal"]),
+            json(r##"["#c:ingots/iron", "#c:dusts/coal"]"##),
             "{path}: the pair the tag files name"
         );
     }
@@ -5520,7 +5525,7 @@ mod tests {
             .expect("the foundry block's own recipe is carried");
         assert_eq!(
             recipe["result"],
-            serde_json::json!({"count": 1, "id": "oritech:foundry_block"})
+            json(r#"{"count": 1, "id": "oritech:foundry_block"}"#)
         );
         for (symbol, count) in [("f", 5), ("c", 1), ("s", 2), ("b", 1)] {
             let ingredient = recipe["key"][symbol]
@@ -5532,7 +5537,7 @@ mod tests {
                     .as_array()
                     .expect("a pattern")
                     .iter()
-                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(Value::as_str)
                     .flat_map(str::chars)
                     .filter(|cell| *cell == symbol.chars().next().expect("one char"))
                     .count(),

@@ -5,6 +5,37 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.14 — the registry's R9: no registry dependency, no `Cargo.lock`, an in-tree JSON reader (pin `0a875da`, 2026-11-23)
+
+The registry's automated check now enforces **R9**: `Cargo.toml` may declare only the SDK path
+dependency, no build script, no proc-macro, no `lib.path` other than `src/lib.rs`, only the tables
+`[package]`/`[dependencies]`/`[lib]`/`[lints]`, and the archive may carry **no `Cargo.lock`**. The
+campaign's "declare the dependency and pack its lock" rule is dead for publishing. `serde_json` and
+the packed lock are gone; the seven recipe parsers read their JSON through `src/json.rs`, a small
+dependency-free reader. The reversal is recorded in `notes.md` → *0.2.14 — the registry's R9*.
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && rm -f Cargo.lock && cargo test --offline'` | **148 passed, 0 failed** (141 before + 7 reader tests); `sdk-test.log` regenerated at 0.2.14 | `sdk-test.log` |
+| 2 | `cd ports/oritech && python3 tools/json-reader-counterfactual.py` (two reader defects, test, file restored) | **5 passed, 2 failed** — the malformed-document and escape tests; `restored: True (516d06ef…)` | `json-reader-counterfactual.log` |
+| 3 | `cargo fmt --check` | exit 0, empty diff | `json-reader-fmt.log` |
+| 4 | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** | `sdk-clippy.log` |
+| 5 | `cd ports/oritech && rm -f Cargo.lock && cargo horizon-mod build` twice, the artifact deleted between | **251,902 B**, sha256 `50b53500b9827b6454b59861817157e78732c7e2a825dc19c080673c2017e335`, `cmp` identical, **298 entries, no `Cargo.lock`**, `src/json.rs` packed | `json-reader-build.log`, `json-reader-build-second.log` |
+| 6 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.14 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `251902 bytes` | `json-reader-check-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `json-reader-check-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build; the pin run alone is a tautology) | `json-reader-check-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, every R9 line, `no packed Cargo.lock`, 148 tests, 0 warnings | `json-reader-verify-package.log` |
+| 10 | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` | `json-reader-recipe-types.log` |
+| 11 | `python3 tools/carry_content.py --check` | `288 files, 0 differ` | — |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.14 ⇒ a real recompile; no `native-*` tag carried this mod) | `Compiling oritech (1 of 1)`, `native-0a875da-e5226e6e5cef`; the export's `horizon-mod.toml` reads `version = "0.2.14"` | — |
+| 13 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` — every carried recipe family crafted through the new reader | `e2e-json-reader.log` |
+| 14 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no item and every block id stays `minecraft:air` | `e2e-json-reader-differential.log` |
+| 15 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `Unknown block type 'oritech:basic_generator_block'` | `e2e-json-reader-control.log` |
+| 16 | same with `SELFTEST=1` | **EXIT:1** — `FAIL: 90 ticks spent 2880 FE, expected 2912` | `e2e-json-reader-selftest.log` |
+| 17 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | **55 logs, 55 ok, 0 bad** (the earlier 51 untouched) | stdout |
+| 18 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 19 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
 ## 0.2.13 — review fix, the centrifuge's completion is decided before anything is taken (pin `0a875da`, 2026-11-23)
 
 The review (`NikitaMGrimm`) asked whether 0.2.12 consumes an item or fluid before confirming the

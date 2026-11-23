@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes; slice 8: the Assembler; slice 9: the Centrifuge; slice 10: the Foundry; 0.2.13: the centrifuge review fix)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes; slice 8: the Assembler; slice 9: the Centrifuge; slice 10: the Foundry; 0.2.13: the centrifuge review fix; 0.2.14: the registry's R9 — an in-tree JSON reader, no registry dependency, no `Cargo.lock`)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -492,6 +492,9 @@ no working notes; `LICENSE` and `LICENSE-NOTICE.md` are inside it.
    `serde_json` 1.0.154 from this box's cache) and belongs inside it, exactly as
    `securitycraft` recorded for `sha2`. A future builder additionally needs
    `horizon-launcher native-lock .` on the machine that builds the game (gap 2).
+   **Superseded on 2026-11-23 (0.2.14):** the registry now refuses a registry dependency outright
+   (R9), so `serde_json` is gone, the reader is `src/json.rs`, and no `Cargo.lock` is packed. This
+   bullet stays as the record of the retired rule; see *0.2.14 — the registry's R9*.
 2. **A block-entity tick's payload edits are discarded by `Unchanged`.** `event.reply`
    defaults to `Changed` and `*event.reply = Unchanged` throws away **this Part's** `nbt` and
    `items` writes. A machine that answers `Unchanged` while its energy moved would silently
@@ -569,10 +572,11 @@ no working notes; `LICENSE` and `LICENSE-NOTICE.md` are inside it.
    (`evidence/oritech/e2e.log`, `e2e-selftest.log`, `e2e-embedded.log`,
    `e2e-embedded-selftest.log`) are the **historical** evidence for a `runtime.rs` that did
    not change; what changed is the transport of the same calls, not the rules.
-2. **A registry dependency needs the launcher's lock step.** The machine that builds the
-   game must run `horizon-launcher native-lock .` for `serde_json` (the shipped `Cargo.lock`
-   records the resolution; the launcher re-resolves against its own crates). Recorded, not
-   worked around.
+2. **A registry dependency needed the launcher's lock step — closed by 0.2.14.** The machine that
+   builds the game used to need `horizon-launcher native-lock .` for `serde_json` (the shipped
+   `Cargo.lock` recorded the resolution; the launcher re-resolves against its own crates). With the
+   registry's R9 the dependency is gone and the reader is in-tree, so no lock step for it remains;
+   the launcher build still writes a probe lock of its own, removed before the package is built.
 3. **The block entity's type id and the block id differ** (`oritech:basic_generator` vs
    `oritech:basic_generator_block`). Any later code that looks a machine up by type must not
    assume the block id; the readout uses the block.
@@ -1566,6 +1570,11 @@ port's own `AGENTS.md` already said "keep `Cargo.lock`". So the delivered packag
 generated from the launcher's own cargo home (`cargo generate-lockfile --offline` there, resolving
 `serde_json` 1.0.151, `syn` 3.0.6, `unicode-ident` 1.0.26, the versions the prebuilt game pins) — and
 the two builds are still `cmp`-identical.
+
+**Reversed on 2026-11-23 (0.2.14).** That rule held only while the registry accepted a declaring
+package. Its automated check now enforces **R9**: the sole dependency must be the SDK path dependency
+and the archive must carry no `Cargo.lock`. The dependency was removed and its reader replaced
+in-tree; see *0.2.14 — the registry's R9* below. This paragraph is history, not current advice.
 
 ### In-game transcript (quoted from `e2e-slice6.log`)
 
@@ -2763,6 +2772,118 @@ was not in 0.2.12, which this section reports instead of "fixing" it. Upstream's
 it impossible to call the other way round.
 
 Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices
+
+## 0.2.14 — the registry's R9: no registry dependency, no `Cargo.lock`, an in-tree JSON reader (2026-11-23)
+
+**The rule reversal, stated once.** The registry's automated check now enforces **R9**: a package's
+`Cargo.toml` may declare **only** the SDK path dependency
+(`horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }`), may carry no build
+script, no proc-macro and no `lib.path` other than `src/lib.rs`, may use only the tables
+`[package]`, `[dependencies]`, `[lib]` and `[lints]`, and the archive must carry **no `Cargo.lock`**.
+The campaign's earlier rule — "declare the dependency and pack its resolved lock" (*Migration* trap 1,
+*The `Cargo.lock` correction* in 0.2.8, gap 2) — is **dead for publishing** and is superseded here:
+a registry crate is refused outright, so there is no lock for it to describe. `serde_json = "1"` and
+the packed `Cargo.lock` are gone; this list is the 0.2.14 package.
+
+**What replaced `serde_json`: a flat, dependency-free reader in `src/json.rs`.** I chose the in-tree
+reader over "move the parse into a content-generation tool" because the seven parsers read **engine
+tables at run time**: `host.recipes_of_type(...)` hands back each loaded file's own JSON (the six
+`oritech:*` types and, for the furnace, the game's `minecraft:smelting` table), and a generated table
+would be stale after any datapack change or `/reload`. Nothing about the pin's recipe surface is
+build-time known except the seven carried `oritech:pulverizer` files, and those share the same parser.
+
+- `Value` is `Null | Bool | Number(i64) | Float(f64) | String | Array | Object(BTreeMap)` with the
+  accessors the parsers use (`get`, `as_str`, `as_array`, `as_object`, `as_i64`, `as_u64`, `as_bool`,
+  `is_string`, `is_null`, `is_array`), an `Index` that answers `null` for a missing member or index
+  (never panics), `Display` (compact JSON, so the tests' failure messages still print the document),
+  and the `PartialEq` impls the tests compare with.
+- `Value::parse` **never fails loudly**: a truncated file, trailing bytes, a bad escape, a wrong
+  literal or nesting past 64 answers `None`, which each parser maps to its own `Unreadable` error —
+  the same refusal as before, now impossible to turn into a panic. Accessors default to `None`.
+- `Eq` is implemented by hand for `Value` because `f64` has no `Eq`; the reader refuses a non-finite
+  float, so the invariant holds (`-0.0 == 0.0`, which is what `f64`'s `PartialEq` says).
+- The reader's type is named `JsonReader`, not `Reader`: `fits --build 0b14f8a` false-failed the first
+  build (*"the type `wire::Reader` can no longer be built with a literal, and `src/json.rs:48` builds
+  it"*) — the SDK's own `wire::Reader` changed between the two builds and the check matches a local
+  type by name. The rename is the whole fix; both `fits` runs are green below.
+
+**What changed, exactly.** The seven parse sites in `src/runtime.rs` now call
+`Value::parse(json).ok_or(XError::Unreadable)?` instead of `serde_json::from_str`; `ingredient_json`,
+every rule, number, error variant and message are unchanged. `src/support.rs`'s two data readers
+(`carried_recipes`, `tag_values`) and its test literals go through the same type. `src/lib.rs` declares
+`mod json;`. The only Cargo change is the dependency removal; `Cargo.toml` is `[package]` +
+`[dependencies]` (the SDK path dep) and the version is **0.2.14**. `README.md` and `AGENTS.md` were
+edited **before** the final build, because `README.md` ships inside the archive.
+
+### TDD and the fail-capability of the reader
+
+The replacement is infrastructure for seven parsers that already have sweeping tests, so the new
+reader's own seven tests pin the rules the library gave us: a pulverizer file's members, a float
+member not making the document unreadable, escapes and surrogate pairs, an absent member/index being
+`null`, six kinds of malformed text being refused, nesting past the limit, and `Display` round-tripping.
+They cannot fail vacuously: `tools/json-reader-counterfactual.py` plants two defects (accept trailing
+text, leave `\uXXXX` undecoded) and the run goes red on exactly the two tests that should catch them.
+
+| Step | Command | Result | Log |
+|---|---|---|---|
+| reader tests (green) | `cargo test --offline` | **148 passed**, 0 failed (141 before + 7 reader) | `sdk-test.log` |
+| counterfactual | `python3 tools/json-reader-counterfactual.py` (two mutations, then restore) | **5 passed, 2 failed** — `a_malformed_document_is_refused_rather_than_trusted` (`"{\"a\": 1} trailing" is not JSON`) and `escapes_and_unicode_are_decoded` (`left: String("??") right: "é世"`); `restored: True (516d06ef…)` | `json-reader-counterfactual.log` |
+| recipe sweep | the same run's `support::tests` | all five carried-data sweeps green: 22 engine recipes bare-form/resolvable, 5 assembler, 2 centrifuge, 4 foundry, every carried recipe type registered | `sdk-test.log` |
+
+### Verification (0.2.14)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `rm -f Cargo.lock && cargo test --offline` | **148 passed**, 0 failed (`sdk-test.log`, regenerated at 0.2.14) |
+| format | `cargo fmt --check` | exit 0, empty diff (`json-reader-fmt.log`) |
+| lints | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`sdk-clippy.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` twice, the artifact deleted between | **251,902 B**, sha256 `50b53500b9827b6454b59861817157e78732c7e2a825dc19c080673c2017e335`, `cmp` identical, **298 entries, no `Cargo.lock`**, `src/json.rs` packed (`json-reader-build.log`, `json-reader-build-second.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.14 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `251902 bytes … unsigned`, exit 0 |
+| fits the pin | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, `Cargo.toml tables R9 allows`, `SDK-only dependencies (R9)`, `no build script (R9)`, `[lib] is src/lib.rs and no proc-macro (R9)`, `no packed Cargo.lock`, 148 tests, 0 clippy warnings, `runtime byte-identical f8c7e629d53d` (`json-reader-verify-package.log`) |
+| recipe types | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` (`json-reader-recipe-types.log`) |
+| content carry | `python3 tools/carry_content.py --check` | `288 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.14 ⇒ a real recompile; no `native-*` tag carried this mod) | **`Compiling oritech (1 of 1)`**, `native-0a875da-e5226e6e5cef`, export `horizon-mod.toml` reads `version = "0.2.14"` |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-json-reader.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package no generator item, motor, adamant ingot, coal dust, carbon fibre or steel ingot, and every block id stays `minecraft:air` (`e2e-json-reader-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `Unknown block type 'oritech:basic_generator_block'` (`e2e-json-reader-control.log`) |
+| fail-capability | `SELFTEST=1` | **EXIT:1** — `FAIL: 90 ticks spent 2880 FE, expected 2912` (`e2e-json-reader-selftest.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | **55 logs, 55 ok, 0 bad** (the 51 earlier legs untouched and still green) |
+| coverage | `check-coverage.py oritech` | exit 0, `families=53 … missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+### In-game transcript (quoted from `e2e-json-reader.log`)
+
+The reader is on the path of **every** carried recipe, so the standing leg is its regression test:
+seven `oritech:pulverizer` recipes, two `oritech:cooler`, one `oritech:lava_generator`, five
+`oritech:assembler`, two `oritech:centrifuge` (one fluid), four `oritech:foundry`, nineteen
+`oritech:crafting/*` and one `minecraft:smelting` recipe all craft with their declared output, count
+and consumed input.
+
+```
+  oritech:pulverizer/bone: minecraft:bone -> minecraft:bone_meal x6
+  minecraft:netherite_ingot x1 in exactly 80 ticks for exactly 10240 FE
+PASS: … bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, … every one of
+the seven carried pulverizer recipes crafted with its input consumed, … all nineteen carried crafting
+recipes crafted in a real table with their ingredients consumed, … one coal dust and one iron in the
+slots opposite the file's order became exactly one steel ingot in exactly 26 ticks for exactly 3,328
+FE with both inputs emptied …
+EXIT:0
+```
+
+**What this slice does not do:** it adds no family and changes no number — the coverage table is the
+same (0 missing). It removes a dependency, the lock, and the launcher lock step the dependency forced,
+and it makes the parse panic-free. `src/runtime.rs`'s slice-1 **rules** are unchanged (the reader type
+and seven call sites differ); this is the only edit to that file since the migration besides the slices
+themselves.
+
+`## Upstream defects fixed` (0.2.14): none — this is a packaging rule, not a mod behaviour.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
 ## Next slice
 

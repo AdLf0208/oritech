@@ -5,11 +5,14 @@
 # fluid-burning generator with its own ten-target energy push) and the machine
 # addon system (the six default addon blocks and their scan).
 #
-# STATUS: 0.2.8 (SDK package, pin 0a875da). The run needs a game the launcher
+# STATUS: 0.2.14 (SDK package, pin 0a875da). The run needs a game the launcher
 # built with this package: `ports/tools/launcher-game.sh build oritech`, then
 # `eval "$(ports/tools/launcher-game.sh env oritech)"` and this script in a
 # build-slot lease. The 0.1.0 and 0.2.x runs are the historical evidence for
 # the slice-1 behaviour; every run of this file is the oracle for all slices.
+# 0.2.14 replaces serde_json with the package's own reader (src/json.rs), so a
+# run of this file is also that reader's regression test: every carried recipe
+# family below is parsed through it.
 #
 # The arena is the Overworld at y=100 (a stone floor, clear air above), so every
 # block read and right click is in the player's own dimension (`ctl tp` is

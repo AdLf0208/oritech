@@ -12,18 +12,20 @@ checkout or player resources; do not commit `target/`, `.horizon/`, exported sou
 assets.
 
 **There is no staging step and no mixin plan.** One flat `.hmod` holds `horizon-mod.toml` (the only
-identity, `api = "0.2"`, `[native]` pins), `Cargo.toml` (its dependencies are `horizon-mod-api`
-from the fetched `.horizon/sdk/` and `serde_json`, which the carried rules module uses),
-`src/lib.rs` (the one `#[mod_api::horizon_mod] impl Hooks` and the two block-entity Parts),
+identity, `api = "0.2"`, `[native]` pins), `Cargo.toml` (whose **only** dependency is
+`horizon-mod-api` from the fetched `.horizon/sdk/`; the registry refuses a registry crate, R9),
+`src/lib.rs` (the one `#[mod_api::horizon_mod] impl Hooks` and the block-entity Parts),
 `src/support.rs` (the glue: declarations, saved state, ticks, the right-click, the energy move and
-the commands) and `src/runtime.rs` (the pure logic, unit-tested). `assets/` and `data/` are the
-carried content and travel in the same file. The retired `.hnmod` layout is history:
+the commands), `src/runtime.rs` (the pure logic, unit-tested) and `src/json.rs` (a small,
+dependency-free JSON reader: the recipe parsers read their files through it). `assets/` and `data/`
+are the carried content and travel in the same file. The retired `.hnmod` layout is history:
 `../_shared/evidence/oritech/retired-hnmod-0.1.0/`.
 
 Keep every gameplay rule and number in `src/runtime.rs` with its test; the glue only reads the game,
-calls `runtime`, and writes the result back. `src/runtime.rs`'s **slice-1 part** is byte-identical to the
-retired port's file up to and including `after_consuming` — do not "tidy" it; slice 2 appended the
-Powered Furnace's rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `core_quality`,
+calls `runtime`, and writes the result back. `src/runtime.rs`'s **slice-1 rules** are unchanged from
+the retired port up to and including `after_consuming` — do not "tidy" them; the only edits since are
+the recipe-JSON type (`crate::json::Value` instead of `serde_json::Value`, 0.2.14) and slice 2's
+appended Powered Furnace rules (`FURNACE_*`, `Furnace`, `SmeltingRecipe`, `CORES`, `core_quality`,
 `furnace_ticks`, `furnace_energy_usage`, and the shared `advance` step the two machines use), slice
 3 the Industrial Chiller's (`COOLER_*`, `FluidInput`, `tank_matches`, `cooler_output_fits`,
 `after_draining`, `CoolerRecipe`, `Cooler`, on the same `advance`) and slice 4 the Lava Generator's
@@ -71,6 +73,6 @@ reused when `horizon-mod.toml` is byte-identical, so **bump the version in the m
 meant to exercise new code**, then check the build really recompiled (`strings
 ~/.cache/horizon-e2e/<pin>/<mod>/lib<mod>.so | grep <a new string>`).
 
-The package's one registry dependency is `serde_json`, so **keep `Cargo.lock`** (it is packed and
-is this package's record of its pins) — the opposite of the lock-free ports. `cargo fmt --check`,
-never `--all`: that formats the fetched SDK.
+The package declares **no registry dependency**, so **no `Cargo.lock` is packed**: `rm -f Cargo.lock`
+before every build/test, and `verify-sdk-package.py` fails a package that packs one. `cargo fmt
+--check`, never `--all`: that formats the fetched SDK.

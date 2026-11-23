@@ -1,4 +1,4 @@
-# Oritech for Horizon — slices 1 to 9
+# Oritech for Horizon — slices 1 to 10
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
 Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon**, the
@@ -126,7 +126,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules and the carried data: 138 tests
+cargo test --offline                       # the rules and the carried data: 148 tests
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod
@@ -137,9 +137,9 @@ cargo horizon-mod fits oritech.hmod --build 0b14f8a   # a different build: the p
 
 `cargo horizon-mod` fetches the pinned SDK into `.horizon/sdk/` (gitignored,
 never packed); the tree here already carries a copy of the campaign cache. The
-package's one registry dependency is `serde_json` (the carried rules module
-parses the recipe JSON), so the resolved `Cargo.lock` travels inside the package
-— the launcher's clean build needs it (`notes.md`, *The `Cargo.lock` correction*).
+SDK's path dependency is the package's **only** dependency: the registry refuses
+a registry crate (R9), so the recipe JSON is read by the package's own small
+reader in `src/json.rs` and no `Cargo.lock` travels inside the archive.
 
 The in-game leg needs a game the launcher built with this package (`../tools/launcher-game.sh build
 oritech`), because a native `.hmod` cannot load on an unmodded build. `tools/e2e.sh` is the scenario

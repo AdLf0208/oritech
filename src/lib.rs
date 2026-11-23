@@ -19,6 +19,8 @@
 //! the content and the code, which is what that helper existed to work around.
 pub mod runtime;
 
+/// The dependency-free JSON reader the recipe parsers use (the registry refuses a registry crate).
+mod json;
 mod support;
 
 use mod_api::{
