@@ -13,6 +13,7 @@ The lines are (see `src/support.rs`, the readout section):
     Centrifuge at [8, 100, 10]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe oritech:centrifuge/carbon, tank minecraft:water 250/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, out1 empty, addons none, t=424
     Foundry at [4, 100, 14]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe none, in0 minecraft:iron_ingot x1, in1 oritech:coal_dust x1, out0 empty, addons none, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
+    oritech:centrifuge_block at [20, 100, 10]: slot 1 = oritech:carbon_fibre_strands x64 (asked 64).
 
 Usage: `eval "$(python3 tools/parse_info.py "$line")"`; `ok=1` when it parsed.
 Every field name is always defined (empty when the line does not carry it), so a
@@ -48,6 +49,8 @@ FIELDS = (
     "TANK_CAP",
     "ASKED",
     "ACCEPTED",
+    "SLOT",
+    "HELD",
     "NAME",
     "ADDONS",
     "BURST",
@@ -101,6 +104,13 @@ FLUID = re.compile(
     r"^(?P<NAME>\S+) at \[(?P<POS>[^\]]+)\]: "
     r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB "
     r"\(asked (?P<ASKED>-?\d+), accepted (?P<ACCEPTED>-?\d+)\)$"
+)
+
+# The harness's slot write (`/oritech slot`): which slot, what it holds after the
+# write (`empty` when it was emptied) and what was asked.
+SLOT = re.compile(
+    r"^(?P<NAME>\S+) at \[(?P<POS>[^\]]+)\]: "
+    r"slot (?P<SLOT>-?\d+) = (?P<HELD>.+?) \(asked (?P<ASKED>-?\d+)\)\.$"
 )
 
 LAVA = re.compile(
@@ -159,6 +169,7 @@ def main(argv: list[str]) -> int:
         ("centrifuge", CENTRIFUGE),
         ("foundry", FOUNDRY),
         ("fluid", FLUID),
+        ("slot", SLOT),
     ):
         match = pattern.match(line)
         if not match:

@@ -179,6 +179,13 @@ impl Hooks for Mod {
             "oritech fluid <pos:block_pos> <amount:integer> <fluid:text>",
             2,
         ));
+        // A machine's *output* slots have no other route: the right click fills
+        // an input slot only, and `ctl container` cannot see a mod block entity.
+        // The item is a greedy `text` for the same `:` reason as the fluid.
+        event.commands.push(Command::op(
+            "oritech slot <pos:block_pos> <slot:integer> <count:integer> <item:text>",
+            2,
+        ));
     }
 
     /// The command bodies. The dispatcher parses and resolves the arguments, so
@@ -227,6 +234,24 @@ impl Hooks for Mod {
                 };
                 support::set_fluid(host, *pos, fluid.trim(), *amount)
                     .unwrap_or_else(|| format!("{pos:?} has no Oritech fluid tank."))
+            }
+            ["oritech", "slot"] => {
+                let (
+                    Some(CommandArgumentValue::BlockPos(pos)),
+                    Some(CommandArgumentValue::Integer(slot)),
+                    Some(CommandArgumentValue::Integer(count)),
+                    Some(CommandArgumentValue::String(item)),
+                ) = (
+                    event.command.argument("pos"),
+                    event.command.argument("slot"),
+                    event.command.argument("count"),
+                    event.command.argument("item"),
+                )
+                else {
+                    return Flow::Continue;
+                };
+                support::set_slot(host, *pos, *slot, *count, item.trim())
+                    .unwrap_or_else(|| format!("{pos:?} has no Oritech container."))
             }
             _ => return Flow::Continue,
         };

@@ -23,19 +23,19 @@ use crate::runtime::{
     Assembler, AssemblerRecipe, Burst, CENTRIFUGE_CAPACITY, CENTRIFUGE_CORE_OFFSET,
     CENTRIFUGE_ENERGY_PER_TICK, CENTRIFUGE_MAX_INSERT, CENTRIFUGE_SLOTS, CENTRIFUGE_TANK,
     COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK,
-    CORE_OFFSET, Centrifuge, CentrifugeRecipe, Cooler, CoolerRecipe, EnergyTarget, FLUID_ADDON,
-    FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS, FOUNDRY_ENERGY_PER_TICK, FOUNDRY_INPUTS,
-    FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK,
+    CORE_OFFSET, Centrifuge, CentrifugeInstall, CentrifugeRecipe, Cooler, CoolerRecipe,
+    EnergyTarget, FLUID_ADDON, FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS, FOUNDRY_ENERGY_PER_TICK,
+    FOUNDRY_INPUTS, FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK,
     FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput, Foundry, FoundryRecipe, Furnace,
     GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
     LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator,
     MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
-    PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, Work, addon_names,
-    addon_settings, addon_slots, after_consuming, after_draining, can_output, centrifuge_can_run,
-    centrifuge_output_fits, clamp_energy, cooler_output_fits, core_quality, craft_plan,
-    efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output, insert_slot,
-    is_fuel, lava_output_targets, output_fits, processing_ticks, redstone_disables,
-    speed_multiplier, tank_matches,
+    PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, TankAfter, Work,
+    addon_names, addon_settings, addon_slots, after_consuming, after_draining, can_output,
+    centrifuge_can_run, centrifuge_install, centrifuge_output_fits, clamp_energy,
+    cooler_output_fits, core_quality, craft_plan, efficiency_multiplier, energy_usage,
+    generator_burn_ticks, generator_output, insert_slot, is_fuel, lava_output_targets, output_fits,
+    processing_ticks, redstone_disables, speed_multiplier, tank_matches,
 };
 
 use serde_json::Value;
@@ -1583,7 +1583,7 @@ pub(crate) fn tick_centrifuge(
         if step == Step::Finished
             && let Some(recipe) = recipe.as_ref()
         {
-            finish_centrifuge(&*host, &mut saved, items, recipe);
+            finish_centrifuge(&*host, &mut saved, items, recipe, fluid_addon);
             // `CentrifugeBlockEntity.craftItem`'s chamber loop: the same recipe,
             // another matching input and room for its results (and, for a fluid
             // recipe, another measure in the tank).
@@ -1614,7 +1614,7 @@ pub(crate) fn tick_centrifuge(
                 {
                     break;
                 }
-                finish_centrifuge(&*host, &mut saved, items, &next);
+                finish_centrifuge(&*host, &mut saved, items, &next, fluid_addon);
             }
         }
     }
@@ -1646,36 +1646,75 @@ fn centrifuge_output_refs(outputs: &[Option<(String, i32)>; 2]) -> [Option<(&str
     ]
 }
 
-/// `MachineBlockEntity.craftItem` for the centrifuge: the input leaves its slot,
-/// the fluid recipe takes its millibuckets out of the tank, then each result goes
-/// into its own output slot. The item leaves before the output is granted, the
-/// order every machine in this port uses.
+/// `MachineBlockEntity.craftItem` for the centrifuge: the whole completion is
+/// planned first ([`centrifuge_install`] — the item, the Fluid Addon and tank
+/// rule, and every result in its own output slot), and only then does the input
+/// leave its slot, the fluid recipe take its millibuckets and each result go
+/// into its own slot. A craft whose result cannot be installed takes nothing.
 fn finish_centrifuge(
     host: &dyn Host,
     saved: &mut CentrifugeSaved,
     items: &mut [Option<ItemStack>],
     recipe: &CentrifugeRecipe,
+    fluid_addon: bool,
 ) {
-    if recipe.fluid.is_some() {
-        let tank = saved
-            .tank
-            .as_ref()
-            .map(|(fluid, amount)| (fluid.as_str(), *amount));
-        if !centrifuge_can_run(recipe, tank, true) {
-            return;
-        }
-    }
-    if !consume_one(items, INPUT_SLOT) {
+    let tank = saved
+        .tank
+        .as_ref()
+        .map(|(fluid, amount)| (fluid.as_str(), *amount));
+    let input = items
+        .get(INPUT_SLOT)
+        .and_then(Option::as_ref)
+        .map_or(0, count_of);
+    let input = u32::try_from(input).unwrap_or(0);
+    let outputs = centrifuge_outputs(host, items);
+    let Some(install) = centrifuge_install(
+        recipe,
+        input,
+        centrifuge_output_refs(&outputs),
+        tank,
+        fluid_addon,
+        |item| max_stack(host, item),
+    ) else {
+        // Nothing fits, so nothing is taken: the input slot and the tank stay
+        // exactly as they were.
+        return;
+    };
+    if !apply_install(items, INPUT_SLOT, &install) {
         return;
     }
-    if let Some(input) = &recipe.fluid
-        && let Some((fluid, amount)) = saved.tank.clone()
+    if let TankAfter::Left(left) = install.tank
+        && let Some((fluid, _)) = saved.tank.clone()
     {
-        saved.tank = after_draining(amount, input.amount).map(|left| (fluid, left));
+        saved.tank = left.map(|left| (fluid, left));
     }
     for (index, result) in recipe.results.iter().enumerate() {
         grow_output(host, items, CENTRIFUGE_OUTPUT + index, result);
     }
+}
+
+/// Write a [`CentrifugeInstall`]'s input count back: the last item empties the
+/// slot (the SDK represents an empty slot as `None` and refuses a stack of
+/// zero), a surviving stack keeps its count. False — and the slot unchanged —
+/// when the count cannot be written.
+fn apply_install(
+    items: &mut [Option<ItemStack>],
+    slot: usize,
+    install: &CentrifugeInstall,
+) -> bool {
+    let Some(left) = install.input_left else {
+        items[slot] = None;
+        return true;
+    };
+    let Some(mut stack) = items.get_mut(slot).and_then(Option::take) else {
+        return false;
+    };
+    if stack.set_count(left).is_err() {
+        items[slot] = Some(stack);
+        return false;
+    }
+    items[slot] = Some(stack);
+    true
 }
 
 /// `LavaGeneratorEntity.outputEnergy`'s plan for a generator block: the most one
@@ -3123,6 +3162,65 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         .map(|_| format!("{name} at {pos:?}: {energy}/{capacity} FE."))
 }
 
+/// `/oritech slot <pos> <slot> <count> <item>`: write one slot of a machine's
+/// inventory, the harness control a machine without a GUI needs.
+///
+/// The right click only ever fills an *input* slot (`findLowestMatchingSlot`),
+/// and this pin's `ctl container` reads the engine's vanilla container map, which
+/// a mod block entity is not in — so an output slot had no route at all. This
+/// writes through the block entity's own item slot, the same API the click uses,
+/// and answers what the slot holds afterwards. `count` 0 empties it.
+pub(crate) fn set_slot(
+    host: &mut dyn ServerHost,
+    pos: [i32; 3],
+    slot: i32,
+    count: i32,
+    item: &str,
+) -> Option<String> {
+    let level = host.level(host.dimension())?;
+    let name = block_at(&*host, level, pos)?;
+    let slots = container(&name)?.slots;
+    let index = usize::try_from(slot).ok().filter(|index| *index < slots)?;
+    let asked = count.clamp(0, 99);
+    let wanted = if asked == 0 {
+        None
+    } else {
+        let id = Identifier::parse(item.trim()).ok()?;
+        let key = host.item_key(&id)?;
+        ItemStack::new(key, u32::try_from(asked).ok()?)
+    };
+    let entity = host.block_entity(level, pos)?;
+    let _ = host.transaction(|host, tx| -> Result<(), ()> {
+        entity
+            .set_item_slot(host, tx, index as u32, wanted)
+            .map_err(|_| ())?;
+        let _ = entity.set_changed(host);
+        Ok(())
+    });
+    let after = entity
+        .item_slot(&*host, index as u32)
+        .ok()
+        .flatten()
+        .map(|stack| (stack.item().id(&*host), stack.count()));
+    Some(slot_line(&name, pos, index, after, asked))
+}
+
+/// The `/oritech slot` reply: the machine, the slot, what it holds after the
+/// write, and what was asked (`0` empties it).
+fn slot_line(
+    name: &str,
+    pos: [i32; 3],
+    slot: usize,
+    after: Option<(String, u32)>,
+    asked: i32,
+) -> String {
+    let held = match &after {
+        Some((item, count)) => format!("{item} x{count}"),
+        None => "empty".to_owned(),
+    };
+    format!("{name} at {pos:?}: slot {slot} = {held} (asked {asked}).")
+}
+
 /// `/oritech fluid <pos> <fluid> <amount>`: fill a machine's tank through the
 /// engine's own `native_fluid_insert`, so the *declaration* is what is being
 /// proved — the game routes the fluid by the tanks and faces the block declared,
@@ -4069,6 +4167,26 @@ mod tests {
         assert_eq!(
             fluid_line(COOLER, [12, 100, 0], "empty", 0, 1_000, 0, COOLER_TANK),
             "oritech:cooler_block at [12, 100, 0]: tank empty 0/4000 mB (asked 1000, accepted 0)"
+        );
+    }
+
+    #[test]
+    fn the_slot_command_line_is_the_one_the_e2e_asserts() {
+        // The harness route into a machine's output slots (the review's case).
+        assert_eq!(
+            slot_line(
+                CENTRIFUGE,
+                [8, 100, 10],
+                1,
+                Some(("oritech:carbon_fibre_strands".into(), 64)),
+                64
+            ),
+            "oritech:centrifuge_block at [8, 100, 10]: slot 1 = \
+             oritech:carbon_fibre_strands x64 (asked 64)."
+        );
+        assert_eq!(
+            slot_line(CENTRIFUGE, [8, 100, 10], 1, None, 0),
+            "oritech:centrifuge_block at [8, 100, 10]: slot 1 = empty (asked 0)."
         );
     }
 

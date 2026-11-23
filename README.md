@@ -84,7 +84,9 @@ models, textures, recipes, loot, lang, tags).
   slots, the eighth addon, the **Fluid Addon**, switches the machine to the jar's
   `oritech:centrifuge_fluid` table: **250 mB of water + dirt → one clay in 100 ticks for exactly 6,400
   FE**, from its own **eight-bucket tank** (a real `horizon:fluids` handler). Without the addon the
-  water and dirt make nothing.
+  water and dirt make nothing. A craft whose result cannot be installed — the output slot already
+  holding a full stack of it — **takes nothing**: no coal dust, no dirt, no millibuckets of water and
+  no FE, the rule every machine in this mod follows (`canOutputRecipe` before `craftItem`).
 - **Foundry** (`oritech:foundry_block`) — the mod's alloying multiblock: a controller plus **three
   cores** at (0,0,1), (0,1,0) and (0,1,1), **two input slots and one output**, a **50,000 FE** buffer
   taking **1,024** an insert and spending **128 FE a tick**. Its `oritech:foundry` recipes match their
@@ -98,9 +100,11 @@ models, textures, recipes, loot, lang, tags).
   core in the hand to place the core, and with an empty hand to assemble it and
   read it; right-click a machine with an addon block in the hand to put it in
   the machine's first open slot.
-  `/oritech info <x> <y> <z>`, `/oritech energy <x> <y> <z> <amount>`
-  and `/oritech fluid <x> <y> <z> <amount> <fluid>` (op) read, prime and fill a
-  machine.
+  `/oritech info <x> <y> <z>`, `/oritech energy <x> <y> <z> <amount>`,
+  `/oritech fluid <x> <y> <z> <amount> <fluid>` and `/oritech slot <x> <y> <z>
+  <slot> <count> <item>` (op) read, prime, fill and write one slot of a
+  machine — the last one is the only route into an *output* slot, since the
+  right click fills an input slot only.
 
 ## What it does not do (yet)
 

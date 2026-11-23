@@ -1721,6 +1721,63 @@ pub fn centrifuge_output_fits(
             .all(|(result, slot)| output_fits(slot, result, max_stack(&result.item)))
 }
 
+/// The tank after one centrifuge completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TankAfter {
+    /// An item recipe: the tank is not part of the craft.
+    Untouched,
+    /// A fluid recipe: what is left, `None` when it took the last of it.
+    Left(Option<i32>),
+}
+
+/// What one centrifuge completion takes and leaves: the input slot's count and
+/// the tank, decided **before** anything is taken.
+///
+/// `centrifuge_install` answers `None` — take nothing — unless the whole
+/// output can be installed and, for a fluid recipe, the tank still holds it.
+/// The consuming function applies this plan, so no call order can consume an
+/// item or a millibucket for a craft whose result does not fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CentrifugeInstall {
+    /// The input item's count after the craft; `None` empties its slot.
+    pub input_left: Option<u32>,
+    /// The tank after the craft.
+    pub tank: TankAfter,
+}
+
+/// Plan one centrifuge completion (`MachineBlockEntity.craftItem` for the
+/// centrifuge): the input, the Fluid Addon and tank rule, and every result in
+/// its own output slot, all before a single item or millibucket moves.
+#[must_use]
+pub fn centrifuge_install(
+    recipe: &CentrifugeRecipe,
+    input_count: u32,
+    outputs: [Option<(&str, i32)>; CENTRIFUGE_OUTPUTS],
+    tank: Option<(&str, i32)>,
+    fluid_addon: bool,
+    max_stack: impl Fn(&str) -> i32,
+) -> Option<CentrifugeInstall> {
+    if input_count == 0 || !centrifuge_can_run(recipe, tank, fluid_addon) {
+        return None;
+    }
+    if !centrifuge_output_fits(&recipe.results, outputs, max_stack) {
+        return None;
+    }
+    let tank = match &recipe.fluid {
+        None => TankAfter::Untouched,
+        // A zero-amount fluid input on an empty tank drains nothing; a recipe
+        // that needs fluid never reaches here without one (`tank_matches`).
+        Some(input) => {
+            let amount = tank.map_or(0, |(_, amount)| amount);
+            TankAfter::Left(after_draining(amount, input.amount))
+        }
+    };
+    Some(CentrifugeInstall {
+        input_left: after_consuming(input_count),
+        tank,
+    })
+}
+
 /// Why a centrifuge recipe's JSON was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CentrifugeError {
@@ -3987,6 +4044,118 @@ mod tests {
             !centrifuge_output_fits(&two, [None, Some(("oritech:small_gold_dust", 62))], stack),
             "62 + 3 passes one 64 stack"
         );
+    }
+
+    #[test]
+    fn a_centrifuge_with_a_full_output_slot_takes_neither_its_item_nor_its_fluid() {
+        let carbon = carbon_recipe();
+        let stack = |_: &str| 64;
+        // With room the whole completion is planned, and the plan says what it
+        // takes: the last input empties the slot, and no item recipe touches the
+        // tank.
+        let install = centrifuge_install(&carbon, 1, [None, None], None, false, stack)
+            .expect("an empty output slot and one input complete");
+        assert_eq!(install.input_left, None, "the last input leaves the slot");
+        assert_eq!(install.tank, TankAfter::Untouched);
+
+        // A full output slot of the result itself: the craft cannot be installed,
+        // so the plan is `None` and nothing may be taken (the review's case).
+        assert_eq!(
+            centrifuge_install(
+                &carbon,
+                1,
+                [Some(("oritech:carbon_fibre_strands", 64)), None],
+                None,
+                false,
+                stack
+            ),
+            None,
+            "a full output slot cannot take the result, so nothing is taken"
+        );
+        // A different item in the output slot blocks it just the same.
+        assert_eq!(
+            centrifuge_install(
+                &carbon,
+                1,
+                [Some(("minecraft:stone", 1)), None],
+                None,
+                false,
+                stack
+            ),
+            None
+        );
+        // No input, no completion: the plan cannot invent one.
+        assert_eq!(
+            centrifuge_install(&carbon, 0, [None, None], None, false, stack),
+            None
+        );
+
+        // The machine therefore does not advance: a blocked output is `None`
+        // work, which is the shared `advance` step's reset.
+        let mut machine = Centrifuge {
+            energy: 3_200,
+            progress: 40,
+            recipe: carbon.id.clone(),
+        };
+        assert_eq!(
+            machine.tick_with(None, centrifuge_energy_usage()),
+            Step::Idle
+        );
+        assert_eq!(machine.energy, 3_200, "the buffer spent nothing");
+        assert_eq!(machine.progress, 0, "the progress did not advance");
+        assert_eq!(machine.recipe, "", "and the blocked recipe is dropped");
+    }
+
+    #[test]
+    fn a_fluid_centrifuge_recipe_keeps_its_full_tank_when_the_result_has_no_room() {
+        let clay = clay_recipe();
+        let stack = |_: &str| 64;
+        // A *full* tank: the craft needs 250 of the 8,000 mB the chiller's own
+        // tank holds, so the tank is never the reason a completion fails.
+        let full = Some(("minecraft:water", CENTRIFUGE_TANK));
+        assert_eq!(
+            centrifuge_install(
+                &clay,
+                1,
+                [Some(("minecraft:clay", 64)), None],
+                full,
+                true,
+                stack
+            ),
+            None,
+            "no room for the clay: the dirt and the tank stay as they were"
+        );
+        // The Fluid Addon is still the gate.
+        assert_eq!(
+            centrifuge_install(&clay, 1, [None, None], full, false, stack),
+            None,
+            "without the addon the fluid table does not run at all"
+        );
+        // A tank short of the recipe's measure is a coverable state, not a craft.
+        assert_eq!(
+            centrifuge_install(
+                &clay,
+                1,
+                [None, None],
+                Some(("minecraft:water", 249)),
+                true,
+                stack
+            ),
+            None
+        );
+        // With room, the same craft takes exactly the recipe's millibuckets.
+        let install = centrifuge_install(&clay, 1, [None, None], full, true, stack)
+            .expect("a full tank and an empty output slot complete");
+        assert_eq!(
+            install.tank,
+            TankAfter::Left(Some(CENTRIFUGE_TANK - 250)),
+            "8,000 - 250 = 7,750 mB left"
+        );
+        assert_eq!(install.input_left, None, "the one dirt leaves the slot");
+        // A stack of two keeps one.
+        let install = centrifuge_install(&clay, 2, [None, None], full, true, stack)
+            .expect("two dirt complete once");
+        assert_eq!(install.input_left, Some(1));
     }
 
     // -----------------------------------------------------------------------

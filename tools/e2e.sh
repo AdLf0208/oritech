@@ -119,7 +119,8 @@
 # control unit's gate, `SELFTEST_CRAFT=1` for the coil's crafted count and
 # `SELFTEST_ASSEMBLER=1` for the assembler's output count, `SELFTEST_CENTRIFUGE=1`
 # for the centrifuge's carbon-fibre count, `SELFTEST_FOUNDRY=1` for the foundry's
-# steel count.
+# steel count, and `SELFTEST_CENTRIFUGE_ROOM=1` for the blocked-output phase of
+# 0.2.13 (it expects a craft whose result cannot be installed to have run).
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -427,6 +428,27 @@ fluid_put() { # fluid_put X Y Z FLUID AMOUNT
         fi
     done
     fail "no fresh /oritech fluid reply for $x,$y,$z: $(jq -c '{chat}' <<<"$out")"
+}
+
+# `/oritech slot X Y Z SLOT COUNT ITEM`: write one slot of a machine's inventory
+# (the harness route into an *output* slot: the right click fills input slots only,
+# and `ctl container` cannot see a mod block entity). COUNT 0 empties it. Answers
+# the reply line, retried until a *new* one arrives.
+slot_put() { # slot_put X Y Z SLOT COUNT ITEM
+    local x=$1 y=$2 z=$3 slot=$4 count=$5 item=$6 before out line
+    before=$(ctl messages 24 | jq -r '.chat[]' | grep -F "at [$x, $y, $z]: slot " || true)
+    say "oritech slot $x $y $z $slot $count $item"
+    for _ in $(seq 1 30); do
+        ctl wait 4 >/dev/null
+        out=$(ctl messages 24)
+        line=$(jq -r '.chat[]' <<<"$out" | grep -F "at [$x, $y, $z]: slot " | head -1 || true)
+        if [ -n "$line" ] && [ "$line" != "$before" ]; then
+            echo "  slot($x,$y,$z): $line" >&2
+            echo "$line"
+            return
+        fi
+    done
+    fail "no fresh /oritech slot reply for $x,$y,$z: $(jq -c '{chat}' <<<"$out")"
 }
 
 # feed X Y Z ITEM: stand beside the machine and right-click it with ITEM in hand (the
@@ -2309,6 +2331,149 @@ ctl command "setblock 16 100 10 minecraft:air" >/dev/null
 ctl command "setblock 16 101 10 minecraft:air" >/dev/null
 ctl wait 4
 
+echo "== CF: a full output slot blocks the craft: no coal dust and no FE are spent =="
+# 0.2.13, the review fix. `MachineBlockEntity.canOutputRecipe` gates the whole
+# tick, so with `out0` already holding a full stack of the result the machine must
+# consume nothing and spend nothing. The output slot is filled by the harness
+# control `/oritech slot` — the right click fills input slots only, and
+# `ctl container` cannot see a mod block entity — and the readout is re-read after
+# the write, so the setup itself is asserted.
+ctl command "setblock 30 100 10 minecraft:air" >/dev/null
+ctl command "setblock 30 101 10 minecraft:air" >/dev/null
+ctl command "setblock 30 100 9 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 30 101 10 oritech:machine_core_2" >/dev/null
+ctl command "setblock 30 100 10 $CENTRIFUGE" >/dev/null
+ctl wait 8
+[ "$(block_name 30 100 10)" = "$CENTRIFUGE" ] || fail "the blocked centrifuge did not place"
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl command "execute in minecraft:overworld run tp @s 30.5 100 8.5" >/dev/null
+ctl wait 6
+ctl look-at-block 30 100 10 north >/dev/null
+ctl wait 2
+ctl interact 30 100 10 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 30 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE oritech:machine_core_2
+line=$(slot_put 30 100 10 1 64 oritech:carbon_fibre_strands)
+read_info "$line"
+expect SLOT 1
+expect HELD "oritech:carbon_fibre_strands x64"
+feed 30 100 10 oritech:coal_dust
+line=$(info 30 100 10)
+read_info "$line"
+expect INPUT "oritech:coal_dust x1"
+expect OUT0 "oritech:carbon_fibre_strands x64"
+say "oritech energy 30 100 10 5000"
+ctl wait 60
+line=$(info 30 100 10)
+read_info "$line"
+expect ENERGY 5000
+expect INPUT "oritech:coal_dust x1"
+expect OUT1 empty
+expect PROGRESS 0
+expect RECIPE none
+if [ "${SELFTEST_CENTRIFUGE_ROOM:-0}" = 1 ]; then
+    echo "  SELFTEST_CENTRIFUGE_ROOM: expecting a full output slot to have taken the craft anyway (this must fail)"
+    expect OUT0 "oritech:carbon_fibre_strands x1"
+else
+    expect OUT0 "oritech:carbon_fibre_strands x64"
+fi
+echo "  a full out0: after 60 ticks (the craft is 50) the input is still $INPUT, out0 still $OUT0, the buffer still $ENERGY FE, progress $PROGRESS"
+
+echo "== CG: with room again the same recipe completes for exactly 3,200 FE =="
+# The differential: the same machine, the same coal dust and the same 5,000 FE —
+# only the output room changes.
+line=$(slot_put 30 100 10 1 0 minecraft:air)
+read_info "$line"
+expect SLOT 1
+expect HELD empty
+ctl wait 80
+line=$(info 30 100 10)
+read_info "$line"
+expect INPUT empty
+expect OUT0 "oritech:carbon_fibre_strands x1"
+expect OUT1 empty
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 1800
+echo "  emptied out0: the coal dust became $OUT0 in exactly $CENTRIFUGE_TICKS ticks, buffer 5000 -> $ENERGY FE (exactly $CENTRIFUGE_SPENT)"
+
+echo "== CH: a full tank and a full output slot: the fluid craft takes neither the dirt nor a millibucket =="
+# The fluid half of the same rule: the tank is an input, so a full one changes
+# nothing — the *output slot* is what cannot be installed, and the craft must take
+# nothing from the tank either.
+ctl command "setblock 33 100 10 minecraft:air" >/dev/null
+ctl command "setblock 33 101 10 minecraft:air" >/dev/null
+ctl command "setblock 33 100 9 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 33 101 10 oritech:machine_core_2" >/dev/null
+ctl command "setblock 33 100 9 $FLUID_ADDON" >/dev/null
+ctl command "setblock 33 100 10 $CENTRIFUGE" >/dev/null
+ctl wait 8
+[ "$(block_name 33 100 10)" = "$CENTRIFUGE" ] || fail "the fluid blocked centrifuge did not place"
+[ "$(block_name 33 100 9)" = "$FLUID_ADDON" ] || fail "the Fluid Addon did not place in the north slot"
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl command "execute in minecraft:overworld run tp @s 33.5 100 12.5" >/dev/null
+ctl wait 6
+ctl look-at-block 33 100 10 south >/dev/null
+ctl wait 2
+ctl interact 33 100 10 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 33 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE oritech:machine_core_2
+expect ADDONS fluid
+line=$(fluid_put 33 100 10 minecraft:water "$CENTRIFUGE_TANK")
+read_info "$line"
+expect TANK_FLUID minecraft:water
+expect TANK_AMOUNT "$CENTRIFUGE_TANK"
+expect ACCEPTED "$CENTRIFUGE_TANK"
+line=$(slot_put 33 100 10 1 64 minecraft:clay)
+read_info "$line"
+expect HELD "minecraft:clay x64"
+feed_south 33 100 10 minecraft:dirt
+line=$(info 33 100 10)
+read_info "$line"
+expect INPUT "minecraft:dirt x1"
+expect OUT0 "minecraft:clay x64"
+say "oritech energy 33 100 10 10000"
+ctl wait 120
+line=$(info 33 100 10)
+read_info "$line"
+expect ENERGY 10000
+expect INPUT "minecraft:dirt x1"
+expect TANK_AMOUNT "$CENTRIFUGE_TANK"
+expect OUT0 "minecraft:clay x64"
+expect PROGRESS 0
+expect RECIPE none
+echo "  a full $CENTRIFUGE_TANK mB tank and a full out0: after 120 ticks (the craft is 100) the dirt is still $INPUT, the tank still $TANK_AMOUNT mB, the buffer still $ENERGY FE"
+
+echo "== CI: with room again the clay completes for exactly 6,400 FE and the tank drains 250 mB =="
+line=$(slot_put 33 100 10 1 0 minecraft:air)
+read_info "$line"
+expect HELD empty
+ctl wait 160
+line=$(info 33 100 10)
+read_info "$line"
+expect INPUT empty
+expect OUT0 "minecraft:clay x1"
+expect TANK_AMOUNT 7750
+expect RECIPE none
+expect ENERGY 3600
+echo "  emptied out0: $OUT0 for exactly $CENTRIFUGE_FLUID_SPENT FE, the tank $CENTRIFUGE_TANK -> $TANK_AMOUNT mB (250 drained)"
+ctl command "setblock 30 100 10 minecraft:air" >/dev/null
+ctl command "setblock 30 101 10 minecraft:air" >/dev/null
+ctl command "setblock 33 100 10 minecraft:air" >/dev/null
+ctl command "setblock 33 101 10 minecraft:air" >/dev/null
+ctl command "setblock 33 100 9 minecraft:air" >/dev/null
+ctl wait 4
+
 echo "== FA: an unassembled foundry with a valid pair and 5,000 FE makes nothing =="
 # Slice 10. `FoundryBlockEntity` is a `MultiblockMachineEntity` with three core
 # positions; `isActive(ASSEMBLED)` gates its whole tick. The pair is the jar's
@@ -2566,4 +2731,4 @@ AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
 [ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
 echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block, an unassembled centrifuge with coal dust and 5,000 FE made no carbon fibre and spent nothing, its core above assembled it and 50 ticks turned one coal dust into exactly one carbon fibre strand for exactly 3,200 FE with the input emptied, a Fluid Addon and a tank of only 100 mB of water made no clay and spent no FE (the recipe needs 250), the same machine with 250 mB made exactly one clay in 100 ticks for exactly 6,400 FE and emptied its tank, and the same water and dirt without the Fluid Addon made nothing, a foundry with a valid pair and 5,000 FE but no core made nothing, its three cores assembled it with their average quality, two iron ingots made no alloy and spent no FE, one coal dust and one iron in the slots opposite the file's order became exactly one steel ingot in exactly 26 ticks for exactly 3,328 FE with both inputs emptied, and its adamant, electrum and netherite alloys each crafted their declared output for exactly 10,240 FE, and every carried loot table rolled its own block"
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block, an unassembled centrifuge with coal dust and 5,000 FE made no carbon fibre and spent nothing, its core above assembled it and 50 ticks turned one coal dust into exactly one carbon fibre strand for exactly 3,200 FE with the input emptied, a Fluid Addon and a tank of only 100 mB of water made no clay and spent no FE (the recipe needs 250), the same machine with 250 mB made exactly one clay in 100 ticks for exactly 6,400 FE and emptied its tank, and the same water and dirt without the Fluid Addon made nothing, a foundry with a valid pair and 5,000 FE but no core made nothing, its three cores assembled it with their average quality, two iron ingots made no alloy and spent no FE, one coal dust and one iron in the slots opposite the file's order became exactly one steel ingot in exactly 26 ticks for exactly 3,328 FE with both inputs emptied, and its adamant, electrum and netherite alloys each crafted their declared output for exactly 10,240 FE, a centrifuge whose output slot was already full of the result neither took its coal dust nor spent a single FE in 60 ticks and the same machine with the slot emptied again made one carbon fibre for exactly 3,200 FE, a full 8,000 mB tank and a full clay slot took neither the dirt nor a millibucket and the same machine with the slot emptied made one clay and drained exactly 250 mB, and every carried loot table rolled its own block"

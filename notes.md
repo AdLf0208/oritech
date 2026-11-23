@@ -1,4 +1,4 @@
-# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes; slice 8: the Assembler; slice 9: the Centrifuge; slice 10: the Foundry)
+# Oritech — port notes (slice 1: the Basic Generator and the Pulverizer; slice 2: the Powered Furnace; slice 3: the Industrial Chiller; slice 4: the Lava Generator; slice 5: the machine addon system; slice 6: the Control Unit Addon and the redstone gate; slice 7: the material chain and the machines' crafting recipes; slice 8: the Assembler; slice 9: the Centrifuge; slice 10: the Foundry; 0.2.13: the centrifuge review fix)
 
 Ported from **Oritech 1.2.13** (`oritech-neoforge-1.21.1-1.2.13.jar`, SHA-256
 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`,
@@ -1063,7 +1063,7 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `tag:entity_type` | not ported | `spawner_blacklist` — the spawner family is not ported |
 | `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
 | `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
-| `command` | tested | `/oritech info` (every phase, the foundry's FA–FE included), `/oritech energy` (D, H, R, S, T, FA–FE), `/oritech fluid` (P, T, U) |
+| `command` | tested | `/oritech info` (every phase, the foundry's FA–FE included), `/oritech energy` (D, H, R, S, T, FA–FE), `/oritech fluid` (P, T, U) and `/oritech slot` (CF–CI; its `slot N = <item> x<count>` reply is parsed and asserted) |
 | `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (atomic forge, refinery, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), and the Control Unit Addon's input gate is `tested` in slice 6 |
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
@@ -2336,14 +2336,14 @@ measured + `78` to the end = 100 ticks, and `12 + 10 + 78 = 100`, `100 × 64 = 6
 
 | Family | Status | Evidence / reason |
 |---|---|---|
-| `oritech:centrifuge_block` | tested | CA (no core), CB (core above, 50 ticks, 3,200 FE, one strand), CC (100 mB: wrong ratio), CD (250 mB: one clay, 6,400 FE), CE (no addon); W its loot table |
+| `oritech:centrifuge_block` | tested | CA (no core), CB (core above, 50 ticks, 3,200 FE, one strand), CC (100 mB: wrong ratio), CD (250 mB: one clay, 6,400 FE), CE (no addon), **CF** (a full `out0`: 60 ticks with the input, `out0` and 5,000 FE unchanged), **CG** (the same machine with room: one strand for exactly 3,200 FE), **CH** (a full 8,000 mB tank and a full clay slot: dirt, tank and 10,000 FE unchanged), **CI** (with room: one clay, exactly 6,400 FE, the tank 8,000 → 7,750); W its loot table |
 | `oritech:blocks/centrifuge_block` | tested | W rolls the carried loot table into the inventory |
 | `oritech:machine_fluid_addon` | tested | AA places and reads it back; CC/CD/CE prove the switch; W its loot table |
 | `oritech:blocks/machine_fluid_addon` | tested | W |
 | `oritech:coal_dust` | tested | O: the pulverizer's `coal` recipe makes it (input consumed); CB feeds it to the centrifuge |
 | `oritech:carbon_fibre_strands` | tested | CB's output; `craft_check.py`'s carbon `core3` takes eight of them |
-| `oritech:centrifuge/carbon` | tested | CB: one coal dust → one strand in exactly 50 ticks for exactly 3,200 FE, input emptied |
-| `oritech:centrifuge/fluid/clay` | tested | CC (wrong ratio: no result, no FE) and CD (exactly one clay in 100 ticks for exactly 6,400 FE, tank emptied) |
+| `oritech:centrifuge/carbon` | tested | CB: one coal dust → one strand in exactly 50 ticks for exactly 3,200 FE, input emptied; CF/CG: the same recipe takes nothing while the output slot is full and completes once it is emptied |
+| `oritech:centrifuge/fluid/clay` | tested | CC (wrong ratio: no result, no FE), CD (exactly one clay in 100 ticks for exactly 6,400 FE, tank emptied), CH/CI (a full tank and a full clay slot take nothing; with room: one clay and exactly 250 mB drained) |
 | `oritech:pulverizer/coal` | tested | O: `#minecraft:coals` → `oritech:coal_dust x1`, input consumed |
 | `oritech:crafting/core3` | tested | `craft_check.py` AM: 8 carbon fibre + 1 redstone → 1 core 3, ingredients consumed |
 | `multiblock` | tested | CB/CC/CE: one core above, the empty-hand click assembles; CE assembled without the addon |
@@ -2632,6 +2632,137 @@ quality), and the jar's `data/oritech/recipe/foundry/**` (all 29), `data/oritech
 copied or translated and no jar was decompiled.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Review fix — the centrifuge decides the whole completion before taking anything (0.2.13, 2026-11-23)
+
+**The review** (`NikitaMGrimm`, on the centrifuge): *"The centrifuge can consume items and fluid
+before confirming it can install the result. If 0.2.12 carries that path forward, validate the output
+before consuming inputs and cover a recipe whose output cannot be installed."*
+
+**What 0.2.12 actually did — measured, not assumed.** The consumption defect the review describes
+**was not present**. `tick_centrifuge` gates the whole tick on the output before the machine advances
+(`src/support.rs:1572`):
+
+```rust
+let work = recipe.as_ref().and_then(|recipe| {
+    let outputs = centrifuge_outputs(&*host, items);
+    centrifuge_output_fits(&recipe.results, centrifuge_output_refs(&outputs), |item| {
+        max_stack(&*host, item)
+    })
+    .then_some(Work { id: &recipe.id, time: processing_ticks(recipe.time, speed) })
+});
+step = saved.machine.tick_with(work, cost);
+```
+
+`work == None` ⇒ `runtime::advance` resets the progress and clears the recipe, `Step::Finished` — the
+only path to `finish_centrifuge` — is never reached, and the input slot and the tank are untouched. So
+this section **does not claim a fix for a defect that was not there**; it adds the proof the review
+asked for, and makes the guarantee structural.
+
+**What this slice changes, and why.** The validation and the consumption lived in different functions,
+and the consuming one (`finish_centrifuge`) checked only the *tank* (`centrifuge_can_run`) — the item
+half was somebody else's job one call up, so a future caller could consume without validating. The
+whole completion decision is now one pure function, `runtime::centrifuge_install`
+(`src/runtime.rs:1752`): it answers `None` — take nothing — unless the input exists,
+`centrifuge_can_run` holds (the Fluid Addon and the tank's measure) **and**
+`centrifuge_output_fits` holds for every result in its own slot; otherwise it returns the plan
+(`input_left: Option<u32>`, `tank: TankAfter::{Untouched, Left(Option<i32>)}`).
+`finish_centrifuge` (`src/support.rs:1654`) now only *applies* that plan, so "consume before
+validating" is no longer expressible.
+
+### TDD (red first)
+
+| Step | Result | Log |
+|---|---|---|
+| `centrifuge_install` added with a `todo!()` body and the two tests, `cargo test --offline centrifuge` | **13 passed, 2 failed** — both `panicked at src/runtime.rs:1760: not yet implemented` | `review0213-test-red.log` |
+| the same, implemented | **141 passed**, 0 failed (sdk-test.log regenerated at 0.2.13) | `sdk-test.log` |
+| counterfactual: the `centrifuge_output_fits` arm removed, `cargo test --offline centrifuge`, then the file restored | **13 passed, 2 failed** — exactly the two new tests, then `restored: True (ac9506c9…)` | `review0213-glue-red-counterfactual.log` |
+
+The two tests are `a_centrifuge_with_a_full_output_slot_takes_neither_its_item_nor_its_fluid` (item
+recipe, `out0` full of the result: `centrifuge_install` is `None`, and `Centrifuge::tick_with(None,
+64)` leaves 3,200 FE unspent and the progress at 0) and
+`a_fluid_centrifuge_recipe_keeps_its_full_tank_when_the_result_has_no_room` (fluid recipe, a **full**
+8,000 mB tank, `out0` full: `None` — the dirt and the tank stay; with room the plan is
+`TankAfter::Left(7,750)` and the input's last item leaves its slot).
+
+### The harness control the leg needed: `/oritech slot`
+
+An output slot had **no** route into it: the right click only fills an *input* slot
+(`machine_input_slot`), and this pin's `ctl container` reads the engine's vanilla container map, which
+a mod block entity is not in. `/oritech slot <pos> <slot> <count> <item>` (op 2) writes one slot
+through the block entity's own `set_item_slot` — the same API the click uses — and answers what the
+slot holds afterwards (`count` 0 empties it). It is the same harness-control family as
+`/oritech energy` and `/oritech fluid`, and its line is pinned by
+`the_slot_command_line_is_the_one_the_e2e_asserts`. The item is a greedy `text` for the `:`
+reason slice 3 recorded for the fluid.
+
+### In-game transcript (quoted from `e2e-review0213.log`)
+
+```
+  == CF: a full output slot blocks the craft: no coal dust and no FE are spent
+  slot(30,100,10): oritech:centrifuge_block at [30, 100, 10]: slot 1 = oritech:carbon_fibre_strands x64 (asked 64).
+  info(30,100,10): Centrifuge at [30, 100, 10]: 0/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank empty 0/8000 mB, input oritech:coal_dust x1, out0 oritech:carbon_fibre_strands x64, out1 empty, addons none, t=14551
+  info(30,100,10): Centrifuge at [30, 100, 10]: 5000/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank empty 0/8000 mB, input oritech:coal_dust x1, out0 oritech:carbon_fibre_strands x64, out1 empty, addons none, t=14633
+  a full out0: after 60 ticks (the craft is 50) the input is still oritech:coal_dust x1, out0 still oritech:carbon_fibre_strands x64, the buffer still 5000 FE, progress 0
+  == CG: with room again the same recipe completes for exactly 3,200 FE
+  slot(30,100,10): oritech:centrifuge_block at [30, 100, 10]: slot 1 = empty (asked 0).
+  info(30,100,10): Centrifuge at [30, 100, 10]: 1800/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank empty 0/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, out1 empty, addons none, t=14741
+  emptied out0: the coal dust became oritech:carbon_fibre_strands x1 in exactly 50 ticks, buffer 5000 -> 1800 FE (exactly 3200)
+  == CH: a full tank and a full output slot: the fluid craft takes neither the dirt nor a millibucket
+  slot(33,100,10): oritech:centrifuge_block at [33, 100, 10]: slot 1 = minecraft:clay x64 (asked 64).
+  info(33,100,10): Centrifuge at [33, 100, 10]: 0/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank minecraft:water 8000/8000 mB, input minecraft:dirt x1, out0 minecraft:clay x64, out1 empty, addons fluid, t=14957
+  info(33,100,10): Centrifuge at [33, 100, 10]: 10000/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank minecraft:water 8000/8000 mB, input minecraft:dirt x1, out0 minecraft:clay x64, out1 empty, addons fluid, t=15095
+  a full 8000 mB tank and a full out0: after 120 ticks (the craft is 100) the dirt is still minecraft:dirt x1, the tank still 8000 mB, the buffer still 10000 FE
+  == CI: with room again the clay completes for exactly 6,400 FE and the tank drains 250 mB
+  slot(33,100,10): oritech:centrifuge_block at [33, 100, 10]: slot 1 = empty (asked 0).
+  info(33,100,10): Centrifuge at [33, 100, 10]: 3600/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, tank minecraft:water 7750/8000 mB, input empty, out0 minecraft:clay x1, out1 empty, addons fluid, t=15281
+  emptied out0: minecraft:clay x1 for exactly 6400 FE, the tank 8000 -> 7750 mB (250 drained)
+EXIT:0
+```
+
+The phase is fail-capable three ways: the **buffer** (60 ticks at 64 FE a tick would have spent 3,840
+and left 1,160), the **input** (a consumed coal dust would read `input empty`), and
+`SELFTEST_CENTRIFUGE_ROOM=1`, which inverts the blocked assertion and exits 1
+(`FAIL: OUT0 is 'oritech:carbon_fibre_strands x64', expected 'oritech:carbon_fibre_strands x1'`).
+Its **differential is the same machine**: `CG`/`CI` empty `out0` and nothing else — same recipe, same
+input, same FE, same tank — and the craft completes for exactly 3,200 / 6,400 FE.
+
+### Verification (0.2.13)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`BUILD_LOCAL=1`,
+`CARGO_INCREMENTAL=0`, no `--target-dir`); the launcher build is outside a slot (its own global lock).
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline centrifuge`, `centrifuge_install` a `todo!()` | **13 passed, 2 failed** — `not yet implemented` (`review0213-test-red.log`) |
+| counterfactual | the fit arm removed, `cargo test --offline centrifuge` | **13 passed, 2 failed**, the two new tests; restored `ac9506c9…` (`review0213-glue-red-counterfactual.log`, `tools/review0213-counterfactual.py`) |
+| tests (green) | `cargo test --offline` | **141 passed**, 0 failed (`sdk-test.log`, regenerated at 0.2.13) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`review0213-fmt.log`, `review0213-clippy.log`) |
+| package | `cargo horizon-mod build` twice, the artifact deleted between | **249,228 B**, sha256 `ffd3ee465c7af7b3665c82dccd3354aa05abc13f227a9e12c8ba0204cd6fc367`, `cmp` identical, **298 entries incl. `Cargo.lock`** (kept: it is the package's pin record) (`review0213-build.log`, `review0213-build-second.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.13 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `249228 bytes … unsigned`, exit 0 (`review0213-check-fits.log`) |
+| fits the pin | `… fits --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `… fits --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1**, `package matches the tree` |
+| recipe types | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.13; the export was removed first, and no `native-*` tag carried this mod) | `native-0a875da-984c828c530c`; `strings liboritech.so` shows `centrifuge_install`, `Centrifuge at ` and `has no Oritech container.`; `native-mods.json` reads version `0.2.13` |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0`, phases CF–CI included (`e2e-review0213.log`) |
+| e2e differential | `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; without this package no generator item, motor, adamant ingot, coal dust, carbon fibre or steel ingot, and every block id stays `minecraft:air` (`e2e-review0213-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-review0213-control.log`) |
+| fail-capability, the new phase | `SELFTEST_CENTRIFUGE_ROOM=1` | **EXIT:1** — `OUT0 is 'oritech:carbon_fibre_strands x64', expected 'oritech:carbon_fibre_strands x1'` (`e2e-review0213-selftest-room.log`) |
+| log checker | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | **51 logs, 51 ok, 0 bad** |
+| coverage | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS |
+
+The families this slice covers are the rows already listed in *What slice 9 covered, and by which
+phase* — enlarged in place with **CF–CI** on `oritech:centrifuge_block`, both carried centrifuge
+recipes and the `command` row — so a family is never declared twice.
+
+`## Upstream defects fixed` (0.2.13): none found, and none claimed — the review's consumption defect
+was not in 0.2.12, which this section reports instead of "fixing" it. Upstream's own order
+(`canOutputRecipe` before `craftItem`) is what the port already kept; `centrifuge_install` only makes
+it impossible to call the other way round.
+
+Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices
 
 ## Next slice
 

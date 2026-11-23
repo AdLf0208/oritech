@@ -5,6 +5,43 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.13 — review fix, the centrifuge's completion is decided before anything is taken (pin `0a875da`, 2026-11-23)
+
+The review (`NikitaMGrimm`) asked whether 0.2.12 consumes an item or fluid before confirming the
+result can be installed. **It did not**: `tick_centrifuge` computed `Work` only when
+`centrifuge_output_fits` held, and `work == None` never reaches the completion (`src/support.rs:1572`).
+This slice says so, moves the whole decision into `runtime::centrifuge_install` so no call order can
+consume first, and proves it. The plan is [`PLAN-review-0.2.13.md`](../oritech/PLAN-review-0.2.13.md);
+the narrative and the transcript are in `notes.md` → *Review fix — 0.2.13*.
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline centrifuge'` with `centrifuge_install` a `todo!()` | **13 passed, 2 failed** — `panicked at src/runtime.rs:1760: not yet implemented` | `review0213-test-red.log` |
+| 2 | `cd ports/oritech && python3 tools/review0213-counterfactual.py` (the `centrifuge_output_fits` arm removed, test, file restored) | **13 passed, 2 failed** — exactly the two new tests; `restored: True (ac9506c9…)` | `review0213-glue-red-counterfactual.log` |
+| 3 | `build-slot.sh run --step build -- … cargo test --offline` (one lease with the steps below) | **141 passed, 0 failed**; `sdk-test.log` regenerated at 0.2.13 | `sdk-test.log` |
+| 4 | `cargo fmt --check` | exit 0, empty diff | `review0213-fmt.log` |
+| 5 | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** | `review0213-clippy.log` |
+| 6 | `cargo horizon-mod build` twice, the artifact deleted between | **249,228 B**, sha256 `ffd3ee465c7af7b3665c82dccd3354aa05abc13f227a9e12c8ba0204cd6fc367`, `cmp` identical, **298 entries incl. `Cargo.lock`** | `review0213-build.log`, `review0213-build-second.log` |
+| 7 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.13 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `249228 bytes` | `review0213-check-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `review0213-check-fits.log` |
+| 9 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build; the pin run alone is a tautology) | `review0213-check-fits.log` |
+| 10 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, `runtime byte-identical 6023e14eeb74` | stdout |
+| 11 | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` | stdout |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.13, the export removed first; no `native-*` tag carried this mod) | `native-0a875da-984c828c530c`; `strings liboritech.so` shows `centrifuge_install`, `Centrifuge at `, `has no Oritech container.`; `native-mods.json` = 0.2.13 | — |
+| 13 | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0`, phases CF–CI included | `e2e-review0213.log` |
+| 14 | same with `CONTROL=1` | **PASS** + `EXIT:0`; the package-less build has no generator item, motor, adamant ingot, coal dust, carbon fibre or steel ingot, and every block id stays air | `e2e-review0213-differential.log` |
+| 15 | same with `GAME=$CONTROL_GAME` | **EXIT:1** — `the generator did not place` | `e2e-review0213-control.log` |
+| 16 | same with `SELFTEST_CENTRIFUGE_ROOM=1` | **EXIT:1** — `OUT0 is 'oritech:carbon_fibre_strands x64', expected 'oritech:carbon_fibre_strands x1'` | `e2e-review0213-selftest-room.log` |
+| 17 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | **51 logs, 51 ok, 0 bad** | stdout |
+| 18 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 19 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game differential is the strongest part: CF/CH fill the output slot (or leave a full tank) and
+assert the input, the tank and the FE are untouched after more ticks than the craft needs; CG/CI empty
+that one slot on the **same** machine and the same input/recipe/FE then completes for exactly 3,200 /
+6,400 FE. `SELFTEST_CENTRIFUGE_ROOM=1` inverts the blocked assertion, so the phase's own assertion has
+been watched failing.
+
 ## 0.2.12 — slice 10, the Foundry (pin `0a875da`, 2026-11-23)
 
 | # | Command (from the campaign root) | Verdict | Log |
