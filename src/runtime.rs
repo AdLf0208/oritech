@@ -1036,9 +1036,13 @@ pub const ULTIMATE_ADDON: &str = "oritech:machine_ultimate_addon";
 /// `BlockContent.MACHINE_REDSTONE_ADDON`: the Control Unit Addon, whose settings
 /// are `AddonSettings.getDefaultSettings()` — a control, not a multiplier.
 pub const REDSTONE_ADDON: &str = "oritech:machine_redstone_addon";
+/// `BlockContent.MACHINE_FLUID_ADDON`: the Fluid Addon, whose settings are also
+/// the neutral default — its effect is the centrifuge's `hasFluidAddon` switch,
+/// not a number.
+pub const FLUID_ADDON: &str = "oritech:machine_fluid_addon";
 
-/// The seven default addon blocks, in the order the readout names them.
-pub const ADDON_BLOCKS: [&str; 7] = [
+/// The eight default addon blocks, in the order the readout names them.
+pub const ADDON_BLOCKS: [&str; 8] = [
     SPEED_ADDON,
     EFFICIENCY_ADDON,
     PROCESSING_ADDON,
@@ -1046,6 +1050,7 @@ pub const ADDON_BLOCKS: [&str; 7] = [
     BURST_ADDON,
     ULTIMATE_ADDON,
     REDSTONE_ADDON,
+    FLUID_ADDON,
 ];
 
 /// `OritechConfig.addonConfig.burstAddonSpeedMultiplier`: a charged burst addon
@@ -1124,6 +1129,9 @@ pub fn addon_settings(block: &str) -> Option<AddonSettings> {
         // AddonSettings.getDefaultSettings()…)`: a control unit contributes no
         // multiplier; its effect is the machine-wide gate below.
         REDSTONE_ADDON => PLAIN,
+        // `BlockContent.MACHINE_FLUID_ADDON = new MachineAddonBlock(…,
+        // AddonSettings.getDefaultSettings()…)`: a switch, not a multiplier.
+        FLUID_ADDON => PLAIN,
         _ => return None,
     };
     Some(settings)
@@ -1247,6 +1255,7 @@ pub fn addon_slots(block: &str) -> &'static [[i32; 3]] {
         "oritech:cooler_block" => &[[0, 0, -2]],
         "oritech:lava_generator_block" => &[[1, 0, 0], [1, 1, 0]],
         "oritech:assembler_block" => &[[0, 0, -1], [0, 0, 2], [1, 0, 0]],
+        "oritech:centrifuge_block" => &[[0, 0, -1], [0, 0, 1]],
         _ => &[],
     }
 }
@@ -1263,6 +1272,7 @@ pub fn addon_names(blocks: &[&str]) -> String {
         "burst",
         "ultimate",
         "redstone",
+        "fluid",
     ];
     let names: Vec<&str> = ADDON_BLOCKS
         .iter()
@@ -1619,6 +1629,232 @@ pub struct Assembler {
 
 impl Assembler {
     /// An empty assembler.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick at the machine's (or its addons') per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            cost,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 9: the Centrifuge (`oritech:centrifuge_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.centrifugeData.energyCapacity`.
+pub const CENTRIFUGE_CAPACITY: i32 = 10_000;
+/// ...`.maxEnergyInsertion` (`64 * 8`): the most one insert moves.
+pub const CENTRIFUGE_MAX_INSERT: i32 = 512;
+/// ...`.energyPerTick`: FE one working tick spends.
+pub const CENTRIFUGE_ENERGY_PER_TICK: i32 = 64;
+/// ...`.tankSizeInBuckets` (8 buckets): the fluid half's one tank.
+pub const CENTRIFUGE_TANK: i32 = 8_000;
+/// `CentrifugeBlockEntity.getCorePositions`: one core above the controller, the
+/// furnace's and the lava generator's offset.
+pub const CENTRIFUGE_CORE_OFFSET: [i32; 3] = [0, 1, 0];
+/// The one input slot (`getSlotAssignments`'s `InventorySlotAssignment(0, 1, 1, 2)`).
+pub const CENTRIFUGE_INPUTS: usize = 1;
+/// Its two output slots (`getInventorySize` is 3).
+pub const CENTRIFUGE_OUTPUTS: usize = 2;
+/// The entity's whole inventory.
+pub const CENTRIFUGE_SLOTS: usize = CENTRIFUGE_INPUTS + CENTRIFUGE_OUTPUTS;
+
+/// `MachineBlockEntity.calculateEnergyUsage` for the centrifuge:
+/// `energyPerTick * efficiency(1) * (1 / speed(1))` = 64 FE.
+#[must_use]
+pub fn centrifuge_energy_usage() -> i32 {
+    energy_usage(CENTRIFUGE_ENERGY_PER_TICK, 1.0, 1.0, 1.0)
+}
+
+/// `MachineBlockEntity.checkCraftingFinished`'s duration for a centrifuge
+/// recipe: `progress >= time * speed`, the speed being the addons' (1 with none).
+#[must_use]
+pub fn centrifuge_ticks(time: u32) -> u32 {
+    processing_ticks(time, 1.0)
+}
+
+/// Whether the centrifuge's loaded recipe can run now.
+///
+/// An `oritech:centrifuge` recipe has no fluid input and runs with nothing in the
+/// tank. An `oritech:centrifuge_fluid` recipe needs the **Fluid Addon**
+/// (`CentrifugeBlockEntity.hasFluidAddon` switches `getOwnRecipeType`) and a tank
+/// holding its fluid at or above the recipe's amount
+/// (`CentrifugeBlockEntity.recipeInputMatchesTank`).
+#[must_use]
+pub fn centrifuge_can_run(
+    recipe: &CentrifugeRecipe,
+    tank: Option<(&str, i32)>,
+    fluid_addon: bool,
+) -> bool {
+    match &recipe.fluid {
+        None => true,
+        Some(input) => fluid_addon && tank_matches(tank, input),
+    }
+}
+
+/// `MachineBlockEntity.canOutputRecipe` over the centrifuge's two output slots:
+/// every result must fit its own slot, in file order.
+#[must_use]
+pub fn centrifuge_output_fits(
+    results: &[RecipeResult],
+    outputs: [Option<(&str, i32)>; CENTRIFUGE_OUTPUTS],
+    max_stack: impl Fn(&str) -> i32,
+) -> bool {
+    results.len() <= outputs.len()
+        && results
+            .iter()
+            .zip(outputs)
+            .all(|(result, slot)| output_fits(slot, result, max_stack(&result.item)))
+}
+
+/// Why a centrifuge recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CentrifugeError {
+    /// The JSON did not parse or has no `type`.
+    Unreadable,
+    /// No `ingredients`, or not exactly one (the centrifuge has one input slot).
+    WrongInputCount,
+    /// No `results`, or more than the two output slots.
+    WrongResultCount,
+    /// A result without an item id or with a count outside 1..=99.
+    BadResult,
+    /// A `fluidInput` without a fluid id or with a negative amount.
+    BadFluid,
+    /// The file declares a `fluidOutputs` entry: this package has no fluid this
+    /// machine could put in its tank, so the recipe would consume and produce
+    /// nothing.
+    FluidOutput,
+    /// No positive `time`.
+    BadTime,
+}
+
+impl std::fmt::Display for CentrifugeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::WrongInputCount => "not exactly one ingredient",
+            Self::WrongResultCount => "no result or more than two",
+            Self::BadResult => "a result without an item id or with a bad count",
+            Self::BadFluid => "a fluid input without a fluid id or a bad amount",
+            Self::FluidOutput => "a fluid output this package cannot store",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for CentrifugeError {}
+
+/// An `oritech:centrifuge` / `oritech:centrifuge_fluid` recipe: one item input,
+/// an optional fluid input, up to two item results and a duration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CentrifugeRecipe {
+    /// The recipe id.
+    pub id: String,
+    /// Its ingredient, as the pin's `native_recipe_ingredient` reads it.
+    pub ingredient: Value,
+    /// Its fluid input, if the file has one.
+    pub fluid: Option<FluidInput>,
+    /// Its results, in file order (one per output slot).
+    pub results: Vec<RecipeResult>,
+    /// `time`, in ticks.
+    pub time: u32,
+}
+
+impl CentrifugeRecipe {
+    /// Parse one recipe file. The JSON is the pin's custom-recipe JSON, kept as
+    /// the data pack wrote it.
+    pub fn parse(id: &str, json: &str) -> Result<Self, CentrifugeError> {
+        let value: Value = serde_json::from_str(json).map_err(|_| CentrifugeError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(CentrifugeError::Unreadable);
+        }
+        let ingredients = value
+            .get("ingredients")
+            .and_then(Value::as_array)
+            .ok_or(CentrifugeError::WrongInputCount)?;
+        if ingredients.len() != CENTRIFUGE_INPUTS {
+            return Err(CentrifugeError::WrongInputCount);
+        }
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(CentrifugeError::WrongResultCount)?;
+        if results.len() > CENTRIFUGE_OUTPUTS {
+            return Err(CentrifugeError::WrongResultCount);
+        }
+        let mut parsed = Vec::with_capacity(results.len());
+        for entry in results {
+            let item = entry
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|item| !item.is_empty())
+                .ok_or(CentrifugeError::BadResult)?;
+            let count = entry.get("count").and_then(Value::as_i64).unwrap_or(1);
+            if !(1..=99).contains(&count) {
+                return Err(CentrifugeError::BadResult);
+            }
+            parsed.push(RecipeResult {
+                item: item.to_owned(),
+                count: i32::try_from(count).unwrap_or(1),
+            });
+        }
+        // A fluid output has nowhere to go: this package declares no fluid of its
+        // own, so a recipe that writes one would consume its input for nothing.
+        if value
+            .get("fluidOutputs")
+            .and_then(Value::as_array)
+            .is_some_and(|outputs| !outputs.is_empty())
+        {
+            return Err(CentrifugeError::FluidOutput);
+        }
+        // `fluidInput` is optional: a plain `oritech:centrifuge` file has none.
+        let fluid = match value.get("fluidInput") {
+            None | Some(Value::Null) => None,
+            Some(input) => Some(parse_fluid_input(input).ok_or(CentrifugeError::BadFluid)?),
+        };
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(CentrifugeError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            ingredient: ingredient_json(&ingredients[0]),
+            fluid,
+            results: parsed,
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Centrifuge's state: the buffer, the progress toward the current craft and
+/// the recipe it belongs to — the same three values every processing machine
+/// keeps, advanced by the one shared [`advance`] step.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Centrifuge {
+    /// Stored FE.
+    pub energy: i32,
+    /// Ticks done toward the current craft.
+    pub progress: u32,
+    /// The recipe being worked on; empty when none.
+    pub recipe: String,
+}
+
+impl Centrifuge {
+    /// An empty centrifuge.
     #[must_use]
     #[allow(
         dead_code,
@@ -3368,6 +3604,210 @@ mod tests {
             ),
             None,
             "a matching stack at the item's limit takes nothing"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 9: the Centrifuge
+    // -----------------------------------------------------------------------
+
+    fn clay_recipe() -> CentrifugeRecipe {
+        CentrifugeRecipe {
+            id: "oritech:centrifuge_fluid/clay".into(),
+            ingredient: Value::String("#minecraft:dirt".into()),
+            fluid: Some(FluidInput {
+                fluid: "minecraft:water".into(),
+                amount: 250,
+            }),
+            results: vec![RecipeResult {
+                item: "minecraft:clay".into(),
+                count: 1,
+            }],
+            time: 100,
+        }
+    }
+
+    fn carbon_recipe() -> CentrifugeRecipe {
+        CentrifugeRecipe {
+            id: "oritech:centrifuge/carbon".into(),
+            ingredient: Value::String("#c:dusts/coal".into()),
+            fluid: None,
+            results: vec![RecipeResult {
+                item: "oritech:carbon_fibre_strands".into(),
+                count: 1,
+            }],
+            time: 50,
+        }
+    }
+
+    #[test]
+    fn the_centrifuge_numbers_are_the_jars_config() {
+        assert_eq!(CENTRIFUGE_CAPACITY, 10_000);
+        assert_eq!(CENTRIFUGE_MAX_INSERT, 512, "64 * 8");
+        assert_eq!(CENTRIFUGE_ENERGY_PER_TICK, 64);
+        assert_eq!(CENTRIFUGE_TANK, 8_000, "eight buckets");
+        assert_eq!(CENTRIFUGE_CORE_OFFSET, [0, 1, 0]);
+        assert_eq!(CENTRIFUGE_SLOTS, 3, "one input and two outputs");
+        assert_eq!(centrifuge_energy_usage(), 64, "no addon: 64 x 1 x 1");
+        assert_eq!(centrifuge_ticks(50), 50);
+        assert_eq!(centrifuge_ticks(100), 100);
+    }
+
+    #[test]
+    fn a_centrifuge_tick_spends_64_fe_and_finishes_at_the_recipes_time() {
+        // carbon: 50 ticks at 64 FE = exactly 3,200 FE, the figure phase CB primes.
+        let mut centrifuge = Centrifuge {
+            energy: 3_200,
+            ..Centrifuge::default()
+        };
+        let work = work("oritech:centrifuge/carbon", 50);
+        let mut steps = Vec::new();
+        for _ in 0..50 {
+            steps.push(centrifuge.tick_with(work, centrifuge_energy_usage()));
+        }
+        assert!(steps[..49].iter().all(|step| *step == Step::Working));
+        assert_eq!(*steps.last().unwrap(), Step::Finished);
+        assert_eq!(centrifuge.energy, 0, "50 x 64 = 3,200 FE");
+        assert_eq!(centrifuge.progress, 0);
+        assert_eq!(centrifuge.recipe, "oritech:centrifuge/carbon");
+    }
+
+    #[test]
+    fn a_starved_centrifuge_keeps_its_progress_and_a_missing_recipe_resets_it() {
+        let mut centrifuge = Centrifuge {
+            energy: 63,
+            progress: 4,
+            recipe: "oritech:centrifuge/carbon".into(),
+        };
+        assert_eq!(
+            centrifuge.tick_with(
+                work("oritech:centrifuge/carbon", 50),
+                centrifuge_energy_usage()
+            ),
+            Step::Starved
+        );
+        assert_eq!(centrifuge.progress, 4, "a starved machine keeps its timer");
+        assert_eq!(centrifuge.energy, 63, "and spends nothing");
+        assert_eq!(
+            centrifuge.tick_with(None, centrifuge_energy_usage()),
+            Step::Idle
+        );
+        assert_eq!(centrifuge.progress, 0);
+        assert_eq!(centrifuge.recipe, "");
+    }
+
+    #[test]
+    fn the_centrifuge_parses_the_jars_carbon_recipe() {
+        let json = r#"{"type":"oritech:centrifuge","ingredients":[{"tag":"c:dusts/coal"}],
+            "results":[{"count":1,"id":"oritech:carbon_fibre_strands"}],"time":50}"#;
+        let recipe = CentrifugeRecipe::parse("oritech:centrifuge/carbon", json)
+            .expect("the jar's carbon file parses");
+        assert_eq!(recipe, carbon_recipe());
+    }
+
+    #[test]
+    fn the_centrifuge_parses_the_jars_clay_fluid_recipe() {
+        let json = r#"{"type":"oritech:centrifuge_fluid",
+            "fluidInput":{"amount":250,"fluid":"minecraft:water"},
+            "ingredients":[{"tag":"minecraft:dirt"}],
+            "results":[{"count":1,"id":"minecraft:clay"}],"time":100}"#;
+        let recipe = CentrifugeRecipe::parse("oritech:centrifuge_fluid/clay", json)
+            .expect("the jar's clay file parses");
+        assert_eq!(recipe, clay_recipe());
+    }
+
+    #[test]
+    fn a_fluid_centrifuge_recipe_runs_only_with_the_addon_and_the_tanks_fluid() {
+        let recipe = clay_recipe();
+        assert!(centrifuge_can_run(
+            &recipe,
+            Some(("minecraft:water", 250)),
+            true
+        ));
+        assert!(
+            !centrifuge_can_run(&recipe, Some(("minecraft:water", 249)), true),
+            "the tank must hold the recipe's whole 250 mB (the wrong-ratio differential)"
+        );
+        assert!(
+            !centrifuge_can_run(&recipe, Some(("minecraft:lava", 1_000)), true),
+            "a tank of another fluid does not match"
+        );
+        assert!(!centrifuge_can_run(&recipe, None, true));
+        assert!(
+            !centrifuge_can_run(&recipe, Some(("minecraft:water", 8_000)), false),
+            "without the Fluid Addon the machine runs no fluid recipe"
+        );
+    }
+
+    #[test]
+    fn an_item_centrifuge_recipe_needs_neither_a_tank_nor_the_fluid_addon() {
+        let recipe = carbon_recipe();
+        assert!(centrifuge_can_run(&recipe, None, false));
+        assert!(centrifuge_can_run(
+            &recipe,
+            Some(("minecraft:lava", 1)),
+            false
+        ));
+    }
+
+    #[test]
+    fn a_centrifuge_recipe_with_a_fluid_output_is_refused() {
+        // The jar's `fluid/biofuel.json`: water + a bio fuel -> 100 mB of
+        // `oritech:still_biofuel`. This package declares no such fluid, so the
+        // file is refused rather than loaded into a machine that would consume
+        // its input and produce nothing.
+        let json = r#"{"type":"oritech:centrifuge_fluid",
+            "fluidInput":{"amount":250,"fluid":"minecraft:water"},
+            "fluidOutputs":[{"amount":100,"fluid":"oritech:still_biofuel"}],
+            "ingredients":[{"tag":"c:fuels/bio"}],"results":[],"time":20}"#;
+        assert_eq!(
+            CentrifugeRecipe::parse("oritech:centrifuge_fluid/biofuel", json),
+            Err(CentrifugeError::FluidOutput)
+        );
+    }
+
+    #[test]
+    fn the_centrifuge_output_rule_is_the_pulverizers_two_slots() {
+        let results = vec![RecipeResult {
+            item: "oritech:carbon_fibre_strands".into(),
+            count: 1,
+        }];
+        let stack = |_: &str| 64;
+        assert!(centrifuge_output_fits(&results, [None, None], stack));
+        assert!(centrifuge_output_fits(
+            &results,
+            [Some(("oritech:carbon_fibre_strands", 63)), None],
+            stack
+        ));
+        assert!(
+            !centrifuge_output_fits(
+                &results,
+                [Some(("oritech:carbon_fibre_strands", 64)), None],
+                stack
+            ),
+            "a full stack cannot take one more"
+        );
+        assert!(
+            !centrifuge_output_fits(&results, [Some(("minecraft:stone", 1)), None], stack),
+            "a different item in the output slot blocks the result"
+        );
+        let two = vec![
+            RecipeResult {
+                item: "oritech:copper_gem".into(),
+                count: 1,
+            },
+            RecipeResult {
+                item: "oritech:small_gold_dust".into(),
+                count: 3,
+            },
+        ];
+        assert!(
+            centrifuge_output_fits(&two, [None, None], stack),
+            "each result takes its own slot"
+        );
+        assert!(
+            !centrifuge_output_fits(&two, [None, Some(("oritech:small_gold_dust", 62))], stack),
+            "62 + 3 passes one 64 stack"
         );
     }
 }

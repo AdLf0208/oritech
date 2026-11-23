@@ -101,6 +101,13 @@ CORE_3 = {
     "oritech:nickel_ingot": [100, 101, 102, 103, 105, 106, 107, 108],
     "minecraft:redstone": [104],
 }
+# Slice 9: `crafting/core3` — the same core from eight `c:carbon_fibre` strands
+# (the centrifuge's own product) and one redstone. Both recipes exist upstream;
+# this is the one the carbon chain feeds.
+CORE_3_CARBON = {
+    "oritech:carbon_fibre_strands": [100, 101, 102, 103, 105, 106, 107, 108],
+    "minecraft:redstone": [104],
+}
 # Slice 8: `crafting/alloy/adamant` ("aa ", "bb ") and the assembler's own
 # `crafting/assembleralt` ("fff", "mcm", "sbs"). The alt swaps the jar's first
 # recipe's blast furnace for any `#oritech:plating`, so it exercises this
@@ -156,6 +163,8 @@ CASES = [
      "want": ("oritech:machine_core_2", 1)},
     {"label": "machine core 3: 8 nickel + 1 redstone (the alt recipe)", "place": CORE_3,
      "want": ("oritech:machine_core_3", 1)},
+    {"label": "machine core 3: 8 carbon fibre strands + 1 redstone (the carbon chain)",
+     "place": CORE_3_CARBON, "want": ("oritech:machine_core_3", 1)},
     {"label": "the Control Unit Addon: 5 redstone + 2 repeaters + 1 comparator + 1 plating",
      "place": CONTROL_UNIT, "want": ("oritech:machine_redstone_addon", 1)},
     {"label": "adamant ingot: 2 nickel + 2 diamonds", "place": ADAMANT,

@@ -5,6 +5,34 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.11 — slice 9, the Centrifuge and the Fluid Addon (pin `0a875da`, 2026-11-23)
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'cd ports/oritech && cargo test --offline'` with the new bodies `todo!()` | **109 passed, 8 failed** — every failure `panicked at src/runtime.rs:…: not yet implemented` | `slice9-test-red.log` |
+| 2 | six targeted mutations of the declarations/tank/state/line/core table, then `cargo test --offline centrifuge` (`tools/slice9-glue-counterfactual.py`) | **10 passed, 3 failed** — the declarations test catches three of the six facts; the file restored byte-identically | `slice9-glue-red-counterfactual.log` |
+| 3 | same, implemented | **122 passed, 0 failed**; the run regenerated `sdk-test.log` at 0.2.11 | `slice9-test-green.log` (= `sdk-test.log`) |
+| 4 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `slice9-fmt.log`, `slice9-clippy.log` |
+| 5 | `cd ports/oritech && cargo horizon-mod build` twice, the artifact deleted between | **233,718 B**, sha256 `0fedc97c45d0e388edef0d251f91f14543a9fe22ea70a74fec375d94d693c1eb`, `cmp` identical, **286 entries incl. `Cargo.lock`** | `slice9-build.log` |
+| 6 | `cargo horizon-mod check oritech.hmod` | exit 0, `oritech 0.2.11 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `233718 bytes, SHA-256 0fedc97c…` | `sdk-check.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `sdk-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `sdk-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** | stdout |
+| 10 | `python3 tools/carry_content.py --check` | `276 files, 0 differ` | stdout |
+| 11 | `ports/tools/launcher-game.sh build oritech` (manifest bumped to 0.2.11 so it recompiles) | `Compiling the mods against the prebuilt game`; build `native-0a875da-0ad952ad006f`; `strings liboritech.so` shows `Centrifuge at `, `oritech:centrifuge_fluid` and `is not an ingredient of a centrifuging recipe`; the export says `version = "0.2.11"` | `slice9-launcher-build.log` |
+| 12 | `eval "$(ports/tools/launcher-game.sh env oritech)"; build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (CA–CE the centrifuge, the coal recipe in O, the carbon core3 in AM) | `e2e-slice9.log` |
+| 13 | same with `CONTROL=1` (the in-run differential) | **PASS** + `EXIT:0`; the package-less build has no coal dust and no carbon fibre, and the centrifuge and Fluid Addon ids stay air | `e2e-slice9-differential.log` |
+| 14 | same with `GAME=$CONTROL_GAME` (the whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice9-control.log` |
+| 15 | same with `SELFTEST=1` | **EXIT:1** — `91 ticks spent 2912 FE, expected 2944` | `e2e-slice9-selftest.log` |
+| 16 | same with `SELFTEST_CENTRIFUGE=1` (the output count flipped to 2) | **EXIT:1** — `OUT0 is 'oritech:carbon_fibre_strands x1', expected 'oritech:carbon_fibre_strands x2'` | `e2e-slice9-selftest-centrifuge.log` |
+| 17 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | 42 logs, 42 ok, 0 bad | stdout |
+| 18 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 19 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The in-game assertions and what each can fail on are listed in `notes.md` → *Slice 9* → *Verification*
+and *In-game transcript*. The first CD run found a scenario error, not a port defect: the clay file's
+recipe **id** is `oritech:centrifuge/fluid/clay` while its **type** is `oritech:centrifuge_fluid`.
+
 ## 0.2.10 — slice 8, the Assembler (pin `0a875da`, 2026-11-22)
 
 | # | Command (from the campaign root) | Verdict | Log |

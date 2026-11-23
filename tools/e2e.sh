@@ -105,7 +105,8 @@
 # chiller's leg on its own, `SELFTEST_LAVA=1` for the lava generator's,
 # `SELFTEST_ADDONS=1` for the speed addon's, `SELFTEST_REDSTONE=1` for the
 # control unit's gate, `SELFTEST_CRAFT=1` for the coil's crafted count and
-# `SELFTEST_ASSEMBLER=1` for the assembler's output count.
+# `SELFTEST_ASSEMBLER=1` for the assembler's output count, `SELFTEST_CENTRIFUGE=1`
+# for the centrifuge's carbon-fibre count.
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -208,6 +209,20 @@ ASSEMBLER_LEFT=$((10 * ASSEMBLER_RATE))
 # what proves all three were recorded.
 ASSEMBLER_CORES="1 2 3"
 ASSEMBLER_CORE_LIST="oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3"
+# Slice 9: `OritechConfig.processingMachines.centrifugeData` (10,000 FE, 512
+# insert, 64 FE a tick, an eight-bucket tank) and the jar's own files:
+#   centrifuge/carbon.json: 50 ticks  x 64 FE = exactly 3,200 FE
+#   centrifuge/fluid/clay.json: 100 ticks x 64 FE = exactly 6,400 FE, 250 mB water
+CENTRIFUGE=oritech:centrifuge_block
+CENTRIFUGE_CAPACITY=10000
+CENTRIFUGE_RATE=64
+CENTRIFUGE_TICKS=50
+CENTRIFUGE_SPENT=$((CENTRIFUGE_TICKS * CENTRIFUGE_RATE))
+CENTRIFUGE_FLUID_TICKS=100
+CENTRIFUGE_FLUID_SPENT=$((CENTRIFUGE_FLUID_TICKS * CENTRIFUGE_RATE))
+CENTRIFUGE_TANK=8000
+CENTRIFUGE_CORE_TIER=2
+FLUID_ADDON=oritech:machine_fluid_addon
 CAPACITOR_CAPACITY=$((ROOM_CAPACITY + 2000000))
 COOLER_ADDON_TICKS=134
 COOLER_ADDON_SPENT=$((COOLER_ADDON_TICKS * ADDON_RATE))
@@ -401,6 +416,22 @@ feed() { # feed X Y Z ITEM
     ctl wait 4
 }
 
+# feed_south X Y Z ITEM: the same click from the machine's other side, for a machine
+# whose north addon slot holds a block (the centrifuge's Fluid Addon) that would sit
+# between the player and the face `feed` looks at.
+feed_south() { # feed_south X Y Z ITEM
+    ctl command "execute in minecraft:overworld run tp @s $1.5 100 $(( $3 + 2 )).5" >/dev/null
+    ctl wait 6
+    ctl command "item replace entity @s hotbar.0 with $4 1" >/dev/null
+    ctl wait 4
+    ctl select 1 >/dev/null
+    ctl wait 3
+    ctl look-at-block "$1" "$2" "$3" south >/dev/null
+    ctl wait 2
+    ctl interact "$1" "$2" "$3" >/dev/null 2>&1 || true
+    ctl wait 4
+}
+
 # Parses one info line into shell fields (ENERGY, CAPACITY, BURN, MAXBURN, FUEL,
 # PROGRESS, RECIPE, INPUT, OUT0, OUT1, T, KIND) and checks that all of them
 # parsed. Sets the caller's variables through `eval`.
@@ -455,8 +486,14 @@ control_leg() {
     # Slice 8: the assembler block and the adamant ingot its recipe takes.
     ctl command "setblock 0 100 12 $ASSEMBLER" >/dev/null 2>&1 || true
     ctl command "item replace entity @s hotbar.4 with oritech:adamant_ingot 1" >/dev/null 2>&1 || true
+    # Slice 9: the centrifuge, the Fluid Addon, and the two items of the chain.
+    ctl command "setblock 8 100 10 $CENTRIFUGE" >/dev/null 2>&1 || true
+    ctl command "setblock 5 100 4 $FLUID_ADDON" >/dev/null 2>&1 || true
+    ctl command "item replace entity @s hotbar.5 with oritech:coal_dust 1" >/dev/null 2>&1 || true
+    ctl command "item replace entity @s hotbar.6 with oritech:carbon_fibre_strands 1" >/dev/null 2>&1 || true
     ctl wait 4
     local furnace core chiller lava addon capacitor control plating motor assembler adamant
+    local centrifuge fluidaddon coaldust carbonfibre
     furnace=$(block_name 8 100 0)
     core=$(block_name 8 101 0)
     chiller=$(block_name 12 100 0)
@@ -468,6 +505,10 @@ control_leg() {
     motor=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:motor")] | length')
     assembler=$(block_name 0 100 12)
     adamant=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:adamant_ingot")] | length')
+    centrifuge=$(block_name 8 100 10)
+    fluidaddon=$(block_name 5 100 4)
+    coaldust=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:coal_dust")] | length')
+    carbonfibre=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:carbon_fibre_strands")] | length')
     [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
     [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
     [ "$chiller" = "minecraft:air" ] || fail "the control game holds $chiller, so the chiller id was known"
@@ -479,7 +520,11 @@ control_leg() {
     [ "$motor" = 0 ] || fail "the control game holds $motor oritech:motor, so the component id was known"
     [ "$assembler" = "minecraft:air" ] || fail "the control game holds $assembler, so the assembler id was known"
     [ "$adamant" = 0 ] || fail "the control game holds $adamant oritech:adamant_ingot, so that item id was known"
-    echo "  without this package: no generator item, no motor and no adamant ingot, and the generator, furnace, core, chiller, lava generator, addon, control unit, plating and assembler blocks all stayed $name"
+    [ "$centrifuge" = "minecraft:air" ] || fail "the control game holds $centrifuge, so the centrifuge id was known"
+    [ "$fluidaddon" = "minecraft:air" ] || fail "the control game holds $fluidaddon, so the fluid addon id was known"
+    [ "$coaldust" = 0 ] || fail "the control game holds $coaldust oritech:coal_dust, so that item id was known"
+    [ "$carbonfibre" = 0 ] || fail "the control game holds $carbonfibre oritech:carbon_fibre_strands, so that item id was known"
+    echo "  without this package: no generator item, no motor, no adamant ingot, no coal dust and no carbon fibre, and the generator, furnace, core, chiller, lava generator, addon, control unit, plating, assembler, centrifuge and fluid addon blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -887,11 +932,12 @@ echo "== O: every carried pulverizer recipe crafts and consumes its input =="
 # output id and count asserted *and* the input consumed. One machine each, so no
 # recipe can borrow another's slot.
 RECIPE_INPUTS=(minecraft:bone minecraft:blaze_rod minecraft:dripstone_block \
-    minecraft:glowstone minecraft:coal_ore minecraft:diamond_ore minecraft:lapis_ore)
+    minecraft:glowstone minecraft:coal_ore minecraft:diamond_ore minecraft:lapis_ore \
+    minecraft:coal)
 RECIPE_EXPECT=("minecraft:bone_meal x6" "minecraft:blaze_powder x3" \
     "minecraft:pointed_dripstone x4" "minecraft:glowstone_dust x3" "minecraft:coal x2" \
-    "minecraft:diamond x1" "minecraft:lapis_lazuli x6")
-RECIPE_IDS=(bone blaze dripstone glowstoneore coalore diamondore lapisore)
+    "minecraft:diamond x1" "minecraft:lapis_lazuli x6" "oritech:coal_dust x1")
+RECIPE_IDS=(bone blaze dripstone glowstoneore coalore diamondore lapisore coal)
 for i in "${!RECIPE_INPUTS[@]}"; do
     ctl command "setblock $((28 + i * 2)) 100 0 $PULVERIZER" >/dev/null
 done
@@ -1305,11 +1351,12 @@ expect TANK_FLUID minecraft:water
 expect TANK_AMOUNT 1000
 echo "  a tank of water: $ENERGY FE after 200 ticks, still $TANK_FLUID $TANK_AMOUNT, no recipe"
 
-echo "== AA: the seven default addon blocks place and read back =="
-# The six `BlockContent.MACHINE_*_ADDON` blocks are ordinary blocks and items in
+echo "== AA: the eight default addon blocks place and read back =="
+# The eight `BlockContent.MACHINE_*_ADDON` blocks are ordinary blocks and items in
 # this package; an addon id it does not declare must be refused.
 for addon in "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" \
-    "$CAPACITOR_ADDON" "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON"; do
+    "$CAPACITOR_ADDON" "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" \
+    "$FLUID_ADDON"; do
     ctl command "setblock 20 100 16 $addon" >/dev/null
     ctl wait 3
     [ "$(block_name 20 100 16)" = "$addon" ] \
@@ -1320,7 +1367,7 @@ ctl command "setblock 21 100 16 oritech:machine_speed_addon_2" >/dev/null 2>&1 |
 ctl wait 3
 [ "$(block_name 21 100 16)" = "minecraft:air" ] \
     || fail "an addon id this package does not declare placed"
-echo "  all seven addon blocks placed and read back; an undeclared addon id was refused"
+echo "  all eight addon blocks placed and read back; an undeclared addon id was refused"
 
 echo "== AB: a speed addon finishes a bone in exactly 67 ticks for exactly 3,886 FE =="
 # The pulverizer at (4,100,0) has one addon slot at its (1,0,0). Prime exactly the
@@ -1987,6 +2034,246 @@ ctl command "setblock 0 101 12 minecraft:air" >/dev/null
 ctl command "setblock 0 101 13 minecraft:air" >/dev/null
 ctl wait 4
 
+echo "== CA: an unassembled centrifuge with coal dust and 5,000 FE makes nothing =="
+# Slice 9. `CentrifugeBlockEntity` is a `MultiblockMachineEntity` with one core at
+# (0, 1, 0); `isActive(ASSEMBLED)` gates its whole tick. The input is the item the
+# jar's own `centrifuge/carbon.json` names (`c:dusts/coal`, the pulverizer's coal
+# dust), so a machine that ticked while unassembled would already be spending.
+ctl command "setblock 8 100 10 minecraft:air" >/dev/null
+ctl command "setblock 8 101 10 minecraft:air" >/dev/null
+ctl command "setblock 8 100 9 minecraft:air" >/dev/null
+ctl command "setblock 8 100 11 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 8 100 10 $CENTRIFUGE" >/dev/null
+ctl wait 8
+[ "$(block_name 8 100 10)" = "$CENTRIFUGE" ] || fail "the centrifuge did not place"
+line=$(info 8 100 10)
+read_info "$line"
+expect KIND centrifuge
+expect ENERGY 0
+expect CAPACITY "$CENTRIFUGE_CAPACITY"
+expect ASSEMBLED no
+expect CORE empty
+expect TANK_FLUID empty
+expect INPUT empty
+expect OUT0 empty
+expect OUT1 empty
+drain 8 100 10
+feed 8 100 10 oritech:coal_dust
+line=$(info 8 100 10)
+read_info "$line"
+expect INPUT "oritech:coal_dust x1"
+expect OUT0 empty
+say "oritech energy 8 100 10 5000"
+ctl wait 60
+line=$(info 8 100 10)
+read_info "$line"
+expect ASSEMBLED no
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 5000
+expect INPUT "oritech:coal_dust x1"
+expect OUT0 empty
+echo "  unassembled, with coal dust and 5,000 FE: progress $PROGRESS, recipe $RECIPE, $ENERGY FE kept, no carbon fibre"
+
+echo "== CB: the core above assembles it, and 50 ticks make one carbon fibre for exactly 3,200 FE =="
+ctl give "oritech:machine_core_$CENTRIFUGE_CORE_TIER" 1 >/dev/null
+ctl wait 3
+ctl select "oritech:machine_core_$CENTRIFUGE_CORE_TIER" >/dev/null
+ctl wait 3
+ctl command "execute in minecraft:overworld run tp @s 8.5 100 8.5" >/dev/null
+ctl wait 6
+ctl look-at-block 8 100 10 north >/dev/null
+ctl wait 2
+echo "  core click: $(ctl interact 8 100 10 | jq -c '{ok, block: .block.block}')"
+ctl wait 8
+CORE_BLOCK=$(block_name 8 101 10)
+[ "$CORE_BLOCK" = "oritech:machine_core_$CENTRIFUGE_CORE_TIER" ] \
+    || fail "the core click left $CORE_BLOCK above the centrifuge, not a machine core"
+echo "  block(8,101,10) = $CORE_BLOCK (the centrifuge's core is above, the furnace's offset)"
+# Empty the buffer before the empty-hand click: the assembly starts the craft at
+# once, and a starved machine spends nothing, so priming after it is the only FE
+# the operation can use.
+say "oritech energy 8 100 10 0"
+ctl wait 8
+ctl command "clear @s" >/dev/null
+ctl wait 6
+ctl look-at-block 8 100 10 north >/dev/null
+ctl wait 2
+ctl interact 8 100 10 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 8 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE "oritech:machine_core_$CENTRIFUGE_CORE_TIER"
+expect QUALITY "$CENTRIFUGE_CORE_TIER"
+expect INPUT "oritech:coal_dust x1"
+expect ENERGY 0
+ctl wait 40
+line=$(info 8 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect ENERGY 0
+expect PROGRESS 0
+[ "$RECIPE" = "oritech:centrifuge/carbon" ] \
+    || fail "the assembled centrifuge resolved '$RECIPE', not the jar's carbon recipe"
+echo "  assembled with core $CORE quality $QUALITY: the starved machine spent nothing and holds $RECIPE"
+say "oritech energy 8 100 10 $CENTRIFUGE_SPENT"
+ctl wait 100
+line=$(info 8 100 10)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 0
+expect INPUT empty
+expect OUT1 empty
+expect TANK_FLUID empty
+if [ "${SELFTEST_CENTRIFUGE:-0}" = 1 ]; then
+    echo "  SELFTEST_CENTRIFUGE: expecting two carbon fibre where the recipe makes one (this must fail)"
+    expect OUT0 "oritech:carbon_fibre_strands x2"
+else
+    expect OUT0 "oritech:carbon_fibre_strands x1"
+fi
+echo "  one carbon craft: $OUT0 from one coal dust in exactly $CENTRIFUGE_TICKS ticks for exactly $CENTRIFUGE_SPENT FE, input emptied"
+
+echo "== CC: a Fluid Addon plus only 100 mB of water is the wrong ratio: no clay, no FE =="
+# The fluid table is gated behind the Fluid Addon (`hasFluidAddon`); `clay.json`
+# needs 250 mB of water, so a tank holding 100 mB must not resolve the recipe and
+# `serverTick` returns before `useEnergy`. The addon sits in the (0,0,-1) slot, so
+# the clicks come from the south, whose slot is empty.
+ctl command "setblock 12 100 10 minecraft:air" >/dev/null
+ctl command "setblock 12 101 10 oritech:machine_core_2" >/dev/null
+ctl command "setblock 12 100 9 $FLUID_ADDON" >/dev/null
+ctl wait 4
+ctl command "setblock 12 100 10 $CENTRIFUGE" >/dev/null
+ctl wait 8
+[ "$(block_name 12 100 10)" = "$CENTRIFUGE" ] || fail "the fluid centrifuge did not place"
+[ "$(block_name 12 100 9)" = "$FLUID_ADDON" ] || fail "the Fluid Addon did not place in the north slot"
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl command "execute in minecraft:overworld run tp @s 12.5 100 12.5" >/dev/null
+ctl wait 6
+ctl look-at-block 12 100 10 south >/dev/null
+ctl wait 2
+ctl interact 12 100 10 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 12 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE oritech:machine_core_2
+expect ADDONS fluid
+line=$(fluid_put 12 100 10 minecraft:water 100)
+read_info "$line"
+expect TANK_FLUID minecraft:water
+expect TANK_AMOUNT 100
+expect TANK_CAP "$CENTRIFUGE_TANK"
+expect ACCEPTED 100
+feed_south 12 100 10 minecraft:dirt
+line=$(info 12 100 10)
+read_info "$line"
+expect INPUT "minecraft:dirt x1"
+say "oritech energy 12 100 10 10000"
+ctl wait 50
+line=$(info 12 100 10)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 10000
+expect INPUT "minecraft:dirt x1"
+expect TANK_AMOUNT 100
+expect OUT0 empty
+echo "  a tank of 100 mB (the recipe needs 250): progress $PROGRESS, recipe $RECIPE, buffer untouched at $ENERGY FE, dirt kept"
+
+echo "== CD: 250 mB of water and 100 ticks make one clay for exactly 6,400 FE, tank emptied =="
+line=$(fluid_put 12 100 10 minecraft:water 150)
+read_info "$line"
+expect TANK_AMOUNT 250
+# The recipe resolves the moment the tank reaches 250 and the machine (which has
+# 10,000 FE from CC) starts at once: take the buffer to zero and measure from
+# where the craft stands, the chiller's phase-R pattern.
+say "oritech energy 12 100 10 0"
+ctl wait 8
+line=$(info 12 100 10)
+read_info "$line"
+expect ENERGY 0
+[ "$RECIPE" = "oritech:centrifuge/fluid/clay" ] \
+    || fail "the charged tank resolved '$RECIPE', not the jar's clay recipe"
+P_ZERO=$PROGRESS
+[ "$P_ZERO" -lt "$CENTRIFUGE_FLUID_TICKS" ] || fail "the clay craft finished before the measurement"
+say "oritech energy 12 100 10 $((CENTRIFUGE_RATE * 10))"
+ctl wait 40
+line=$(info 12 100 10)
+read_info "$line"
+expect ENERGY 0
+[ "$PROGRESS" -eq "$((P_ZERO + 10))" ] \
+    || fail "320 FE should be exactly 10 ticks of work: progress $P_ZERO -> $PROGRESS"
+P_START=$PROGRESS
+expect TANK_AMOUNT 250
+echo "  320 FE advanced the fluid craft exactly 10 ticks ($P_ZERO -> $P_START of $CENTRIFUGE_FLUID_TICKS), tank still $TANK_AMOUNT mB"
+NEEDED=$((CENTRIFUGE_RATE * (CENTRIFUGE_FLUID_TICKS - P_START)))
+say "oritech energy 12 100 10 $NEEDED"
+ctl wait $((CENTRIFUGE_FLUID_TICKS - P_START + 60))
+line=$(info 12 100 10)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 0
+expect INPUT empty
+expect TANK_FLUID empty
+expect TANK_AMOUNT 0
+expect OUT0 "minecraft:clay x1"
+echo "  from progress $P_START: $((CENTRIFUGE_FLUID_TICKS - P_START)) ticks spent exactly $NEEDED FE, $OUT0, tank emptied"
+
+echo "== CE: without the Fluid Addon the same tank and dirt make no clay =="
+# The differential for the addon gate: a third centrifuge, assembled, a full
+# 250 mB of water in its tank, dirt in its slot and 10,000 FE — but no Fluid Addon,
+# so `getOwnRecipeType()` stays the item table and dirt names no recipe there.
+ctl command "setblock 16 100 10 minecraft:air" >/dev/null
+ctl command "setblock 16 101 10 oritech:machine_core_2" >/dev/null
+ctl command "setblock 16 100 9 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 16 100 10 $CENTRIFUGE" >/dev/null
+ctl wait 8
+[ "$(block_name 16 100 10)" = "$CENTRIFUGE" ] || fail "the third centrifuge did not place"
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl command "execute in minecraft:overworld run tp @s 16.5 100 8.5" >/dev/null
+ctl wait 6
+ctl look-at-block 16 100 10 north >/dev/null
+ctl wait 2
+ctl interact 16 100 10 >/dev/null 2>&1 || true
+ctl wait 10
+line=$(info 16 100 10)
+read_info "$line"
+expect ASSEMBLED yes
+expect ADDONS none
+line=$(fluid_put 16 100 10 minecraft:water 250)
+read_info "$line"
+expect TANK_AMOUNT 250
+feed 16 100 10 minecraft:dirt
+line=$(info 16 100 10)
+read_info "$line"
+expect INPUT "minecraft:dirt x1"
+say "oritech energy 16 100 10 10000"
+ctl wait 60
+line=$(info 16 100 10)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 10000
+expect INPUT "minecraft:dirt x1"
+expect TANK_AMOUNT 250
+expect OUT0 empty
+echo "  no Fluid Addon: progress $PROGRESS, recipe $RECIPE, buffer still $ENERGY FE, dirt and water kept, no clay"
+ctl command "setblock 8 100 10 minecraft:air" >/dev/null
+ctl command "setblock 8 101 10 minecraft:air" >/dev/null
+ctl command "setblock 12 100 10 minecraft:air" >/dev/null
+ctl command "setblock 12 101 10 minecraft:air" >/dev/null
+ctl command "setblock 12 100 9 minecraft:air" >/dev/null
+ctl command "setblock 16 100 10 minecraft:air" >/dev/null
+ctl command "setblock 16 101 10 minecraft:air" >/dev/null
+ctl wait 4
+
 echo "== W: every carried loot table rolls its own block =="
 # The carried `data/oritech/loot_table/blocks/*.json` are the jar's self-drop,
 # rewritten into 26.3's singular `condition`. Rolling each table directly asserts
@@ -1995,11 +2282,12 @@ echo "== W: every carried loot table rolls its own block =="
 ctl command "clear @s" >/dev/null
 ctl wait 4
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" "$ASSEMBLER" \
+    "$CENTRIFUGE" \
     oritech:machine_core_1 oritech:machine_core_2 oritech:machine_core_3 \
     oritech:machine_core_4 oritech:machine_core_5 oritech:machine_core_6 \
     oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" \
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" "$FLUID_ADDON" \
     oritech:machine_plating_block oritech:iron_plating_block \
     oritech:nickel_plating_block; do
     ctl command "loot give @s loot oritech:blocks/${block#oritech:}" >/dev/null
@@ -2007,9 +2295,10 @@ done
 ctl wait 8
 INV=$(ctl inventory)
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" "$ASSEMBLER" \
+    "$CENTRIFUGE" \
     oritech:machine_core_1 oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
-    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" \
+    "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" "$FLUID_ADDON" \
     oritech:machine_plating_block oritech:iron_plating_block \
     oritech:nickel_plating_block; do
     jq -e --arg item "$block" \
@@ -2026,4 +2315,4 @@ AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
 [ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
 echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block"
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block, an unassembled centrifuge with coal dust and 5,000 FE made no carbon fibre and spent nothing, its core above assembled it and 50 ticks turned one coal dust into exactly one carbon fibre strand for exactly 3,200 FE with the input emptied, a Fluid Addon and a tank of only 100 mB of water made no clay and spent no FE (the recipe needs 250), the same machine with 250 mB made exactly one clay in 100 ticks for exactly 6,400 FE and emptied its tank, and the same water and dirt without the Fluid Addon made nothing, and every carried loot table rolled its own block"

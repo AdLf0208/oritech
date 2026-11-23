@@ -1,12 +1,12 @@
-# Oritech for Horizon — slices 1 to 8
+# Oritech for Horizon — slices 1 to 9
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
 Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon**, the
-**material and component chain** and the **Assembler** of
+**material and component chain**, the **Assembler** and the **Centrifuge** of
 [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for Horizon at the
 campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
-One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the six block-entity
+One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the seven block-entity
 Parts and the rules in `src/runtime.rs`, beside the carried `assets/` and `data/` (blocks, items,
 models, textures, recipes, loot, lang, tags).
 
@@ -76,6 +76,15 @@ models, textures, recipes, loot, lang, tags).
   charges, a log + three glowstone → a shroomlight). A slot holding a spare pays one item per
   ingredient and keeps the rest. The machine itself is craftable at a table from copper, crafters,
   **adamant** (2 nickel + 2 diamond), two motors and any plating.
+- **Centrifuge** (`oritech:centrifuge_block`) — the mod's separator: a controller plus a core **one
+  block above**, **one input and two outputs**, and a **10,000 FE** buffer taking **512** an insert and
+  spending **64 FE a tick**. The jar's `centrifuge/carbon.json` turns one **coal dust** (which the
+  pulverizer now makes from any `#minecraft:coals`) into one **carbon fibre strand** in **50 ticks for
+  exactly 3,200 FE**, and eight strands + redstone craft the third **machine core**. In its two addon
+  slots, the eighth addon, the **Fluid Addon**, switches the machine to the jar's
+  `oritech:centrifuge_fluid` table: **250 mB of water + dirt → one clay in 100 ticks for exactly 6,400
+  FE**, from its own **eight-bucket tank** (a real `horizon:fluids` handler). Without the addon the
+  water and dirt make nothing.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
@@ -91,12 +100,12 @@ No GUI, no GeckoLib models (the machines are drawn as a full cube of their own
 texture), no **ores** (the pin cannot register a content package's configured
 features, so the nickel and platinum ingots come from the creative tab or
 `/give` while everything from the components down is craftable), no special addons (the Control Unit
-Addon's four comparator modes, fluid, inventory proxy, acceptor, extender, combi,
+Addon's four comparator modes, inventory proxy, acceptor, extender, combi,
 quarry), no energy or item pipes, no comparator output, no cold-biome speed bonus
 on the chiller
 (the pin has no biome read), no bucket input *slots* on the lava generator (a
-bucket in the hand fills it), no other multiblock (assembler, atomic forge,
-foundry, refinery, centrifuge), no augment stations, no accelerator ring or
+bucket in the hand fills it), no other multiblock (atomic forge,
+foundry, refinery), no augment stations, no accelerator ring or
 reactor, no ore processing chain and no ores. `notes.md` lists every gate and
 deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
@@ -104,7 +113,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules and the carried data: 98 tests
+cargo test --offline                       # the rules and the carried data: 122 tests
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod

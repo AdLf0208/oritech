@@ -44,6 +44,8 @@ CARRIED = [
     # Slice 8's assembler: the same placeholder blockstate (it names the
     # `machine_speed_addon` model) and the same kind of `.geo` model.
     "assets/oritech/textures/block/models/assembler_block.png",
+    # Slice 9's centrifuge: the same placeholder blockstate and `.geo` model.
+    "assets/oritech/textures/block/models/centrifuge_block.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -72,6 +74,16 @@ REWRITTEN_RECIPES = [
     # `oritech:still_sheol_fire`, another fluid this package does not declare, so
     # it is the same recorded gap as `snow.json`.
     "data/oritech/recipe/lavagen/lava.json",
+    # Slice 9: the centrifuge's two carried recipes and the chain that makes them
+    # real. The pulverizer's coal recipe yields the `oritech:coal_dust` the
+    # centrifuge's `c:dusts/coal` tag names; `carbon.json` yields
+    # `oritech:carbon_fibre_strands`; `core3` (eight `c:carbon_fibre` + redstone)
+    # consumes them. `fluid/clay.json` is the one fluid file whose fluid
+    # (`minecraft:water`) and result both exist here.
+    "data/oritech/recipe/pulverizer/coal.json",
+    "data/oritech/recipe/centrifuge/carbon.json",
+    "data/oritech/recipe/centrifuge/fluid/clay.json",
+    "data/oritech/recipe/crafting/core3.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -106,6 +118,9 @@ ADDON_NAMES = {
     # "Control Unit Addon" in the jar's lang). Its settings are the neutral
     # default: it is a control, not a multiplier.
     "machine_redstone_addon": "Control Unit Addon",
+    # Slice 9: the Fluid Addon, whose neutral settings switch the centrifuge to
+    # its fluid recipe table.
+    "machine_fluid_addon": "Fluid Addon",
 }
 ADDON_ASSETS = [
     f"assets/oritech/{kind}/{path}"
@@ -137,6 +152,11 @@ ITEMS = {
     # Slice 8: the assembler's own recipe takes one, so the item slice 7 left out
     # (nothing consumed it then) is carried and craftable now.
     "adamant_ingot": ("Adamant Ingot", "minecraft:iron_ingot"),
+    # Slice 9: the centrifuge's input and output — the pulverizer's coal recipe
+    # makes the dust, the centrifuge's carbon recipe makes the strands, and the
+    # strands are the `c:carbon_fibre` its `core3` recipe takes.
+    "coal_dust": ("Coal Dust", "minecraft:iron_ingot"),
+    "carbon_fibre_strands": ("Carbon Fibre Strands", "minecraft:iron_ingot"),
 }
 PLATING = {
     # The jar's lang names them "… Reinforced Plating"; upstream copies
@@ -255,6 +275,10 @@ CONVENTION_TAGS = {
         "oritech:iron_plating_block",
         "oritech:nickel_plating_block",
     ],
+    # Slice 9: the coal dust the pulverizer makes and the centrifuge takes, and
+    # the carbon fibre strands its `core3` recipe takes.
+    "c:dusts/coal": ["oritech:coal_dust"],
+    "c:carbon_fibre": ["oritech:carbon_fibre_strands"],
 }
 
 
@@ -294,6 +318,11 @@ BLOCKS = {
     "assembler_block": {
         "name": "Assembler",
         "texture": "oritech:block/models/assembler_block",
+    },
+    # Slice 9: the Centrifuge, the same GeckoLib placeholder blockstate again.
+    "centrifuge_block": {
+        "name": "Centrifuge",
+        "texture": "oritech:block/models/centrifuge_block",
     },
 }
 CORE_NAMES = [

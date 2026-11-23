@@ -1,0 +1,17 @@
+{
+  "fluidInput": {
+    "amount": 250,
+    "fluid": "minecraft:water"
+  },
+  "ingredients": [
+    "#minecraft:dirt"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "minecraft:clay"
+    }
+  ],
+  "time": 100,
+  "type": "oritech:centrifuge_fluid"
+}

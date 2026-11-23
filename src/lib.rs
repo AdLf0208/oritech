@@ -62,6 +62,17 @@ impl Hooks for Mod {
         registrar.register_recipe_type(support::ASSEMBLER_RECIPE);
         registrar
             .register_raw_recipe_serializer(support::ASSEMBLER_RECIPE, support::ASSEMBLER_RECIPE);
+        // The centrifuge's two carried recipes name its item and fluid tables
+        // (`oritech:centrifuge`, `oritech:centrifuge_fluid`); without both serializers the
+        // game refuses the files at load, the same hard startup error as the pulverizer's.
+        registrar.register_recipe_type(support::CENTRIFUGE_RECIPE);
+        registrar
+            .register_raw_recipe_serializer(support::CENTRIFUGE_RECIPE, support::CENTRIFUGE_RECIPE);
+        registrar.register_recipe_type(support::CENTRIFUGE_FLUID_RECIPE);
+        registrar.register_raw_recipe_serializer(
+            support::CENTRIFUGE_FLUID_RECIPE,
+            support::CENTRIFUGE_FLUID_RECIPE,
+        );
         for block in [
             support::GENERATOR,
             support::PULVERIZER,
@@ -69,6 +80,7 @@ impl Hooks for Mod {
             support::COOLER,
             support::LAVA,
             support::ASSEMBLER,
+            support::CENTRIFUGE,
         ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
@@ -105,6 +117,10 @@ impl Hooks for Mod {
             .block_entity_type(support::ASSEMBLER_TYPE)
             .blocks(&[support::ASSEMBLER])
             .build();
+        let centrifuge = registrar
+            .block_entity_type(support::CENTRIFUGE_TYPE)
+            .blocks(&[support::CENTRIFUGE])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -121,6 +137,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&assembler, AssemblerPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&centrifuge, CentrifugePart) {
             context.refuse(&error.to_string());
         }
     }
@@ -237,6 +256,8 @@ struct CoolerPart;
 struct LavaPart;
 /// The Assembler's block entity.
 struct AssemblerPart;
+/// The Centrifuge's block entity.
+struct CentrifugePart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -435,6 +456,40 @@ impl BlockEntityPart for AssemblerPart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_assembler(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for CentrifugePart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for CentrifugePart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the one-core assembly gate, then one `oritech:centrifuge`
+    /// craft — or, with a Fluid Addon in a slot, the fluid table — from the one
+    /// input slot into the two outputs.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_centrifuge(host, level, pos, &mut nbt, &mut event.entity.items);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

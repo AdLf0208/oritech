@@ -20,17 +20,20 @@ use mod_api::{
 use crate::runtime::{
     ADDON_BLOCKS, ADDON_MODE, ASSEMBLER_CAPACITY, ASSEMBLER_CORE_OFFSETS,
     ASSEMBLER_ENERGY_PER_TICK, ASSEMBLER_INPUTS, ASSEMBLER_MAX_INSERT, ASSEMBLER_SLOTS, Addons,
-    Assembler, AssemblerRecipe, Burst, COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK,
-    COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Cooler, CoolerRecipe, EnergyTarget,
+    Assembler, AssemblerRecipe, Burst, CENTRIFUGE_CAPACITY, CENTRIFUGE_CORE_OFFSET,
+    CENTRIFUGE_ENERGY_PER_TICK, CENTRIFUGE_MAX_INSERT, CENTRIFUGE_SLOTS, CENTRIFUGE_TANK,
+    COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK,
+    CORE_OFFSET, Centrifuge, CentrifugeRecipe, Cooler, CoolerRecipe, EnergyTarget, FLUID_ADDON,
     FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput,
     Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
     LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator,
     MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
     PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, Work, addon_names,
-    addon_settings, addon_slots, after_consuming, after_draining, can_output, clamp_energy,
-    cooler_output_fits, core_quality, craft_plan, efficiency_multiplier, energy_usage,
-    generator_burn_ticks, generator_output, insert_slot, is_fuel, lava_output_targets, output_fits,
-    processing_ticks, redstone_disables, speed_multiplier, tank_matches,
+    addon_settings, addon_slots, after_consuming, after_draining, can_output, centrifuge_can_run,
+    centrifuge_output_fits, clamp_energy, cooler_output_fits, core_quality, craft_plan,
+    efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output, insert_slot,
+    is_fuel, lava_output_targets, output_fits, processing_ticks, redstone_disables,
+    speed_multiplier, tank_matches,
 };
 
 /// The furnace block and item (`BlockContent.POWERED_FURNACE_BLOCK`).
@@ -41,8 +44,14 @@ pub(crate) const COOLER: &str = "oritech:cooler_block";
 pub(crate) const LAVA: &str = "oritech:lava_generator_block";
 /// The Assembler (`BlockContent.ASSEMBLER_BLOCK`) — slice 8.
 pub(crate) const ASSEMBLER: &str = "oritech:assembler_block";
+/// The Centrifuge (`BlockContent.CENTRIFUGE_BLOCK`) — slice 9.
+pub(crate) const CENTRIFUGE: &str = "oritech:centrifuge_block";
 /// The recipe type the jar's `data/oritech/recipe/assembler/*.json` names.
 pub(crate) const ASSEMBLER_RECIPE: &str = "oritech:assembler";
+/// The recipe type the jar's `data/oritech/recipe/centrifuge/**` item files name.
+pub(crate) const CENTRIFUGE_RECIPE: &str = "oritech:centrifuge";
+/// The recipe type its `fluid/**` files name; it runs only with the Fluid Addon.
+pub(crate) const CENTRIFUGE_FLUID_RECIPE: &str = "oritech:centrifuge_fluid";
 /// The vanilla recipe table the furnace reads (upstream's
 /// `RecipeType.SMELTING`); nothing is registered, the game already has it.
 pub(crate) const SMELTING_RECIPE: &str = "minecraft:smelting";
@@ -66,6 +75,7 @@ pub(crate) const FURNACE_TYPE: &str = "powered_furnace";
 pub(crate) const COOLER_TYPE: &str = "cooler";
 pub(crate) const LAVA_TYPE: &str = "lava_generator";
 pub(crate) const ASSEMBLER_TYPE: &str = "assembler";
+pub(crate) const CENTRIFUGE_TYPE: &str = "centrifuge";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -80,6 +90,8 @@ const COOLER_OUTPUT: usize = 0;
 /// The assembler's `InventorySlotAssignment(0, 4, 4, 1)`: slots 0–3 are inputs,
 /// slot 4 is the one output.
 const ASSEMBLER_OUTPUT: usize = ASSEMBLER_INPUTS;
+/// The centrifuge's `InventorySlotAssignment(0, 1, 1, 2)`: slot 0 in, slots 1–2 out.
+const CENTRIFUGE_OUTPUT: usize = 1;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
@@ -215,6 +227,12 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
             (0..ASSEMBLER_INPUTS).collect(),
             vec![ASSEMBLER_OUTPUT],
         ),
+        // `InventorySlotAssignment(0, 1, 1, 2)`: one input, two outputs.
+        CENTRIFUGE => (
+            CENTRIFUGE_SLOTS,
+            vec![INPUT_SLOT],
+            vec![CENTRIFUGE_OUTPUT, CENTRIFUGE_OUTPUT + 1],
+        ),
         _ => return None,
     };
     Some(ModContainer {
@@ -239,6 +257,7 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         COOLER => (COOLER_CAPACITY, COOLER_MAX_INSERT, 0),
         LAVA => (LAVA_CAPACITY, 0, LAVA_MAX_EXTRACT),
         ASSEMBLER => (ASSEMBLER_CAPACITY, ASSEMBLER_MAX_INSERT, 0),
+        CENTRIFUGE => (CENTRIFUGE_CAPACITY, CENTRIFUGE_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -255,15 +274,17 @@ pub(crate) fn tank_capacity(block: &str) -> Option<i32> {
     match block {
         COOLER => Some(COOLER_TANK),
         LAVA => Some(LAVA_TANK),
+        CENTRIFUGE => Some(CENTRIFUGE_TANK),
         _ => None,
     }
 }
 
 /// The fluid tanks a block declares through `Registrar::block_fluids`: the
-/// chiller's and the lava generator's one four-bucket tank, reachable from every
-/// face, fillable and not drainable (upstream's `SimpleFluidStorage` the machine
-/// only takes from). The amount lives in the entity's saved `fluids` list, in
-/// the shape the game reads (`Fluid` + `Amount`, millibuckets).
+/// chiller's and the lava generator's one four-bucket tank, and the centrifuge's
+/// eight-bucket one — reachable from every face, fillable and not drainable
+/// (upstream's `SimpleFluidStorage` the machine only takes from). The amount lives
+/// in the entity's saved `fluids` list, in the shape the game reads (`Fluid` +
+/// `Amount`, millibuckets).
 pub(crate) fn fluids(block: &str) -> Option<ModFluidTanks> {
     let capacity = tank_capacity(block)?;
     let all = vec![0usize];
@@ -807,6 +828,57 @@ pub(crate) struct AssemblerView<'a> {
     pub(crate) output: Option<(&'a str, u32)>,
 }
 
+/// The Centrifuge saved in a block entity's compound: the machine's three values,
+/// the multiblock facts (one core) and the Fluid Addon's one tank.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct CentrifugeSaved {
+    /// The buffer, progress and recipe the pure state machine keeps.
+    pub(crate) machine: Centrifuge,
+    /// The assembly: assembled flag, core offset, core quality.
+    pub(crate) assembly: Assembly,
+    /// The tank: its fluid and its amount in millibuckets; `None` when empty.
+    pub(crate) tank: Option<(String, i32)>,
+}
+
+/// The centrifuge saved in a block entity's compound; a fresh one is empty.
+pub(crate) fn centrifuge_state(nbt: &Compound, capacity: i32) -> CentrifugeSaved {
+    CentrifugeSaved {
+        machine: Centrifuge {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+        tank: tank_state(nbt, CENTRIFUGE_TANK),
+    }
+}
+
+/// Write the centrifuge's tick result back: the same keys every machine uses, and
+/// the tank in the game's `fluids` shape.
+pub(crate) fn store_centrifuge(nbt: &mut Compound, saved: &CentrifugeSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, &saved.assembly);
+    store_tank(
+        nbt,
+        saved
+            .tank
+            .as_ref()
+            .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+        CENTRIFUGE_TANK,
+    );
+}
+
+/// What the readout prints about a centrifuge: its saved state, its core, its one
+/// input and its two output slots.
+pub(crate) struct CentrifugeView<'a> {
+    pub(crate) saved: &'a CentrifugeSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
+    pub(crate) input: Option<(&'a str, u32)>,
+    pub(crate) outputs: [Option<(&'a str, u32)>; 2],
+}
+
 // ---------------------------------------------------------------------------
 // The machine ticks
 // ---------------------------------------------------------------------------
@@ -966,6 +1038,12 @@ const COOLER_PROFILE: MachineProfile = MachineProfile {
 /// `assemblerData`: 128 FE a tick, no speed multiplier and no divisor.
 const ASSEMBLER_PROFILE: MachineProfile = MachineProfile {
     base_energy: ASSEMBLER_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
+/// `centrifugeData`: 64 FE a tick, no speed multiplier and no divisor.
+const CENTRIFUGE_PROFILE: MachineProfile = MachineProfile {
+    base_energy: CENTRIFUGE_ENERGY_PER_TICK,
     base_speed: 1.0,
     divisor: 1.0,
 };
@@ -1384,6 +1462,159 @@ fn finish_assembler(
     grow_output(host, items, ASSEMBLER_OUTPUT, &recipe.result);
 }
 
+/// One server tick of the Centrifuge: the furnace's assembly gate (one core above),
+/// then one `oritech:centrifuge` craft from the one input slot — or, with a Fluid
+/// Addon in one of its two addon slots, the first `oritech:centrifuge_fluid`
+/// recipe whose fluid the tank holds (`CentrifugeBlockEntity.getOwnRecipeType`
+/// and `getRecipe`).
+pub(crate) fn tick_centrifuge(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != CENTRIFUGE_SLOTS;
+    if resized {
+        items.resize(CENTRIFUGE_SLOTS, None);
+    }
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, CENTRIFUGE, pos, nbt, CENTRIFUGE_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, CENTRIFUGE, pos, nbt);
+    // `hasFluidAddon`: a Fluid Addon (or a combi with one) in a machine's own
+    // slot switches `getOwnRecipeType()` to the fluid table.
+    let fluid_addon = connected_addons(&*host, level, CENTRIFUGE, pos).contains(&Some(FLUID_ADDON));
+    let capacity = addons.capacity(CENTRIFUGE_CAPACITY);
+    let before = centrifuge_state(nbt, capacity);
+    let before_burst = burst;
+    let mut saved = before.clone();
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled && !disabled {
+        let input = items[INPUT_SLOT].clone();
+        let recipe = input.as_ref().and_then(|stack| {
+            let tank = saved
+                .tank
+                .as_ref()
+                .map(|(fluid, amount)| (fluid.as_str(), *amount));
+            // A fluid recipe wins while the addon is there; otherwise (or when no
+            // fluid recipe matches) the normal table answers — upstream's order.
+            if fluid_addon
+                && let Some(recipe) = find_centrifuge_fluid(&*host, stack, tank, fluid_addon)
+            {
+                return Some(recipe);
+            }
+            find_centrifuge(&*host, stack)
+        });
+        let work = recipe.as_ref().and_then(|recipe| {
+            let outputs = centrifuge_outputs(&*host, items);
+            centrifuge_output_fits(&recipe.results, centrifuge_output_refs(&outputs), |item| {
+                max_stack(&*host, item)
+            })
+            .then_some(Work {
+                id: &recipe.id,
+                time: processing_ticks(recipe.time, speed),
+            })
+        });
+        step = saved.machine.tick_with(work, cost);
+        if step == Step::Finished
+            && let Some(recipe) = recipe.as_ref()
+        {
+            finish_centrifuge(&*host, &mut saved, items, recipe);
+            // `CentrifugeBlockEntity.craftItem`'s chamber loop: the same recipe,
+            // another matching input and room for its results (and, for a fluid
+            // recipe, another measure in the tank).
+            for _ in 0..addons.chambers {
+                let Some(stack) = items[INPUT_SLOT].clone() else {
+                    break;
+                };
+                let tank = saved
+                    .tank
+                    .as_ref()
+                    .map(|(fluid, amount)| (fluid.as_str(), *amount));
+                let next = if fluid_addon {
+                    find_centrifuge_fluid(&*host, &stack, tank, fluid_addon)
+                } else {
+                    None
+                }
+                .or_else(|| find_centrifuge(&*host, &stack));
+                let Some(next) = next else {
+                    break;
+                };
+                let outputs = centrifuge_outputs(&*host, items);
+                if next.id != recipe.id
+                    || !centrifuge_output_fits(
+                        &next.results,
+                        centrifuge_output_refs(&outputs),
+                        |item| max_stack(&*host, item),
+                    )
+                {
+                    break;
+                }
+                finish_centrifuge(&*host, &mut saved, items, &next);
+            }
+        }
+    }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
+    store_centrifuge(nbt, &saved);
+    store_burst(nbt, burst);
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
+}
+
+/// The centrifuge's two output slots, as `centrifuge_output_fits` reads them.
+fn centrifuge_outputs(host: &dyn Host, items: &[Option<ItemStack>]) -> [Option<(String, i32)>; 2] {
+    let slot = |index: usize| {
+        items
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|stack| (stack.item().id(host), count_of(stack)))
+    };
+    [slot(CENTRIFUGE_OUTPUT), slot(CENTRIFUGE_OUTPUT + 1)]
+}
+
+/// The borrowed form of the centrifuge's output list.
+fn centrifuge_output_refs(outputs: &[Option<(String, i32)>; 2]) -> [Option<(&str, i32)>; 2] {
+    [
+        outputs[0].as_ref().map(|(id, count)| (id.as_str(), *count)),
+        outputs[1].as_ref().map(|(id, count)| (id.as_str(), *count)),
+    ]
+}
+
+/// `MachineBlockEntity.craftItem` for the centrifuge: the input leaves its slot,
+/// the fluid recipe takes its millibuckets out of the tank, then each result goes
+/// into its own output slot. The item leaves before the output is granted, the
+/// order every machine in this port uses.
+fn finish_centrifuge(
+    host: &dyn Host,
+    saved: &mut CentrifugeSaved,
+    items: &mut [Option<ItemStack>],
+    recipe: &CentrifugeRecipe,
+) {
+    if recipe.fluid.is_some() {
+        let tank = saved
+            .tank
+            .as_ref()
+            .map(|(fluid, amount)| (fluid.as_str(), *amount));
+        if !centrifuge_can_run(recipe, tank, true) {
+            return;
+        }
+    }
+    if !consume_one(items, INPUT_SLOT) {
+        return;
+    }
+    if let Some(input) = &recipe.fluid
+        && let Some((fluid, amount)) = saved.tank.clone()
+    {
+        saved.tank = after_draining(amount, input.amount).map(|left| (fluid, left));
+    }
+    for (index, result) in recipe.results.iter().enumerate() {
+        grow_output(host, items, CENTRIFUGE_OUTPUT + index, result);
+    }
+}
+
 /// `LavaGeneratorEntity.outputEnergy`'s plan for a generator block: the most one
 /// call may take out of it (`maxEnergyExtraction`) and the positions it pushes
 /// to, each with the face the target's handler is queried from. The basic
@@ -1504,6 +1735,11 @@ static LAVA_RECIPES: Mutex<Option<Vec<LavaGenRecipe>>> = Mutex::new(None);
 /// The assembler's recipes keep *four* resolved ingredients each, so they have
 /// their own cache entry shape: [`cached_recipe`] resolves exactly one.
 static ASSEMBLER_RECIPES: Mutex<Option<Vec<AssemblerResolved>>> = Mutex::new(None);
+/// The centrifuge's two tables: both have one resolved ingredient each, so both
+/// use the [`Resolved`] shape (the item table for the click's "is this an
+/// ingredient" test, not only the tick's first match).
+static CENTRIFUGE_RECIPES: Mutex<Option<Vec<Resolved<CentrifugeRecipe>>>> = Mutex::new(None);
+static CENTRIFUGE_FLUID_RECIPES: Mutex<Option<Vec<Resolved<CentrifugeRecipe>>>> = Mutex::new(None);
 static RECIPE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// One parsed assembler recipe with every ingredient the engine resolved for it.
@@ -1632,6 +1868,95 @@ fn find_lavagen(host: &dyn Host, fluid: &str, amount: i32) -> Option<LavaGenReci
         .iter()
         .find(|recipe| tank_matches(Some((fluid, amount)), &recipe.fluid))
         .cloned()
+}
+
+/// One of the centrifuge's two recipe tables, parsed and with its ingredient
+/// resolved by the engine. `look` runs under the lock, so the table is loaded once
+/// and read without a second copy.
+fn with_centrifuge_table<R>(
+    cache: &Mutex<Option<Vec<Resolved<CentrifugeRecipe>>>>,
+    host: &dyn Host,
+    kind: &str,
+    look: impl FnOnce(&[Resolved<CentrifugeRecipe>]) -> R,
+) -> R {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let mut resolved = Vec::new();
+        for recipe in host.recipes_of_type(kind).iter() {
+            let Ok(parsed) = CentrifugeRecipe::parse(&recipe.id, &recipe.json.to_string()) else {
+                continue;
+            };
+            let Ok(Some(ingredient)) = host.recipe_ingredient(&parsed.ingredient.to_string())
+            else {
+                continue;
+            };
+            resolved.push(Resolved {
+                ingredient,
+                recipe: parsed,
+            });
+        }
+        *cache = Some(resolved);
+    }
+    look(cache.as_deref().unwrap_or(&[]))
+}
+
+/// The `oritech:centrifuge` recipe an input starts: the first whose ingredient
+/// takes it (`getRecipeFor(RecipeContent.CENTRIFUGE, …)`).
+fn find_centrifuge(host: &dyn Host, input: &ItemStack) -> Option<CentrifugeRecipe> {
+    with_centrifuge_table(&CENTRIFUGE_RECIPES, host, CENTRIFUGE_RECIPE, |recipes| {
+        recipes
+            .iter()
+            .find(|resolved| resolved.ingredient.test(host, input))
+            .map(|resolved| resolved.recipe.clone())
+    })
+}
+
+/// The `oritech:centrifuge_fluid` recipe an input starts while the Fluid Addon is
+/// connected: the first whose ingredient takes the stack and whose fluid the tank
+/// holds (`CentrifugeBlockEntity.getRecipe` → `recipeInputMatchesTank`).
+fn find_centrifuge_fluid(
+    host: &dyn Host,
+    input: &ItemStack,
+    tank: Option<(&str, i32)>,
+    fluid_addon: bool,
+) -> Option<CentrifugeRecipe> {
+    with_centrifuge_table(
+        &CENTRIFUGE_FLUID_RECIPES,
+        host,
+        CENTRIFUGE_FLUID_RECIPE,
+        |recipes| {
+            recipes
+                .iter()
+                .find(|resolved| {
+                    resolved.ingredient.test(host, input)
+                        && centrifuge_can_run(&resolved.recipe, tank, fluid_addon)
+                })
+                .map(|resolved| resolved.recipe.clone())
+        },
+    )
+}
+
+/// Whether any loaded centrifuge recipe (either table) names `stack`: the click's
+/// "is this an input of this machine" test, the centrifuge's version of the
+/// pulverizer's `find_recipe(...).is_none()` refusal.
+fn centrifuge_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
+    with_centrifuge_table(&CENTRIFUGE_RECIPES, host, CENTRIFUGE_RECIPE, |recipes| {
+        recipes
+            .iter()
+            .any(|resolved| resolved.ingredient.test(host, stack))
+    }) || with_centrifuge_table(
+        &CENTRIFUGE_FLUID_RECIPES,
+        host,
+        CENTRIFUGE_FLUID_RECIPE,
+        |recipes| {
+            recipes
+                .iter()
+                .any(|resolved| resolved.ingredient.test(host, stack))
+        },
+    )
 }
 
 /// The assembler's recipe cache: every `oritech:assembler` file the pin loaded,
@@ -1841,7 +2166,11 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
     let Some(name) = block_at(&*server, level, pos) else {
         return Flow::Continue;
     };
-    let is_multiblock = name == FURNACE || name == COOLER || name == LAVA || name == ASSEMBLER;
+    let is_multiblock = name == FURNACE
+        || name == COOLER
+        || name == LAVA
+        || name == ASSEMBLER
+        || name == CENTRIFUGE;
     if !is_multiblock && name != GENERATOR && name != PULVERIZER {
         return Flow::Continue;
     }
@@ -1918,6 +2247,49 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         }
         return Flow::Cancel;
     }
+    if name == CENTRIFUGE {
+        // The centrifuge has both an item input and (with a Fluid Addon) a tank.
+        // A held fluid container goes through the engine's own `FluidUtil`
+        // interaction into the block's declared tank; anything else must be an
+        // ingredient of one of its loaded recipes (either table), which
+        // `findLowestMatchingSlot` puts in the one input slot.
+        let held_id = held.item().id(&*server);
+        let moved = match server.player(click.player) {
+            Some(player) => {
+                let side = direction(click.hit.face);
+                fluid_util::interact_with_fluid_handler(
+                    &mut *server,
+                    player,
+                    click.hand,
+                    level,
+                    pos,
+                    side,
+                )
+            }
+            None => false,
+        };
+        if moved {
+            if let Some(line) = info_line(server, pos) {
+                say(server, click.player, &line);
+            }
+            return Flow::Cancel;
+        }
+        if !centrifuge_accepts(&*server, &held) {
+            let message = format!("{held_id} is not an ingredient of a centrifuging recipe");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        }
+        insert_held(
+            server,
+            level,
+            pos,
+            click.player,
+            click.hand,
+            &held,
+            INPUT_SLOT,
+        );
+        return Flow::Cancel;
+    }
     if name == COOLER {
         // No input slot: the chiller's input is its fluid tank, which a pipe or
         // `/oritech fluid` fills. A held item has nowhere to go.
@@ -1992,6 +2364,7 @@ fn core_offsets_for(block: &str) -> Option<&'static [[i32; 3]]> {
         COOLER => Some(&[COOLER_CORE_OFFSET]),
         LAVA => Some(&[LAVA_CORE_OFFSET]),
         ASSEMBLER => Some(&ASSEMBLER_CORE_OFFSETS),
+        CENTRIFUGE => Some(&[CENTRIFUGE_CORE_OFFSET]),
         _ => None,
     }
 }
@@ -2358,6 +2731,32 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 time,
             ))
         }
+        CENTRIFUGE => {
+            let found = connected_addons(&*host, level, CENTRIFUGE, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(CENTRIFUGE_CAPACITY);
+            let saved = centrifuge_state(&nbt, capacity);
+            let core = core_view(&*host, level, pos, &saved.assembly);
+            let input = slot(INPUT_SLOT);
+            let out0 = slot(CENTRIFUGE_OUTPUT);
+            let out1 = slot(CENTRIFUGE_OUTPUT + 1);
+            Some(centrifuge_line(
+                pos,
+                &CentrifugeView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                    input: input.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    outputs: [
+                        out0.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                        out1.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    ],
+                },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
+                time,
+            ))
+        }
         other => Some(format!("{pos:?} is a {other}, not an Oritech machine.")),
     }
 }
@@ -2379,6 +2778,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         COOLER => addons.capacity(COOLER_CAPACITY),
         LAVA => addons.capacity(LAVA_CAPACITY),
         ASSEMBLER => addons.capacity(ASSEMBLER_CAPACITY),
+        CENTRIFUGE => addons.capacity(CENTRIFUGE_CAPACITY),
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -2453,6 +2853,12 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *ASSEMBLER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *CENTRIFUGE_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *CENTRIFUGE_FLUID_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     RECIPE_TICKS.store(0, Ordering::Relaxed);
@@ -2590,6 +2996,50 @@ pub(crate) fn assembler_line(
     )
 }
 
+/// The centrifuge's line: the assembly first, then the tank, the one input and the
+/// two output slots (the same field order the pulverizer's and the chiller's use).
+pub(crate) fn centrifuge_line(
+    pos: [i32; 3],
+    view: &CentrifugeView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    let [out0, out1] = view.outputs;
+    format!(
+        "Centrifuge at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, tank {}, input {}, out0 {}, out1 {}, {}, t={t}",
+        saved.machine.energy,
+        capacity,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress,
+        tank_text(
+            saved
+                .tank
+                .as_ref()
+                .map(|(fluid, amount)| (fluid.as_str(), *amount)),
+            CENTRIFUGE_TANK,
+        ),
+        slot_text(view.input),
+        slot_text(out0),
+        slot_text(out1),
+        addons.text(),
+    )
+}
+
 /// A tank as a line prints it: the fluid and its amount against the block's
 /// declared capacity, or `empty`.
 fn tank_text(tank: Option<(&str, i32)>, capacity: i32) -> String {
@@ -2704,6 +3154,7 @@ pub(crate) fn fluid_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::SPEED_ADDON;
 
     #[test]
     fn the_generator_declares_one_insert_only_slot() {
@@ -3731,8 +4182,8 @@ mod tests {
         let recipes = engine_recipes();
         assert_eq!(
             recipes.len(),
-            20,
-            "the port carries nineteen crafting recipes and one smelting recipe: {} found ({:?})",
+            21,
+            "the port carries twenty crafting recipes and one smelting recipe: {} found ({:?})",
             recipes.len(),
             recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
@@ -4038,5 +4489,244 @@ mod tests {
             line.contains("assembled no core empty quality 0, progress 0 recipe none"),
             "{line}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 9: the Centrifuge
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_centrifuge_declares_one_input_two_outputs_its_own_buffer_and_an_eight_bucket_tank() {
+        let container = container(CENTRIFUGE).expect("the centrifuge has a container");
+        assert_eq!(container.slots, CENTRIFUGE_SLOTS, "three slots");
+        assert_eq!(container.inputs, vec![0], "one input");
+        assert_eq!(container.outputs, vec![1, 2], "two outputs");
+        assert_eq!(
+            container.faces,
+            std::array::from_fn(|_| (0..CENTRIFUGE_SLOTS).collect::<Vec<usize>>()),
+            "automation reaches every slot from every face"
+        );
+        assert_eq!(container.menu, None, "no GUI in this slice");
+        let battery = battery(CENTRIFUGE).expect("the centrifuge has a buffer");
+        assert_eq!(battery.capacity, CENTRIFUGE_CAPACITY);
+        assert_eq!(battery.capacity, 10_000, "the jar's own figure");
+        assert_eq!(battery.max_insert, CENTRIFUGE_MAX_INSERT);
+        assert_eq!(battery.max_insert, 512, "the jar's 64 * 8");
+        assert_eq!(battery.max_extract, 0, "the machine gives no energy out");
+        let tanks = fluids(CENTRIFUGE).expect("the centrifuge declares its Fluid Addon tank");
+        assert_eq!(tanks.tanks, vec![CENTRIFUGE_TANK]);
+        assert_eq!(tanks.tanks, vec![8_000], "eight buckets");
+        assert_eq!(tank_capacity(CENTRIFUGE), Some(8_000));
+        assert!(
+            fluids(ASSEMBLER).is_none(),
+            "the tank is per block: the assembler still has none"
+        );
+        assert_eq!(
+            addon_slots(CENTRIFUGE),
+            &[[0, 0, -1], [0, 0, 1]],
+            "the Fluid Addon's two slots, north and south"
+        );
+        assert_eq!(
+            core_offsets_for(CENTRIFUGE),
+            Some(&[[0, 1, 0]][..]),
+            "one core above, the furnace's offset"
+        );
+    }
+
+    #[test]
+    fn the_centrifuge_s_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        assert_eq!(
+            centrifuge_state(&nbt, CENTRIFUGE_CAPACITY),
+            CentrifugeSaved::default(),
+            "a fresh centrifuge is empty"
+        );
+        let saved = CentrifugeSaved {
+            machine: Centrifuge {
+                energy: 3_200,
+                progress: 17,
+                recipe: "oritech:centrifuge/carbon".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: vec![CENTRIFUGE_CORE_OFFSET],
+                quality: 2.0,
+            },
+            tank: Some(("minecraft:water".to_owned(), 250)),
+        };
+        store_centrifuge(&mut nbt, &saved);
+        assert_eq!(centrifuge_state(&nbt, CENTRIFUGE_CAPACITY), saved);
+        assert_eq!(
+            tank_state(&nbt, CENTRIFUGE_TANK),
+            Some(("minecraft:water".to_owned(), 250)),
+            "the tank is written in the game's own `fluids` shape"
+        );
+        assert_eq!(read_int(&nbt, KEY_PROGRESS), 17);
+    }
+
+    #[test]
+    fn the_centrifuge_line_prints_its_core_tank_input_and_two_outputs() {
+        let saved = CentrifugeSaved {
+            machine: Centrifuge {
+                energy: 3_200,
+                progress: 0,
+                recipe: "oritech:centrifuge/carbon".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: vec![CENTRIFUGE_CORE_OFFSET],
+                quality: 2.0,
+            },
+            tank: Some(("minecraft:water".to_owned(), 250)),
+        };
+        assert_eq!(
+            centrifuge_line(
+                [8, 100, 10],
+                &CentrifugeView {
+                    saved: &saved,
+                    core: Some(("oritech:machine_core_2", 2)),
+                    input: None,
+                    outputs: [Some(("oritech:carbon_fibre_strands", 1)), None],
+                },
+                CENTRIFUGE_CAPACITY,
+                &AddonView::none(),
+                42,
+            ),
+            "Centrifuge at [8, 100, 10]: 3200/10000 FE, assembled yes core \
+             oritech:machine_core_2 quality 2, progress 0 recipe oritech:centrifuge/carbon, \
+             tank minecraft:water 250/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, \
+             out1 empty, addons none, t=42"
+        );
+        let idle = CentrifugeSaved::default();
+        let line = centrifuge_line(
+            [12, 100, 10],
+            &CentrifugeView {
+                saved: &idle,
+                core: None,
+                input: Some(("minecraft:dirt", 1)),
+                outputs: [None, None],
+            },
+            CENTRIFUGE_CAPACITY,
+            &AddonView::none(),
+            43,
+        );
+        assert!(
+            line.contains(
+                "assembled no core empty quality 0, progress 0 recipe none, tank empty \
+                 0/8000 mB, input minecraft:dirt x1, out0 empty, out1 empty, addons none"
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn every_carried_centrifuge_recipe_is_the_bare_form_and_resolves() {
+        let recipes: Vec<(String, serde_json::Value)> = carried_recipes()
+            .into_iter()
+            .filter(|(_, recipe)| {
+                recipe["type"]
+                    .as_str()
+                    .is_some_and(|kind| kind.starts_with("oritech:centrifuge"))
+            })
+            .collect();
+        assert_eq!(
+            recipes.len(),
+            2,
+            "the slice carries the carbon and the clay file: {} found ({:?})",
+            recipes.len(),
+            recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        for (path, recipe) in &recipes {
+            let ingredients = recipe["ingredients"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no ingredients"));
+            assert_eq!(ingredients.len(), 1, "{path}: one input slot");
+            for ingredient in ingredients {
+                let id = ingredient.as_str().unwrap_or_else(|| {
+                    panic!(
+                        "{path}: the ingredient {ingredient} is not the bare form — 26.3's \
+                         loader refuses the 1.21.1 object and drops the recipe"
+                    )
+                });
+                ingredient_resolves(path, id);
+            }
+            let results = recipe["results"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no results"));
+            assert!(
+                !results.is_empty() && results.len() <= 2,
+                "{path}: two outputs"
+            );
+            for result in results {
+                let id = result["id"].as_str().unwrap_or_default();
+                assert!(
+                    id.starts_with("minecraft:") || declared(id),
+                    "{path}: the result {id} is not declared by this package"
+                );
+            }
+            assert!(
+                recipe["fluidOutputs"].is_null(),
+                "{path}: a fluid output has nowhere to go in this package"
+            );
+        }
+        let (path, carbon) = recipes
+            .iter()
+            .find(|(path, _)| path == "centrifuge/carbon.json")
+            .expect("the jar's carbon file is carried");
+        assert_eq!(carbon["time"], 50, "{path}: the jar's time");
+        assert_eq!(
+            carbon["results"][0],
+            serde_json::json!({"count": 1, "id": "oritech:carbon_fibre_strands"}),
+            "{path}: one carbon fibre strand"
+        );
+        let (path, clay) = recipes
+            .iter()
+            .find(|(path, _)| path == "centrifuge/fluid/clay.json")
+            .expect("the jar's clay file is carried");
+        assert_eq!(clay["time"], 100, "{path}: the jar's time");
+        assert_eq!(
+            clay["fluidInput"],
+            serde_json::json!({"amount": 250, "fluid": "minecraft:water"}),
+            "{path}: 250 mB of water"
+        );
+        assert_eq!(
+            clay["results"][0],
+            serde_json::json!({"count": 1, "id": "minecraft:clay"}),
+            "{path}: one clay"
+        );
+    }
+
+    #[test]
+    fn the_fluid_addon_is_the_eighth_addon_and_gates_the_fluid_table() {
+        assert_eq!(ADDON_BLOCKS.len(), 8);
+        assert_eq!(ADDON_BLOCKS[7], FLUID_ADDON);
+        let settings = addon_settings(FLUID_ADDON).expect("the Fluid Addon has neutral settings");
+        assert_eq!((settings.speed, settings.efficiency), (1.0, 1.0));
+        assert_eq!(settings.chambers, 0);
+        assert_eq!(addon_names(&[FLUID_ADDON]), "fluid");
+        assert_eq!(
+            addon_names(&[FLUID_ADDON, SPEED_ADDON]),
+            "speed+fluid",
+            "the readout keeps ADDON_BLOCKS' order"
+        );
+        // The switch itself: no addon, no fluid recipe, whatever the tank holds.
+        let recipe = CentrifugeRecipe::parse(
+            "oritech:centrifuge_fluid/clay",
+            r#"{"type":"oritech:centrifuge_fluid",
+                "fluidInput":{"amount":250,"fluid":"minecraft:water"},
+                "ingredients":[{"tag":"minecraft:dirt"}],
+                "results":[{"count":1,"id":"minecraft:clay"}],"time":100}"#,
+        )
+        .expect("the clay file parses");
+        assert!(centrifuge_can_run(
+            &recipe,
+            Some(("minecraft:water", 250)),
+            true
+        ));
+        assert!(!centrifuge_can_run(
+            &recipe,
+            Some(("minecraft:water", 250)),
+            false
+        ));
     }
 }

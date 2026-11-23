@@ -4,7 +4,7 @@
 [`tools/carry_content.py`](tools/carry_content.py) from the ATM10 jar
 `oritech-neoforge-1.21.1-1.2.13.jar`
 (SHA-256 `32600bf5b08fcf6d4a49e557f90ee45b238098170777872c8919d9fdb0a1b828`).
-The script is deterministic (`--check` exits 1 on any drift) and writes **248
+The script is deterministic (`--check` exits 1 on any drift) and writes **276
 files** at the root; since 0.2.0 they travel in the same SDK package as `src/`,
 so there is no separate content `.hmod` and no manifest here (the root
 `horizon-mod.toml` is the only one).
@@ -80,6 +80,28 @@ family in *The recipe set* there.
 Which files were taken and which left, with a reason each, is `notes.md` → *Slice 7* → *The recipe
 table*.
 
+## Slice 9: the Centrifuge, the Fluid Addon and the carbon chain (28 files)
+
+**Carried byte for byte**: the centrifuge's own texture
+(`assets/oritech/textures/block/models/centrifuge_block.png` — its blockstate names the
+`machine_speed_addon` placeholder and its item model is `builtin/entity`, so both are authored here);
+the Fluid Addon's block model, item model, `machine_fluid_addon_off` texture and its place among the
+addon assets; and the two items' item models and textures
+(`assets/oritech/{models/item,textures/item}/{coal_dust,carbon_fibre_strands}`).
+
+**Authored**: the centrifuge's one-variant blockstate and `cube_all` block model, item model, 26.3
+item definition, block declaration (`minecraft:iron_block` with `occludes: false`), self-drop loot
+table, lang `Centrifuge`, machines tab and tool tags; the Fluid Addon's one-variant blockstate, item
+definition, declaration, loot table, lang `Fluid Addon`, machines tab and tool tags; the two items'
+26.3 definitions, `horizon/item` declarations (`minecraft:iron_ingot`) and lang names; and the two tags
+`c:dusts/coal` = `oritech:coal_dust` and `c:carbon_fibre` = `oritech:carbon_fibre_strands`.
+
+**Recipes**: `pulverizer/coal.json` (`#minecraft:coals` → coal dust), `centrifuge/carbon.json`
+(`c:dusts/coal` → carbon fibre strands), `centrifuge/fluid/clay.json` (250 mB water + `#minecraft:dirt`
+→ clay) and `crafting/core3.json` (8 `c:carbon_fibre` + redstone → core 3) — each the jar's file with
+only the bare-ingredient rewrite. The other 43 + 48 centrifuge files are refused one reason per family
+in `notes.md` → *Slice 9* → *The recipe sweep*.
+
 ## The jar's pulverizer, chiller and lava generator recipes (10 files)
 
 `data/oritech/recipe/pulverizer/{bone,blaze,dripstone,glowstoneore,coalore,diamondore,lapisore}.json`
@@ -100,11 +122,11 @@ run: 100 mB of `minecraft:lava` for 120 ticks, with no item input and no item re
 `sheolfire.json` takes `oritech:still_sheol_fire` — another fluid this package does not declare — so
 it is not carried (the same recorded gap as `snow.json`).
 
-The other 117 pulverizer files, and the other 60 assembler / 93 centrifuge / 29 foundry / 32 refinery
-recipes, name Oritech dusts, clumps, gems and fluids that are not carried here; they are a later slice
-(see `notes.md`, gaps).
+The other 117 pulverizer files (the coal one is slice 9's), and the other 60 assembler / the 91 of 93
+centrifuge / 29 foundry / 32 refinery recipes, name Oritech dusts, clumps, gems and fluids that are not
+carried here; they are a later slice (see `notes.md`, gaps).
 
-## Authored by `tools/carry_content.py` (93 files)
+## Authored by `tools/carry_content.py` (148 of the 276 files)
 
 Everything here is written from a value read out of the jar or the upstream
 source; `notes.md` records each one.

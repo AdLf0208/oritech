@@ -10,6 +10,7 @@ The lines are (see `src/support.rs`, the readout section):
     Industrial Chiller at [12, 100, 0]: 43600/50000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 11 recipe oritech:cooler/ice, tank minecraft:water 1000/4000 mB, out empty, t=424
     Lava Generator at [20, 100, 4]: 3840/100000 FE, assembled yes core oritech:machine_core_2 quality 2, burning 60/120 ticks recipe oritech:lavagen/lava, tank minecraft:lava 100/4000 mB, t=424
     Assembler at [0, 100, 12]: 6144/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, in1 oritech:steel_ingot x2, in2 oritech:magnetic_coil x2, in3 empty, out0 empty, addons none, t=424
+    Centrifuge at [8, 100, 10]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe oritech:centrifuge/carbon, tank minecraft:water 250/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, out1 empty, addons none, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
 
 Usage: `eval "$(python3 tools/parse_info.py "$line")"`; `ok=1` when it parsed.
@@ -121,6 +122,17 @@ ASSEMBLER = re.compile(
     r"out0 (?P<OUT0>.+?), " + ADDON_FIELD
 )
 
+# Slice 9: the centrifuge's line carries the assembly, its one tank, its one input
+# and its two output slots (the pulverizer's field names, so `machine_holds` works).
+CENTRIFUGE = re.compile(
+    r"^Centrifuge at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"tank (?P<TANK_FLUID>\S+) (?P<TANK_AMOUNT>-?\d+)/(?P<TANK_CAP>\d+) mB, "
+    r"input (?P<INPUT>.+?), out0 (?P<OUT0>.+?), out1 (?P<OUT1>.+?), " + ADDON_FIELD
+)
+
 
 def main(argv: list[str]) -> int:
     line = " ".join(argv).strip()
@@ -131,6 +143,7 @@ def main(argv: list[str]) -> int:
         ("cooler", COOLER),
         ("lava", LAVA),
         ("assembler", ASSEMBLER),
+        ("centrifuge", CENTRIFUGE),
         ("fluid", FLUID),
     ):
         match = pattern.match(line)
