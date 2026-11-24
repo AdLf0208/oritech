@@ -27,15 +27,17 @@ use crate::runtime::{
     EnergyTarget, FLUID_ADDON, FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS, FOUNDRY_ENERGY_PER_TICK,
     FOUNDRY_INPUTS, FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK,
     FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput, Foundry, FoundryRecipe, Furnace,
-    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, LAVA_CAPACITY, LAVA_CORE_OFFSET,
-    LAVA_ENERGY_PER_TICK, LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator,
-    MACHINE_ENERGY_PER_TICK, PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer,
-    PulverizerRecipe, REDSTONE_ADDON, RecipeResult, SmeltingRecipe, Step, TankAfter, Work,
-    addon_names, addon_settings, addon_slots, after_consuming, after_draining, can_output,
-    centrifuge_can_run, centrifuge_install, centrifuge_output_fits, clamp_energy,
-    cooler_output_fits, core_quality, craft_plan, efficiency_multiplier, energy_usage,
-    generator_burn_ticks, generator_output, insert_slot, is_fuel, lava_output_targets, output_fits,
-    processing_ticks, redstone_disables, speed_multiplier, tank_matches,
+    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, GRINDER_CAPACITY, GRINDER_CORE_OFFSETS,
+    GRINDER_ENERGY_PER_TICK, GRINDER_MAX_INSERT, GRINDER_OUTPUTS, GRINDER_SLOTS, Grinder,
+    GrinderInstall, GrinderRecipe, LAVA_CAPACITY, LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK,
+    LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator, MACHINE_ENERGY_PER_TICK,
+    PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer, PulverizerRecipe, REDSTONE_ADDON,
+    RecipeResult, SmeltingRecipe, Step, TankAfter, Work, addon_names, addon_settings, addon_slots,
+    after_consuming, after_draining, can_output, centrifuge_can_run, centrifuge_install,
+    centrifuge_output_fits, clamp_energy, cooler_output_fits, core_quality, craft_plan,
+    efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output, grinder_install,
+    grinder_output_fits, insert_slot, is_fuel, lava_output_targets, output_fits, processing_ticks,
+    redstone_disables, speed_multiplier, tank_matches,
 };
 
 use crate::json::Value;
@@ -52,6 +54,10 @@ pub(crate) const ASSEMBLER: &str = "oritech:assembler_block";
 pub(crate) const CENTRIFUGE: &str = "oritech:centrifuge_block";
 /// The Foundry (`BlockContent.FOUNDRY_BLOCK`) — slice 10.
 pub(crate) const FOUNDRY: &str = "oritech:foundry_block";
+/// The Fragment Forge (`BlockContent.FRAGMENT_FORGE_BLOCK`), the jar's "grinder"
+/// — slice 11. The jar's block id is `fragment_forge_block`; `oritech:grinder`
+/// is its *recipe type*, not a block.
+pub(crate) const GRINDER: &str = "oritech:fragment_forge_block";
 /// The recipe type the jar's `data/oritech/recipe/assembler/*.json` names.
 pub(crate) const ASSEMBLER_RECIPE: &str = "oritech:assembler";
 /// The recipe type the jar's `data/oritech/recipe/foundry/**` files name.
@@ -60,6 +66,8 @@ pub(crate) const FOUNDRY_RECIPE: &str = "oritech:foundry";
 pub(crate) const CENTRIFUGE_RECIPE: &str = "oritech:centrifuge";
 /// The recipe type its `fluid/**` files name; it runs only with the Fluid Addon.
 pub(crate) const CENTRIFUGE_FLUID_RECIPE: &str = "oritech:centrifuge_fluid";
+/// The recipe type the jar's `data/oritech/recipe/grinder/**` files name.
+pub(crate) const GRINDER_RECIPE: &str = "oritech:grinder";
 /// The vanilla recipe table the furnace reads (upstream's
 /// `RecipeType.SMELTING`); nothing is registered, the game already has it.
 pub(crate) const SMELTING_RECIPE: &str = "minecraft:smelting";
@@ -85,6 +93,8 @@ pub(crate) const LAVA_TYPE: &str = "lava_generator";
 pub(crate) const ASSEMBLER_TYPE: &str = "assembler";
 pub(crate) const CENTRIFUGE_TYPE: &str = "centrifuge";
 pub(crate) const FOUNDRY_TYPE: &str = "foundry";
+/// `BlockEntitiesContent.FRAGMENT_FORGE_ENTITY` (the block entity type, not the block).
+pub(crate) const GRINDER_TYPE: &str = "fragment_forge";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -103,6 +113,9 @@ const ASSEMBLER_OUTPUT: usize = ASSEMBLER_INPUTS;
 const CENTRIFUGE_OUTPUT: usize = 1;
 /// The foundry's `InventorySlotAssignment(0, 2, 2, 1)`: slots 0–1 in, slot 2 out.
 const FOUNDRY_OUTPUT: usize = FOUNDRY_INPUTS;
+/// The Fragment Forge's `InventorySlotAssignment(0, 1, 1, 3)`: one input at 0,
+/// three outputs at 1, 2 and 3.
+const GRINDER_OUTPUT: usize = 1;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
@@ -250,6 +263,12 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
             (0..FOUNDRY_INPUTS).collect(),
             vec![FOUNDRY_OUTPUT],
         ),
+        // `InventorySlotAssignment(0, 1, 1, 3)`: one input, three outputs.
+        GRINDER => (
+            GRINDER_SLOTS,
+            vec![INPUT_SLOT],
+            vec![GRINDER_OUTPUT, GRINDER_OUTPUT + 1, GRINDER_OUTPUT + 2],
+        ),
         _ => return None,
     };
     Some(ModContainer {
@@ -276,6 +295,8 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         ASSEMBLER => (ASSEMBLER_CAPACITY, ASSEMBLER_MAX_INSERT, 0),
         CENTRIFUGE => (CENTRIFUGE_CAPACITY, CENTRIFUGE_MAX_INSERT, 0),
         FOUNDRY => (FOUNDRY_CAPACITY, FOUNDRY_MAX_INSERT, 0),
+        // `fragmentForgeData`: 50,000 / 2,048 (`256 * 8`) / 0.
+        GRINDER => (GRINDER_CAPACITY, GRINDER_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -885,6 +906,45 @@ pub(crate) struct FoundryView<'a> {
     pub(crate) output: Option<(&'a str, u32)>,
 }
 
+/// The Fragment Forge saved in a block entity's compound: the machine's three
+/// values and the multiblock facts (seven cores).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct GrinderSaved {
+    /// The buffer, progress and recipe the pure state machine keeps.
+    pub(crate) machine: Grinder,
+    /// The assembly: assembled flag, the cores' offsets, their average quality.
+    pub(crate) assembly: Assembly,
+}
+
+/// The Fragment Forge saved in a block entity's compound; a fresh one is unassembled.
+pub(crate) fn grinder_state(nbt: &Compound, capacity: i32) -> GrinderSaved {
+    GrinderSaved {
+        machine: Grinder {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+    }
+}
+
+/// Write the grinder's tick result back: the same keys every machine uses.
+pub(crate) fn store_grinder(nbt: &mut Compound, saved: &GrinderSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, &saved.assembly);
+}
+
+/// What the readout prints about a Fragment Forge: its saved state, its seven
+/// cores, its one input and its three output slots.
+pub(crate) struct GrinderView<'a> {
+    pub(crate) saved: &'a GrinderSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
+    pub(crate) input: Option<(&'a str, u32)>,
+    pub(crate) outputs: [Option<(&'a str, u32)>; GRINDER_OUTPUTS],
+}
+
 /// The Centrifuge saved in a block entity's compound: the machine's three values,
 /// the multiblock facts (one core) and the Fluid Addon's one tank.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1107,6 +1167,12 @@ const CENTRIFUGE_PROFILE: MachineProfile = MachineProfile {
 /// `foundryData`: 128 FE a tick, no speed multiplier and no divisor.
 const FOUNDRY_PROFILE: MachineProfile = MachineProfile {
     base_energy: FOUNDRY_ENERGY_PER_TICK,
+    base_speed: 1.0,
+    divisor: 1.0,
+};
+/// `fragmentForgeData`: 256 FE a tick, no speed multiplier and no divisor.
+const GRINDER_PROFILE: MachineProfile = MachineProfile {
+    base_energy: GRINDER_ENERGY_PER_TICK,
     base_speed: 1.0,
     divisor: 1.0,
 };
@@ -1839,6 +1905,8 @@ static LAVA_RECIPES: Mutex<Option<Vec<LavaGenRecipe>>> = Mutex::new(None);
 static ASSEMBLER_RECIPES: Mutex<Option<Vec<MultiResolved<AssemblerRecipe>>>> = Mutex::new(None);
 /// The foundry's recipes keep *two* resolved ingredients each — the same shape.
 static FOUNDRY_RECIPES: Mutex<Option<Vec<MultiResolved<FoundryRecipe>>>> = Mutex::new(None);
+/// The grinder's recipes have one resolved ingredient each, like the pulverizer's.
+static GRINDER_RECIPES: Mutex<Option<Vec<Resolved<GrinderRecipe>>>> = Mutex::new(None);
 /// The centrifuge's two tables: both have one resolved ingredient each, so both
 /// use the [`Resolved`] shape (the item table for the click's "is this an
 /// ingredient" test, not only the tick's first match).
@@ -2211,6 +2279,52 @@ fn with_foundry_recipes<R>(
 /// drains (`OritechRecipe.complexMatch` → `MachineBlockEntity.craftItem`). The
 /// first recipe in the table's order that matches wins, as `getRecipeFor`
 /// answers, and the pair is not slot-bound.
+/// The `oritech:grinder` recipe an input starts: the first whose ingredient
+/// takes it (`getRecipeFor(RecipeContent.GRINDER, …)`).
+fn find_grinder(host: &dyn Host, input: &ItemStack) -> Option<GrinderRecipe> {
+    cached_recipe(
+        &GRINDER_RECIPES,
+        host,
+        GRINDER_RECIPE,
+        |id, json| {
+            let recipe = GrinderRecipe::parse(id, json).ok()?;
+            let ingredient = recipe.ingredient.to_string();
+            Some((recipe, ingredient))
+        },
+        input,
+    )
+}
+
+/// Whether any loaded grinder recipe names `stack`: the click's refusal rule.
+fn grinder_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = GRINDER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        let mut resolved = Vec::new();
+        for recipe in host.recipes_of_type(GRINDER_RECIPE).iter() {
+            let Ok(parsed) = GrinderRecipe::parse(&recipe.id, &recipe.json.to_string()) else {
+                continue;
+            };
+            let Ok(Some(ingredient)) = host.recipe_ingredient(&parsed.ingredient.to_string())
+            else {
+                continue;
+            };
+            resolved.push(Resolved {
+                ingredient,
+                recipe: parsed,
+            });
+        }
+        *cache = Some(resolved);
+    }
+    cache
+        .as_ref()
+        .is_some_and(|recipes| recipes.iter().any(|r| r.ingredient.test(host, stack)))
+}
+
 fn foundry_plan(
     host: &dyn Host,
     items: &[Option<ItemStack>],
@@ -2353,6 +2467,154 @@ pub(crate) fn tick_foundry(
     store_foundry(nbt, &saved);
     store_burst(nbt, burst);
     resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
+}
+
+// Slice 11: the Fragment Forge (`oritech:fragment_forge_block`, recipe type
+// `oritech:grinder`). The last item-only processing machine: one input, three
+// outputs, seven cores, 256 FE a tick — and the jar's only survival route to
+// raw nickel, which the powered furnace smelts into the ingot the components need.
+
+/// One server tick of the Fragment Forge: the seven-core assembly gate, then one
+/// `oritech:grinder` craft from the one input slot into three output slots. The
+/// completion is planned before anything is taken, so a result without room
+/// leaves the input and the FE exactly where they were.
+pub(crate) fn tick_grinder(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != GRINDER_SLOTS;
+    if resized {
+        items.resize(GRINDER_SLOTS, None);
+    }
+    let (addons, speed, cost, mut burst) =
+        addon_tick(&*host, level, GRINDER, pos, nbt, GRINDER_PROFILE);
+    let (disabled, flag_moved) = redstone_gate(&*host, level, GRINDER, pos, nbt);
+    let capacity = addons.capacity(GRINDER_CAPACITY);
+    let before = grinder_state(nbt, capacity);
+    let before_burst = burst;
+    let mut saved = before.clone();
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled && !disabled {
+        let input = items[INPUT_SLOT].clone();
+        let recipe = input
+            .as_ref()
+            .and_then(|stack| find_grinder(&*host, stack));
+        let work = recipe.as_ref().and_then(|recipe| {
+            let outputs = grinder_outputs(&*host, items);
+            grinder_output_fits(&recipe.results, grinder_output_refs(&outputs), |item| {
+                max_stack(&*host, item)
+            })
+            .then_some(Work {
+                id: &recipe.id,
+                time: processing_ticks(recipe.time, speed),
+            })
+        });
+        step = saved.machine.tick_with(work, cost);
+        if step == Step::Finished
+            && let Some(recipe) = recipe.as_ref()
+        {
+            finish_grinder(&*host, items, recipe);
+            // `UpgradableMachineBlockEntity.craftItem`'s chamber loop.
+            for _ in 0..addons.chambers {
+                let Some(stack) = items[INPUT_SLOT].clone() else {
+                    break;
+                };
+                let Some(next) = find_grinder(&*host, &stack) else {
+                    break;
+                };
+                let outputs = grinder_outputs(&*host, items);
+                if next.id != recipe.id
+                    || !grinder_output_fits(
+                        &next.results,
+                        grinder_output_refs(&outputs),
+                        |item| max_stack(&*host, item),
+                    )
+                {
+                    break;
+                }
+                finish_grinder(&*host, items, &next);
+            }
+        }
+    }
+    if matches!(step, Step::Working | Step::Finished) {
+        burst.spend(addons.burst_ticks);
+    }
+    burst.recharge(addons.burst_ticks);
+    store_grinder(nbt, &saved);
+    store_burst(nbt, burst);
+    resized || flag_moved || step != Step::Idle || saved != before || burst != before_burst
+}
+
+/// The grinder's three output slots, as `grinder_output_fits` reads them.
+fn grinder_outputs(host: &dyn Host, items: &[Option<ItemStack>]) -> [Option<(String, i32)>; 3] {
+    let slot = |index: usize| {
+        items
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|stack| (stack.item().id(host), count_of(stack)))
+    };
+    [
+        slot(GRINDER_OUTPUT),
+        slot(GRINDER_OUTPUT + 1),
+        slot(GRINDER_OUTPUT + 2),
+    ]
+}
+
+/// The borrowed form of the grinder's output list.
+fn grinder_output_refs(outputs: &[Option<(String, i32)>; 3]) -> [Option<(&str, i32)>; 3] {
+    std::array::from_fn(|index| {
+        outputs[index]
+            .as_ref()
+            .map(|(id, count)| (id.as_str(), *count))
+    })
+}
+
+/// `MachineBlockEntity.craftItem` for the grinder: decide the whole completion
+/// first ([`grinder_install`]), then shrink the input and grant each result into
+/// its own slot. An uninstallable result takes nothing.
+fn finish_grinder(host: &dyn Host, items: &mut [Option<ItemStack>], recipe: &GrinderRecipe) {
+    let input = items
+        .get(INPUT_SLOT)
+        .and_then(Option::as_ref)
+        .map_or(0, count_of);
+    let input = u32::try_from(input).unwrap_or(0);
+    let outputs = grinder_outputs(host, items);
+    let Some(install) = grinder_install(
+        recipe,
+        input,
+        grinder_output_refs(&outputs),
+        |item| max_stack(host, item),
+    ) else {
+        return;
+    };
+    if !apply_grinder_install(items, install) {
+        return;
+    }
+    for (index, result) in recipe.results.iter().enumerate() {
+        grow_output(host, items, GRINDER_OUTPUT + index, result);
+    }
+}
+
+/// Write a [`GrinderInstall`] back: the last item empties the slot (the SDK
+/// represents an empty slot as `None`), a surviving stack keeps its count.
+fn apply_grinder_install(items: &mut [Option<ItemStack>], install: GrinderInstall) -> bool {
+    let Some(left) = install.input_left else {
+        items[INPUT_SLOT] = None;
+        return true;
+    };
+    let Some(mut stack) = items.get_mut(INPUT_SLOT).and_then(Option::take) else {
+        return false;
+    };
+    if stack.set_count(left).is_err() {
+        items[INPUT_SLOT] = Some(stack);
+        return false;
+    }
+    items[INPUT_SLOT] = Some(stack);
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -2653,6 +2915,26 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         insert_held(server, level, pos, click.player, click.hand, &held, slot);
         return Flow::Cancel;
     }
+    if name == GRINDER {
+        // The Fragment Forge's one input slot takes any item a loaded grinder
+        // recipe names; `findLowestMatchingSlot` over one slot is that slot.
+        let held_id = held.item().id(&*server);
+        if !grinder_accepts(&*server, &held) {
+            let message = format!("{held_id} is not an ingredient of a fragmenting recipe");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        }
+        insert_held(
+            server,
+            level,
+            pos,
+            click.player,
+            click.hand,
+            &held,
+            INPUT_SLOT,
+        );
+        return Flow::Cancel;
+    }
     if name == GENERATOR {
         if !is_fuel(burn_time(&*server, &held)) {
             let message = format!("{} is not a fuel", held.item().id(&*server));
@@ -2685,6 +2967,7 @@ fn core_offsets_for(block: &str) -> Option<&'static [[i32; 3]]> {
         ASSEMBLER => Some(&ASSEMBLER_CORE_OFFSETS),
         CENTRIFUGE => Some(&[CENTRIFUGE_CORE_OFFSET]),
         FOUNDRY => Some(&FOUNDRY_CORE_OFFSETS),
+        GRINDER => Some(&GRINDER_CORE_OFFSETS),
         _ => None,
     }
 }
@@ -3125,6 +3408,34 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 time,
             ))
         }
+        GRINDER => {
+            let found = connected_addons(&*host, level, GRINDER, pos);
+            let addons = gathered(&found);
+            let burst = burst_state(&nbt).clamped(addons.burst_ticks);
+            let capacity = addons.capacity(GRINDER_CAPACITY);
+            let saved = grinder_state(&nbt, capacity);
+            let core = core_view(&*host, level, pos, &saved.assembly);
+            let input = slot(INPUT_SLOT);
+            let out0 = slot(GRINDER_OUTPUT);
+            let out1 = slot(GRINDER_OUTPUT + 1);
+            let out2 = slot(GRINDER_OUTPUT + 2);
+            Some(grinder_line(
+                pos,
+                &GrinderView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                    input: input.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    outputs: [
+                        out0.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                        out1.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                        out2.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                    ],
+                },
+                capacity,
+                &AddonView::of(&found, burst, addons.burst_ticks, redstone_state(&nbt)),
+                time,
+            ))
+        }
         other => Some(format!("{pos:?} is a {other}, not an Oritech machine.")),
     }
 }
@@ -3148,6 +3459,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         ASSEMBLER => addons.capacity(ASSEMBLER_CAPACITY),
         CENTRIFUGE => addons.capacity(CENTRIFUGE_CAPACITY),
         FOUNDRY => addons.capacity(FOUNDRY_CAPACITY),
+        GRINDER => addons.capacity(GRINDER_CAPACITY),
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -3281,6 +3593,9 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *ASSEMBLER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *GRINDER_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *CENTRIFUGE_RECIPES
@@ -3457,6 +3772,41 @@ pub(crate) fn foundry_line(
         slot_text(in0),
         slot_text(in1),
         slot_text(view.output),
+        addons.text(),
+    )
+}
+
+/// The Fragment Forge's line: the assembly first, then its one input and three
+/// output slots. The three slots are named `out0`–`out2`, so the harness can
+/// assert the main product and the nickel byproduct in one read.
+pub(crate) fn grinder_line(
+    pos: [i32; 3],
+    view: &GrinderView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    let [out0, out1, out2] = view.outputs;
+    format!(
+        "Fragment Forge at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, input {}, out0 {}, out1 {}, out2 {}, {}, t={t}",
+        saved.machine.energy,
+        capacity,
+        if saved.assembly.assembled { "yes" } else { "no" },
+        saved.machine.progress,
+        slot_text(view.input),
+        slot_text(out0),
+        slot_text(out1),
+        slot_text(out2),
         addons.text(),
     )
 }
@@ -4672,8 +5022,8 @@ mod tests {
         let recipes = engine_recipes();
         assert_eq!(
             recipes.len(),
-            22,
-            "the port carries twenty-one crafting recipes and one smelting recipe: {} found ({:?})",
+            23,
+            "the port carries twenty-one crafting recipes and two smelting recipes: {} found ({:?})",
             recipes.len(),
             recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
@@ -5230,7 +5580,7 @@ mod tests {
         // positions, so the two tables cannot drift: a multiblock added to one
         // and forgotten in the other would take no clicks at all (the foundry's
         // first cut was exactly that bug).
-        for block in [FURNACE, COOLER, LAVA, ASSEMBLER, CENTRIFUGE, FOUNDRY] {
+        for block in [FURNACE, COOLER, LAVA, ASSEMBLER, CENTRIFUGE, FOUNDRY, GRINDER] {
             assert!(
                 core_offsets_for(block).is_some(),
                 "{block} is a multiblock controller"
@@ -5473,6 +5823,7 @@ mod tests {
             CENTRIFUGE_RECIPE,
             CENTRIFUGE_FLUID_RECIPE,
             FOUNDRY_RECIPE,
+            GRINDER_RECIPE,
         ];
         for (path, recipe) in carried_recipes() {
             let kind = recipe["type"].as_str().unwrap_or_default();
@@ -5499,6 +5850,7 @@ mod tests {
             "CENTRIFUGE_RECIPE",
             "CENTRIFUGE_FLUID_RECIPE",
             "FOUNDRY_RECIPE",
+            "GRINDER_RECIPE",
         ];
         for constant in constants {
             let call = format!("register_recipe_type(support::{constant})");
@@ -5545,5 +5897,163 @@ mod tests {
                 "{symbol} appears {count} times in the pattern"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 11: the Fragment Forge (`oritech:fragment_forge_block`)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_grinder_declares_one_input_three_outputs_and_its_own_buffer() {
+        // `FragmentForgeBlockEntity.getSlotAssignments` → `(0, 1, 1, 3)`, inventory 4.
+        let holder = container(GRINDER).expect("the grinder has a container");
+        assert_eq!(holder.slots, GRINDER_SLOTS, "four slots");
+        assert_eq!(holder.inputs, vec![0], "one input");
+        assert_eq!(holder.outputs, vec![1, 2, 3], "three outputs");
+        assert_eq!(
+            holder.faces,
+            std::array::from_fn(|_| (0..GRINDER_SLOTS).collect::<Vec<usize>>()),
+            "automation reaches every slot from every face"
+        );
+        let battery = battery(GRINDER).expect("the grinder has a buffer");
+        assert_eq!(battery.capacity, GRINDER_CAPACITY);
+        assert_eq!(battery.capacity, 50_000);
+        assert_eq!(battery.max_insert, GRINDER_MAX_INSERT);
+        assert_eq!(battery.max_insert, 2_048, "the jar's 256 * 8");
+        assert_eq!(battery.max_extract, 0, "the machine gives no energy out");
+        assert_eq!(battery.insert_faces, [true; 6]);
+        assert_eq!(
+            core_offsets_for(GRINDER),
+            Some(&GRINDER_CORE_OFFSETS[..]),
+            "seven cores assemble it"
+        );
+        assert_eq!(GRINDER_CORE_OFFSETS.len(), 7);
+        assert!(fluids(GRINDER).is_none(), "the grinder has no tank");
+    }
+
+    #[test]
+    fn the_grinders_state_reads_back_from_the_compound_it_wrote() {
+        let mut nbt = Compound::new();
+        let fresh = grinder_state(&nbt, GRINDER_CAPACITY);
+        assert_eq!(fresh, GrinderSaved::default(), "a fresh grinder is empty");
+        let saved = GrinderSaved {
+            machine: Grinder {
+                energy: 10_240,
+                progress: 23,
+                recipe: "oritech:grinder/ore/iron".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: GRINDER_CORE_OFFSETS.to_vec(),
+                quality: 4.0,
+            },
+        };
+        store_grinder(&mut nbt, &saved);
+        assert_eq!(grinder_state(&nbt, GRINDER_CAPACITY), saved);
+        assert_eq!(read_int(&nbt, KEY_PROGRESS), 23);
+        assert_eq!(
+            read_string(&nbt, KEY_RECIPE),
+            "oritech:grinder/ore/iron"
+        );
+        let mut over = Compound::new();
+        write_int(&mut over, KEY_ENERGY, 99_999);
+        assert_eq!(grinder_state(&over, GRINDER_CAPACITY).machine.energy, 50_000);
+    }
+
+    #[test]
+    fn the_grinder_line_prints_seven_cores_and_three_outputs() {
+        let saved = GrinderSaved {
+            machine: Grinder {
+                energy: 0,
+                progress: 0,
+                recipe: String::new(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: GRINDER_CORE_OFFSETS.to_vec(),
+                quality: 4.0,
+            },
+        };
+        let line = grinder_line(
+            [20, 100, 18],
+            &GrinderView {
+                saved: &saved,
+                core: Some(("oritech:machine_core_1+oritech:machine_core_2", 4)),
+                input: Some(("minecraft:iron_ore", 1)),
+                outputs: [
+                    Some(("minecraft:raw_iron", 2)),
+                    Some(("oritech:raw_nickel", 1)),
+                    None,
+                ],
+            },
+            GRINDER_CAPACITY,
+            &AddonView::none(),
+            4242,
+        );
+        assert_eq!(
+            line,
+            "Fragment Forge at [20, 100, 18]: 0/50000 FE, assembled yes core \
+             oritech:machine_core_1+oritech:machine_core_2 quality 4, progress 0 recipe none, \
+             input minecraft:iron_ore x1, out0 minecraft:raw_iron x2, out1 oritech:raw_nickel x1, \
+             out2 empty, addons none, t=4242"
+        );
+    }
+
+    #[test]
+    fn every_carried_grinder_recipe_is_bare_and_resolves_in_this_package() {
+        let recipes: Vec<(String, Value)> = carried_recipes()
+            .into_iter()
+            .filter(|(_, recipe)| recipe["type"] == "oritech:grinder")
+            .collect();
+        assert_eq!(
+            recipes.len(),
+            17,
+            "seventeen grinder files resolve here: {:?}",
+            recipes.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        for (path, recipe) in &recipes {
+            let ingredients = recipe["ingredients"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no ingredients"));
+            assert_eq!(ingredients.len(), 1, "{path}: one input slot");
+            for ingredient in ingredients {
+                let id = ingredient.as_str().unwrap_or_else(|| {
+                    panic!("{path}: {ingredient} is not 26.3's bare ingredient form")
+                });
+                ingredient_resolves(path, id);
+            }
+            let results = recipe["results"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: no results"));
+            assert!(!results.is_empty() && results.len() <= GRINDER_OUTPUTS, "{path}: 1..=3 results");
+            for result in results {
+                let id = result["id"].as_str().unwrap_or_default();
+                ingredient_resolves(path, id);
+            }
+        }
+        // The chain's own file: the artefact's exact numbers, no guessing.
+        let (_, iron) = recipes
+            .iter()
+            .find(|(path, _)| path == "grinder/ore/iron.json")
+            .expect("ore/iron.json is carried");
+        assert_eq!(iron["time"], json("40"));
+        assert_eq!(iron["ingredients"], json(r##"["#minecraft:iron_ores"]"##));
+        assert_eq!(
+            iron["results"],
+            json(r#"[{"count":2,"id":"minecraft:raw_iron"},{"count":1,"id":"oritech:raw_nickel"}]"#)
+        );
+    }
+
+    #[test]
+    fn the_nickel_smelting_recipe_closes_the_grinder_chain() {
+        let (path, recipe) = carried_recipes()
+            .into_iter()
+            .find(|(path, _)| path == "nickel_ingot_from_smelting_raw_nickel.json")
+            .expect("the raw nickel smelting recipe is carried");
+        assert_eq!(recipe["type"], json(r#""minecraft:smelting""#));
+        assert_eq!(recipe["cookingtime"], json("200"));
+        assert_eq!(recipe["ingredient"], json(r#""oritech:raw_nickel""#));
+        assert_eq!(recipe["result"], json(r#"{"count": 1, "id": "oritech:nickel_ingot"}"#));
+        assert_eq!(path, "nickel_ingot_from_smelting_raw_nickel.json");
     }
 }

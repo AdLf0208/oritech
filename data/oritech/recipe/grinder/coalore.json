@@ -1,0 +1,13 @@
+{
+  "ingredients": [
+    "#minecraft:coal_ores"
+  ],
+  "results": [
+    {
+      "count": 3,
+      "id": "minecraft:coal"
+    }
+  ],
+  "time": 40,
+  "type": "oritech:grinder"
+}

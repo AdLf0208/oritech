@@ -399,3 +399,46 @@ Read for behaviour only (the clone was shallow at the same tag `v1.2.13` /
   addon offsets (no `facing` state), the `ADDON_USED` state — the same gaps as slices 1–7.
 - the other 52 `oritech:assembler` files: plastic plates (13), `compat/geore` (29), an unported result
   family (7), `#c:fuels/bio` (2), `#c:leathers` (1) — `notes.md` → *Slice 8* → *The recipe set*.
+
+## Slice 11: the Fragment Forge ("grinder")
+
+Read for behaviour only, at the same tag **`v1.2.13`** / commit
+`4069b6dd14b05dfe0c80126618739b64054630ea` (shallow clone in this session's scratch directory,
+deleted after these findings; the jar in `ports/_shared/licence-cache/` supplied the carried
+texture, item models, lang and loot). Files read:
+
+- `common/src/main/java/rearth/oritech/block/entity/processing/FragmentForgeBlockEntity.java`
+  (the recipe type, output doubling with the yield addon, `getSlotAssignments`, `getCorePositions`,
+  `getAddonSlots`, the `byproductAddon` saved key, `combineSmallDusts` on completion),
+- `common/src/main/java/rearth/oritech/init/OritechConfig.java:348,361,529-542`
+  (`ProcessingMachines.fragmentForgeData` = `BasicMachineConfig(b, …, 50_000, 256 * 8, 0, 256)`),
+- `common/src/main/java/rearth/oritech/block/base/entity/MachineBlockEntity.java:130-221`
+  (`calculateEnergyUsage` = `energyPerTick × efficiency × 1/speed`, `getCraftingResults`,
+  `craftItem`'s result-per-slot and rotating input drain, `checkCraftingFinished` = `time × speed`,
+  `canOutputRecipe` / `canAddToSlot`),
+- `common/src/main/java/rearth/oritech/init/BlockContent.java:135` (`FRAGMENT_FORGE_BLOCK`),
+- the jar's `data/oritech/recipe/grinder/**` (all 114 files), `recipe/nickel_ingot_from_smelting_raw_nickel.json`,
+  `assets/oritech/lang/en_us.json` and the block/item assets named in `CONTENT.md`.
+
+The brief's `UsageConfig`/`StorageConfig` names are **not** classes in v1.2.13: the four numbers live
+in the reusable `OritechConfig.BasicMachineConfig` (capacity / insertion / extraction / energyPerTick),
+which is what `fragmentForgeData` instantiates. This port reads those numbers from there, not from
+the class names in the brief.
+
+| Fact | Upstream | This port |
+|---|---|---|
+| capacity / insert / extract / FE per tick | 50,000 / 2,048 (`256*8`) / 0 / 256 | `GRINDER_*` |
+| slots | `InventorySlotAssignment(0, 1, 1, 3)`: 1 in, 3 out, inventory 4 | container 4/1/3 |
+| seven cores | (0,1,0), (0,0,1), (0,1,1), (1,0,1), (1,1,1), (1,0,0), (1,1,0) | `GRINDER_CORE_OFFSETS` |
+| five addon slots, yield addon doubles byproducts (index > 0) | `getAdditionalStatFromAddon` / `getCraftingResults` | not ported: no yield addon; byproducts are the recipe's own results |
+| `combineSmallDusts` on craft completion | `FragmentForgeBlockEntity.craftItem` | not ported: no small-dust family here |
+| `grinder/ore/iron.json` | `#minecraft:iron_ores` → 2 raw iron + 1 `oritech:raw_nickel`, `time: 40` | carried; 40 × 256 = 10,240 FE |
+| nickel smelting | `minecraft:smelting`, `cookingtime: 200` | furnace at 0.5 speed: 100 ticks, 3,200 FE |
+
+Ported: the block, its seven-core assembly, the `oritech:grinder` recipe type and the 17 files whose
+result and every ingredient resolve here, the one-input/three-output container, the 256 FE/t tick,
+the exact consume-then-grant rule and the readout. Not ported: the yield addon and its doubled
+byproducts, the five addon slots (the port's addon scan tops out at three), `combineSmallDusts`, the
+machine's screen/GeckoLib model, and the 97 recipes that need items, fluids or `c:` tags this
+package does not have. `notes.md` → *Slice 11* has the per-family closure table.
+

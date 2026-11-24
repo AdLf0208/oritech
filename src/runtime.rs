@@ -2111,6 +2111,211 @@ impl Foundry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Slice 11: the Fragment Forge (`oritech:fragment_forge_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.fragmentForgeData.energyCapacity`.
+pub const GRINDER_CAPACITY: i32 = 50_000;
+/// ...`.maxEnergyInsertion` (`256 * 8`): the most one insert moves.
+pub const GRINDER_MAX_INSERT: i32 = 2_048;
+/// ...`.energyPerTick`: FE one working tick spends.
+pub const GRINDER_ENERGY_PER_TICK: i32 = 256;
+/// `FragmentForgeBlockEntity.getSlotAssignments`'s `InventorySlotAssignment(0, 1, 1, 3)`.
+pub const GRINDER_INPUTS: usize = 1;
+/// The three output slots; `getInventorySize()` is 4.
+pub const GRINDER_OUTPUTS: usize = 3;
+pub const GRINDER_SLOTS: usize = GRINDER_INPUTS + GRINDER_OUTPUTS;
+/// `FragmentForgeBlockEntity.getCorePositions`: seven cores around the controller.
+pub const GRINDER_CORE_OFFSETS: [[i32; 3]; 7] = [
+    [0, 1, 0],
+    [0, 0, 1],
+    [0, 1, 1],
+    [1, 0, 1],
+    [1, 1, 1],
+    [1, 0, 0],
+    [1, 1, 0],
+];
+
+/// `MachineBlockEntity.calculateEnergyUsage` for the grinder: 256 × eff(1) × 1/speed(1).
+#[must_use]
+pub fn grinder_energy_usage() -> i32 {
+    energy_usage(GRINDER_ENERGY_PER_TICK, 1.0, 1.0, 1.0)
+}
+
+/// `MachineBlockEntity.checkCraftingFinished`'s duration: `time * speed` (1 with no addons).
+#[must_use]
+pub fn grinder_ticks(time: u32) -> u32 {
+    processing_ticks(time, 1.0)
+}
+
+/// `MachineBlockEntity.canOutputRecipe` over the grinder's three output slots:
+/// every result must fit its own slot, in file order.
+#[must_use]
+pub fn grinder_output_fits(
+    results: &[RecipeResult],
+    outputs: [Option<(&str, i32)>; GRINDER_OUTPUTS],
+    max_stack: impl Fn(&str) -> i32,
+) -> bool {
+    results.len() <= outputs.len()
+        && results
+            .iter()
+            .zip(outputs)
+            .all(|(result, slot)| output_fits(slot, result, max_stack(&result.item)))
+}
+
+/// What one grinder completion takes: the input item's count after the craft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrinderInstall {
+    /// `None` empties the input slot; `Some(left)` keeps that many.
+    pub input_left: Option<u32>,
+}
+
+/// Decide the whole completion before taking anything: the input exists and every
+/// result fits its own output slot. The consuming glue applies only this plan.
+#[must_use]
+pub fn grinder_install(
+    recipe: &GrinderRecipe,
+    input_count: u32,
+    outputs: [Option<(&str, i32)>; GRINDER_OUTPUTS],
+    max_stack: impl Fn(&str) -> i32,
+) -> Option<GrinderInstall> {
+    (input_count > 0 && grinder_output_fits(&recipe.results, outputs, max_stack)).then_some(
+        GrinderInstall {
+            input_left: after_consuming(input_count),
+        },
+    )
+}
+
+/// Why a grinder recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrinderError {
+    Unreadable,
+    WrongInputCount,
+    WrongResultCount,
+    BadResult,
+    FluidOutput,
+    BadTime,
+}
+
+impl std::fmt::Display for GrinderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::WrongInputCount => "not exactly one ingredient",
+            Self::WrongResultCount => "no result or more than three",
+            Self::BadResult => "a result without an item id or with a bad count",
+            Self::FluidOutput => "a fluid recipe this package cannot run",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for GrinderError {}
+
+/// An `oritech:grinder` recipe: one ingredient, up to three item results, a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrinderRecipe {
+    pub id: String,
+    /// Its ingredient, as the pin's `native_recipe_ingredient` reads it.
+    pub ingredient: Value,
+    /// Its results, in file order (one per output slot).
+    pub results: Vec<RecipeResult>,
+    pub time: u32,
+}
+
+impl GrinderRecipe {
+    /// Parse one recipe file. The fluid fields are refused: this machine has no tank.
+    pub fn parse(id: &str, json: &str) -> Result<Self, GrinderError> {
+        let value = Value::parse(json).ok_or(GrinderError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(GrinderError::Unreadable);
+        }
+        let ingredients = value
+            .get("ingredients")
+            .and_then(Value::as_array)
+            .ok_or(GrinderError::WrongInputCount)?;
+        if ingredients.len() != GRINDER_INPUTS {
+            return Err(GrinderError::WrongInputCount);
+        }
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(GrinderError::WrongResultCount)?;
+        if results.is_empty() || results.len() > GRINDER_OUTPUTS {
+            return Err(GrinderError::WrongResultCount);
+        }
+        let mut parsed = Vec::with_capacity(results.len());
+        for entry in results {
+            let item = entry
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|item| !item.is_empty())
+                .ok_or(GrinderError::BadResult)?;
+            let count = entry.get("count").and_then(Value::as_i64).unwrap_or(1);
+            if !(1..=99).contains(&count) {
+                return Err(GrinderError::BadResult);
+            }
+            parsed.push(RecipeResult {
+                item: item.to_owned(),
+                count: count as i32,
+            });
+        }
+        // This machine declares no tank: a file that moves a fluid would consume
+        // its item input and produce nothing. Refuse it rather than load it.
+        if value.get("fluidInput").is_some_and(|input| !input.is_null())
+            || value
+                .get("fluidOutputs")
+                .and_then(Value::as_array)
+                .is_some_and(|outputs| !outputs.is_empty())
+        {
+            return Err(GrinderError::FluidOutput);
+        }
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(GrinderError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            ingredient: ingredient_json(&ingredients[0]),
+            results: parsed,
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Fragment Forge's state: the same three values every processing machine keeps.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grinder {
+    pub energy: i32,
+    pub progress: u32,
+    pub recipe: String,
+}
+
+impl Grinder {
+    /// An empty grinder.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick at the machine's (or its addons') per-tick cost.
+    pub fn tick_with(&mut self, work: Option<Work<'_>>, cost: i32) -> Step {
+        advance(
+            &mut self.energy,
+            &mut self.progress,
+            &mut self.recipe,
+            work,
+            cost,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4370,5 +4575,118 @@ mod tests {
             addon_slots("oritech:foundry_block"),
             &[[0, 0, -1], [0, 0, 2]]
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Slice 11: the Fragment Forge (`oritech:fragment_forge_block`)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn the_grinder_uses_the_jars_fragment_forge_numbers() {
+        // OritechConfig.ProcessingMachines.fragmentForgeData: 50,000 / 2,048 / 0 / 256.
+        assert_eq!(GRINDER_CAPACITY, 50_000);
+        assert_eq!(GRINDER_MAX_INSERT, 2_048);
+        assert_eq!(GRINDER_ENERGY_PER_TICK, 256);
+        assert_eq!(grinder_energy_usage(), 256, "256 × eff(1) × 1/speed(1)");
+        assert_eq!(grinder_ticks(40), 40, "grinder/ore/iron.json's time: 40");
+        assert_eq!(GRINDER_SLOTS, 4, "InventorySlotAssignment(0, 1, 1, 3)");
+        assert_eq!(GRINDER_INPUTS, 1);
+        assert_eq!(GRINDER_OUTPUTS, 3);
+        assert_eq!(
+            GRINDER_CORE_OFFSETS,
+            [
+                [0, 1, 0],
+                [0, 0, 1],
+                [0, 1, 1],
+                [1, 0, 1],
+                [1, 1, 1],
+                [1, 0, 0],
+                [1, 1, 0],
+            ],
+            "FragmentForgeBlockEntity.getCorePositions"
+        );
+    }
+
+    #[test]
+    fn an_iron_ore_grinds_into_two_raw_iron_and_one_raw_nickel_for_10240_fe() {
+        // The jar's data/oritech/recipe/grinder/ore/iron.json, in 26.3's bare form.
+        let recipe = GrinderRecipe::parse(
+            "oritech:grinder/ore/iron",
+            r##"{"type":"oritech:grinder","ingredients":["#minecraft:iron_ores"],"results":[{"count":2,"id":"minecraft:raw_iron"},{"count":1,"id":"oritech:raw_nickel"}],"time":40}"##,
+        )
+        .expect("the iron ore recipe parses");
+        assert_eq!(
+            recipe.ingredient,
+            Value::String("#minecraft:iron_ores".to_owned())
+        );
+        assert_eq!(recipe.time, 40);
+        assert_eq!(recipe.results.len(), 2);
+        assert_eq!(recipe.results[0], RecipeResult { item: "minecraft:raw_iron".to_owned(), count: 2 });
+        assert_eq!(recipe.results[1], RecipeResult { item: "oritech:raw_nickel".to_owned(), count: 1 });
+        let mut machine = Grinder { energy: 40 * GRINDER_ENERGY_PER_TICK, progress: 0, recipe: String::new() };
+        for tick in 1..=40 {
+            let step = machine.tick_with(Some(Work { id: &recipe.id, time: 40 }), GRINDER_ENERGY_PER_TICK);
+            if tick < 40 {
+                assert_eq!(step, Step::Working, "tick {tick}");
+            } else {
+                assert_eq!(step, Step::Finished, "tick 40");
+            }
+        }
+        assert_eq!(machine.energy, 0, "40 × 256 = 10,240 FE, all spent");
+        assert_eq!(machine.progress, 0);
+        assert_eq!(machine.recipe, "oritech:grinder/ore/iron");
+    }
+
+    #[test]
+    fn a_grinders_three_output_slots_take_their_own_results_and_block_a_craft() {
+        let recipe = GrinderRecipe::parse(
+            "oritech:grinder/raw/iron",
+            r##"{"type":"oritech:grinder","ingredients":["#c:raw_materials/iron"],"results":[{"count":1,"id":"oritech:iron_clump"},{"count":3,"id":"oritech:small_iron_clump"},{"count":3,"id":"oritech:small_nickel_clump"}],"time":40}"##,
+        )
+        .expect("a three-result grinder recipe");
+        let empty: [Option<(&str, i32)>; 3] = [None, None, None];
+        assert!(grinder_output_fits(&recipe.results, empty, |_| 64));
+        // A full second slot of the wrong item refuses the whole craft.
+        let blocked: [Option<(&str, i32)>; 3] = [None, Some(("minecraft:dirt", 1)), None];
+        assert!(!grinder_output_fits(&recipe.results, blocked, |_| 64));
+        assert_eq!(
+            grinder_install(&recipe, 1, blocked, |_| 64),
+            None,
+            "an uninstallable craft takes nothing"
+        );
+        let room: [Option<(&str, i32)>; 3] = [None, None, Some(("oritech:small_nickel_clump", 61))];
+        assert!(grinder_output_fits(&recipe.results, room, |_| 64));
+        assert_eq!(
+            grinder_install(&recipe, 7, room, |_| 64),
+            Some(GrinderInstall { input_left: Some(6) })
+        );
+    }
+
+    #[test]
+    fn a_grinder_recipe_with_a_fluid_or_no_time_is_refused() {
+        let fluid = r#"{"type":"oritech:grinder","ingredients":["minecraft:stone"],"results":[{"count":1,"id":"minecraft:sand"}],"time":40,"fluidInput":{"fluid":"minecraft:water","amount":100}}"#;
+        assert_eq!(
+            GrinderRecipe::parse("bad", fluid).unwrap_err(),
+            GrinderError::FluidOutput
+        );
+        let no_time = r#"{"type":"oritech:grinder","ingredients":["minecraft:stone"],"results":[{"count":1,"id":"minecraft:sand"}]}"#;
+        assert_eq!(
+            GrinderRecipe::parse("bad", no_time).unwrap_err(),
+            GrinderError::BadTime
+        );
+    }
+
+    #[test]
+    fn a_starved_grinder_keeps_its_progress_and_a_recipe_change_resets_it() {
+        let mut machine = Grinder { energy: 100, progress: 25, recipe: "a".to_owned() };
+        assert_eq!(machine.tick_with(Some(Work { id: "a", time: 40 }), 256), Step::Starved);
+        assert_eq!(machine.energy, 100, "a starved machine spends nothing");
+        assert_eq!(machine.progress, 25, "a starved machine keeps its progress");
+        assert_eq!(
+            machine.tick_with(Some(Work { id: "b", time: 40 }), 256),
+            Step::Starved
+        );
+        assert_eq!(machine.progress, 0, "a different recipe restarts the count");
+        assert_eq!(machine.recipe, "b");
     }
 }

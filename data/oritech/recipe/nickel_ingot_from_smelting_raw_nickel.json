@@ -1,0 +1,12 @@
+{
+  "category": "misc",
+  "cookingtime": 200,
+  "experience": 1.0,
+  "group": "nickelsmelting",
+  "ingredient": "oritech:raw_nickel",
+  "result": {
+    "count": 1,
+    "id": "oritech:nickel_ingot"
+  },
+  "type": "minecraft:smelting"
+}

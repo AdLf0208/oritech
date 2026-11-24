@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "oritech:block/fragment_forge_block"
+    }
+  }
+}

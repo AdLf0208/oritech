@@ -2,9 +2,11 @@
 
 > **Build slots (v2):** every build/test step goes through the campaign runner
 > (`ports/tools/build-slot.sh` from the campaign root). It **blocks in the kernel** until a slot
-> is free — never poll, never background a build, never end a turn holding a lease. It does **not**
-> `cd` into the port: wrap the command (`bash -c 'cd ports/oritech && …'`), pass `BUILD_LOCAL=1`
-> (the far box has no copy of this port), and never pass `--target-dir`. A timeout exits **75**.
+> is free — never poll, never background a build, never end a turn holding a lease. Compile steps
+> forward automatically to the second box (`AdLf-PC`): call
+> `build-slot.sh run --job <j> --port ports/oritech --step test -- bash -c '<cmd>'` from the campaign
+> root; the remote runner already `cd`s into the port, so **do not** repeat `cd ports/oritech` in the
+> command and **do not** set `BUILD_LOCAL=1`. Never pass `--target-dir`. A timeout exits **75**.
 > Read `../_shared/build-slots-usage.md` before running anything.
 
 This repository is the port, not Horizon and not horizon-mixins. Never modify the original

@@ -5,6 +5,39 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.15 — slice 11, the Fragment Forge and the nickel chain (pin `0a875da`, 2026-11-24)
+
+Compile steps ran through `build-slot.sh run --job G10-oritech --port ports/oritech` and printed
+`build-slot: forwarding … to the remote runner` (`AdLf-PC`); no `BUILD_LOCAL=1`, no `--target-dir`.
+The `--offscreen` e2e leg stayed local. The package bytes were fixed before the first build and not
+changed afterwards. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'rm -f Cargo.lock && cargo test --offline grinder'`, new bodies `todo!()` | **0 passed, 4 failed** — `not yet implemented: slice 11: parse an oritech:grinder recipe` | `slice11-test-red.log` |
+| 2 | `python3 tools/slice11-glue-counterfactual.py mutate`, `cargo test --offline grinder`, `restore` | **7 passed, 2 failed** (the declaration and saved-state tests); restored byte-identically (`sha256 450f9418…`) | `slice11-glue-red-counterfactual.log` |
+| 3 | `build-slot.sh run --step test -- bash -c 'rm -f Cargo.lock && cargo test --offline'` | **158 passed, 0 failed**, `sdk-test.log` regenerated at 0.2.15 | `sdk-test.log` |
+| 4 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `slice11-fmt-clippy.log` |
+| 5 | `build-slot.sh run --step build -- bash -c 'rm -f Cargo.lock && cargo horizon-mod build'`, twice, artifact deleted between | **268,993 B**, sha256 `9357dc1224c55f646d4fd075fdc993eb84632f5cc5aa19c21ad8f1beb7c2091c`, `cmp` identical, **327 entries, no `Cargo.lock`** | `slice11-build.log`, `slice11-build-second.log` |
+| 6 | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.15 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `268993 bytes`, exit 0 | `slice11-check-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `slice11-check-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build) | `slice11-check-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, `no packed Cargo.lock`, 158 tests, 0 warnings | `slice11-verify-package.log` |
+| 10 | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` | `slice11-recipe-types.log` |
+| 11 | `python3 tools/carry_content.py --check` | `317 files, 0 differ` | — |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.15; no `native-*` tag carried this mod) | **`Compiling oritech (1 of 1)`**, `native-0a875da-803964e0898b`; `strings liboritech.so` shows `Fragment Forge at ` and `oritech:grinder` | `slice11-launcher-build.log` |
+| 13 | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0`, phases GA–GG | `e2e-slice11.log` |
+| 14 | same with `CONTROL=1` (the package-less build first) | **PASS** + `EXIT:0`; no raw nickel and every block id including the grinder stayed `minecraft:air` | `e2e-slice11-differential.log` |
+| 15 | same with `GAME=$CONTROL_GAME` (whole scenario on the package-less build) | **EXIT:1** — `the generator did not place` | `e2e-slice11-control.log` |
+| 16 | same with `SELFTEST_GRINDER=1` | **EXIT:1** — `OUT1 is 'oritech:raw_nickel x1', expected 'oritech:raw_nickel x2'` | `e2e-slice11-selftest-grinder.log` |
+| 17 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | **60 logs, 60 ok, 0 bad** (the earlier 55 untouched) | stdout |
+| 18 | `python3 ports/tools/check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` | stdout |
+| 19 | `python3 ports/tools/check-skills.py --notes ports/oritech` | PASS | stdout |
+
+The first e2e run (`e2e-slice11-first.log`) failed on GG's exact-FE assertion (`2560` vs `0`): the
+5,000 FE left from the blocked leg let the freed craft tick during the chat round-trips. The phase now
+drains before emptying the byproduct slot; the second run is green.
+
 ## 0.2.14 — the registry's R9: no registry dependency, no `Cargo.lock`, an in-tree JSON reader (pin `0a875da`, 2026-11-23)
 
 The registry's automated check now enforces **R9**: `Cargo.toml` may declare only the SDK path

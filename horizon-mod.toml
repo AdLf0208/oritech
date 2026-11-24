@@ -2,7 +2,7 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.14"
+version = "0.2.15"
 description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 10: the Basic Generator, the Pulverizer, the Powered
 Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
 Unit Addon, the material and component chain, the Assembler, the Centrifuge and the Foundry. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
@@ -32,14 +32,20 @@ output, that spends 128 FE a tick and matches its recipe's two ingredients in an
 iron and one coal dust become one steel in 26 ticks for 3,328 FE, a gold and a redstone one electrum,
 a diamond and a nickel one adamant, and a gold and a netherite scrap one netherite, each in 80 ticks
 for 10,240 FE, from the jar's own `oritech:foundry` files.
+The Fragment Forge is the last item-only processing machine: a controller plus seven cores, one input
+and three outputs, a 50,000 FE buffer taking 2,048 an insert and spending 256 FE a tick. Its jar's
+`oritech:grinder` recipe for iron ore yields two raw iron and one raw nickel in 40 ticks for exactly
+10,240 FE; the raw nickel smelts in the powered furnace into one nickel ingot in 100 ticks for 3,200
+FE — the ore-to-ingot chain, without worldgen.
 Every buffer is a real block energy capability another mod's cable can read, every tank a real block
 fluid handler another mod's pipe can fill, and a fuelled generator pushes its FE to the machines beside
 it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the refinery
 and the oil chain (blocked: `#c:naphtha` is a conventional tag no mod in this pack declares and the pin
 has no fluid-tag query), the special
 addons (the control unit's four comparator modes, proxy, extender), the other multiblock
-machines, and the ores themselves — the ingots' worldgen cannot generate at this nightly, so the chain
-is craftable from the components down and the ore is the next slice."""
+machines, and the ores themselves — at this nightly a content package's configured features cannot
+generate, so the grinder is the survival route to nickel; platinum and the other ores are still
+gaps."""
 authors = ["Rearth", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins, beside
 # the carried assets/ and data/. The id is the resource namespace and the only identity.

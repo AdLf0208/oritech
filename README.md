@@ -1,4 +1,4 @@
-# Oritech for Horizon — slices 1 to 10
+# Oritech for Horizon — slices 1 to 11
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
 Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon**, the
@@ -95,6 +95,14 @@ models, textures, recipes, loot, lang, tags).
   and a gold + a netherite scrap → one **netherite ingot**, the last three in **80 ticks for exactly
   10,240 FE** each. Two iron ingots make no alloy at all, and the foundry itself crafts at a table
   from a cauldron, a motor, three copper and two electrum.
+- **Fragment Forge** (`oritech:fragment_forge_block`) — the last item-only processing machine and
+  the jar's "grinder": a controller plus **seven cores** around it, **one input and three outputs**, a
+  **50,000 FE** buffer taking **2,048** an insert and spending **256 FE a tick**. An `oritech:grinder`
+  recipe matches its one input and puts each result in its own output slot: one `minecraft:iron_ore`
+  becomes **2 raw iron + 1 raw nickel in 40 ticks for exactly 10,240 FE**. The raw nickel then smelts
+  in the powered furnace into **one nickel ingot in 100 ticks for 3,200 FE** — a survival route to
+  nickel with no worldgen. A result without a free slot takes nothing and spends nothing, as on every
+  machine here.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and
@@ -109,16 +117,16 @@ models, textures, recipes, loot, lang, tags).
 ## What it does not do (yet)
 
 No GUI, no GeckoLib models (the machines are drawn as a full cube of their own
-texture), no **ores** (the pin cannot register a content package's configured
-features, so the nickel and platinum ingots come from the creative tab or
-`/give` while everything from the components down is craftable), no special addons (the Control Unit
+texture), no **ore worldgen** (the pin cannot register a content package's configured features;
+the grinder makes raw nickel from iron ore and the powered furnace smelts it, while platinum still
+has no source), no special addons (the Control Unit
 Addon's four comparator modes, inventory proxy, acceptor, extender, combi,
 quarry), no energy or item pipes, no comparator output, no cold-biome speed bonus
 on the chiller
 (the pin has no biome read), no bucket input *slots* on the lava generator (a
 bucket in the hand fills it), no other multiblock (atomic forge,
 refinery), no augment stations, no accelerator ring or
-reactor, no ore processing chain and no ores — and the **refinery is blocked** outright: its 22
+reactor, no rest of the ore-processing chain and no other ores — and the **refinery is blocked** outright: its 22
 recipes all take or make a fluid this package cannot declare, `#c:naphtha` among them. `notes.md` lists every gate and
 deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
@@ -126,7 +134,7 @@ deviation; `FINDINGS.md` has the upstream behaviour and the jar numbers.
 
 ```sh
 python3 tools/carry_content.py              # assets/ + data/ from the ATM10 jar (deterministic)
-cargo test --offline                       # the rules and the carried data: 148 tests
+cargo test --offline                       # the rules and the carried data: 158 tests
 cargo clippy --all-targets --offline -- -D warnings
 cargo fmt --check                          # NOT --all: that checks the fetched SDK
 cargo horizon-mod build                    # target/horizon-mod/oritech.hmod
@@ -146,8 +154,9 @@ oritech`), because a native `.hmod` cannot load on an unmodded build. `tools/e2e
 and its assertions, driven with `GAME=` (see the file's header). `SELFTEST=1`, `SELFTEST_COOLER=1`,
 `SELFTEST_LAVA=1`, `SELFTEST_ADDONS=1`, `SELFTEST_REDSTONE=1` and `SELFTEST_CRAFT=1` must fail.
 
-Every build/test step goes through `../tools/build-slot.sh` in the campaign tree (`BUILD_LOCAL=1`,
-since the far box has no copy of this port). Pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`, mixins
+Every build/test step goes through `../tools/build-slot.sh` in the campaign tree; compile steps
+forward automatically to the second box (`AdLf-PC`), which now has a working `cargo-horizon-mod`
+CLI. Pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`, mixins
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`.
 
 Licence: CC0-1.0 (`LICENSE`, `LICENSE-NOTICE.md`).

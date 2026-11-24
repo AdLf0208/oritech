@@ -1,0 +1,13 @@
+{
+  "ingredients": [
+    "minecraft:gravel"
+  ],
+  "results": [
+    {
+      "count": 1,
+      "id": "minecraft:sand"
+    }
+  ],
+  "time": 120,
+  "type": "oritech:grinder"
+}

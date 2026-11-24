@@ -204,3 +204,37 @@ source; `notes.md` records each one.
    its jar `powered` state is not declared either (it would only choose between
    `_on` and `_powered` models the port does not carry).
 
+## Slice 11: the Fragment Forge, the raw nickel item and the grinder recipes (29 files)
+
+**Carried byte for byte** (`CARRIED`): the Fragment Forge's GeckoLib base texture
+(`assets/oritech/textures/block/models/fragment_forge_block.png`) and the raw nickel item's
+`models/item/raw_nickel.json` + `textures/item/raw_nickel.png`.
+
+**Authored** from the jar's facts: the block's one-variant blockstate and `cube_all` block model
+(the jar's blockstate names the `machine_speed_addon` placeholder and its item model is
+`builtin/entity`), its 26.3 item definition, its block declaration (the `minecraft:iron_block` copy
+with `occludes: false`), self-drop loot table, lang name (`block.oritech.fragment_forge_block` →
+"Fragment Forge"), place in the machines tab and the pickaxe/stone-tool tags; the raw nickel item's
+26.3 item definition, `horizon/item` declaration (`minecraft:iron_ingot` template) and lang name
+(`Raw Nickel`).
+
+**Seventeen `oritech:grinder` recipes** (`REWRITTEN_RECIPES`, 26.3's bare ingredient form — the jar's
+`{"item": …}` / `{"tag": …}` objects are rewritten, results/time/type are the jar's):
+`blaze`, `bone`, `coal`, `coalore`, `diamondore`, `dripstone`, `glowstoneore`, `lapisore`,
+`netheritescrap`, `prismarine`, `quartzore`, `redstoneore`, `sand`, `string` and
+`ore/{copper,gold,iron}`. `ore/iron.json` is the chain's source: `#minecraft:iron_ores` → 2
+`minecraft:raw_iron` + 1 `oritech:raw_nickel` in 40 ticks. **One vanilla smelting recipe** is carried:
+`nickel_ingot_from_smelting_raw_nickel.json` (`cookingtime: 200` → 100 ticks at the furnace's 0.5
+speed), closing ore → grinder → raw nickel → furnace → nickel ingot with no worldgen.
+
+The other 97 grinder files are refused by the closure rule (result and every ingredient must
+resolve): mod dusts/clumps/gems/plastics and `oritech:still_*` fluids this package does not carry,
+`c:` tags with no values here (including `ore/nickel`'s `c:ores/nickel` — the nickel ore is worldgen
+the pin cannot generate), and `compat/*` recipes naming another mod. `notes.md` → *Slice 11* has the
+per-family table. The Fragment Forge's own crafting recipe (`crafting/crusher.json`) needs
+`#c:plates/plastic` and `oritech:flux_gate`, so the block is obtained with `/give`, like the other
+machines whose recipes the chain cannot yet pay for.
+
+`carry_content.py --check` writes **317 files**, 0 differ.
+
+

@@ -12,6 +12,7 @@ The lines are (see `src/support.rs`, the readout section):
     Assembler at [0, 100, 12]: 6144/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe oritech:assembler/motor, in0 oritech:nickel_ingot x1, in1 oritech:steel_ingot x2, in2 oritech:magnetic_coil x2, in3 empty, out0 empty, addons none, t=424
     Centrifuge at [8, 100, 10]: 3200/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe oritech:centrifuge/carbon, tank minecraft:water 250/8000 mB, input empty, out0 oritech:carbon_fibre_strands x1, out1 empty, addons none, t=424
     Foundry at [4, 100, 14]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3 quality 2, progress 0 recipe none, in0 minecraft:iron_ingot x1, in1 oritech:coal_dust x1, out0 empty, addons none, t=424
+    Fragment Forge at [20, 100, 18]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2 quality 4, progress 0 recipe none, input minecraft:iron_ore x1, out0 minecraft:raw_iron x2, out1 oritech:raw_nickel x1, out2 empty, addons none, t=424
     oritech:cooler_block at [12, 100, 0]: tank minecraft:water 1000/4000 mB (asked 1000, accepted 1000)
     oritech:centrifuge_block at [20, 100, 10]: slot 1 = oritech:carbon_fibre_strands x64 (asked 64).
 
@@ -37,6 +38,7 @@ FIELDS = (
     "INPUT",
     "OUT0",
     "OUT1",
+    "OUT2",
     "IN0",
     "IN1",
     "IN2",
@@ -145,6 +147,18 @@ CENTRIFUGE = re.compile(
 )
 
 
+# Slice 11: the Fragment Forge's line carries the assembly, its one input and
+# three outputs (the third is `out2`, so a byproduct can be asserted in one read).
+GRINDER = re.compile(
+    r"^Fragment Forge at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"input (?P<INPUT>.+?), out0 (?P<OUT0>.+?), out1 (?P<OUT1>.+?), out2 (?P<OUT2>.+?), "
+    + ADDON_FIELD
+)
+
+
 # Slice 10: the foundry's line carries the assembly, its two input slots and its
 # one output (the assembler's field names, so `machine_holds` works on it).
 FOUNDRY = re.compile(
@@ -168,6 +182,7 @@ def main(argv: list[str]) -> int:
         ("assembler", ASSEMBLER),
         ("centrifuge", CENTRIFUGE),
         ("foundry", FOUNDRY),
+        ("grinder", GRINDER),
         ("fluid", FLUID),
         ("slot", SLOT),
     ):

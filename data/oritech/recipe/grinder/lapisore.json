@@ -1,0 +1,13 @@
+{
+  "ingredients": [
+    "#minecraft:lapis_ores"
+  ],
+  "results": [
+    {
+      "count": 8,
+      "id": "minecraft:lapis_lazuli"
+    }
+  ],
+  "time": 40,
+  "type": "oritech:grinder"
+}

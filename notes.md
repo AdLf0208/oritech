@@ -2885,45 +2885,203 @@ themselves.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
+## Slice 11 — the Fragment Forge (`oritech:fragment_forge_block`), the "grinder" (0.2.15, 2026-11-24)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **13**,
+verbatim: "Not carried: the powered furnace (a multiblock machine that needs its core assembled), the
+assembler, atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the
+augment stations, the jetpack and equipment, the resource-node worldgen and the ores. All later
+slices." The 0.2.14 report's `## Next slice` named it: it is the last item-only processing machine
+and it closes the gap slice 7 left — the nickel ingot's only survival source was `/give`, because
+the ore is worldgen the pin cannot register (`blocked(configured-feature-not-registered)`).
+
+**Brief/artefact discrepancy, decided by the artefact.** The brief (and the 0.2.14 next-slice) calls
+the block `oritech:grinder_block`. **There is no such block in the jar.** `oritech:grinder` is the
+*recipe type*; `BlockContent.java:135` declares `FRAGMENT_FORGE_BLOCK`, the jar ships
+`assets/oritech/blockstates/fragment_forge_block.json` and lang
+`block.oritech.fragment_forge_block` = "Fragment Forge". Per the campaign rule "when a brief and the
+artefact disagree, the artefact wins", the delivered block id is **`oritech:fragment_forge_block`**;
+the recipe type is `oritech:grinder` and the machine is the Fragment Forge. This is a naming
+correction, not a different feature.
+
+**Class + tier** unchanged: class `content`, tier `deep` (`ports/ledger.csv`), machines shape — a
+block entity, a declared 1-in/3-out container, a declared FE buffer, one custom recipe type, a tick,
+a **seven-core** multiblock. No renderer, no GUI, no tank, no network.
+
+### The jar's numbers (upstream `Rearth/Oritech` v1.2.13, commit `4069b6d`)
+
+The brief names `UsageConfig`/`StorageConfig`; those classes do **not** exist in v1.2.13. The four
+numbers live in the reusable `OritechConfig.BasicMachineConfig` (`:529-542`), instantiated at
+`ProcessingMachines.fragmentForgeData` (`:348,361`):
+
+| Value | Upstream file | This port |
+|---|---|---|
+| capacity **50,000 FE** | `fragmentForgeData.energyCapacity` (`OritechConfig.java:361`) | `GRINDER_CAPACITY` |
+| insert **2,048 FE** (`256 * 8`) | same, `.maxEnergyInsertion` | `GRINDER_MAX_INSERT` |
+| extract **0** | same, `.maxEnergyExtraction` | `battery(GRINDER)` |
+| **256 FE a working tick** | same, `.energyPerTick`; `calculateEnergyUsage` = 256 × eff(1) × 1/speed(1) (`MachineBlockEntity.java:144-146`) | `grinder_energy_usage()` |
+| 1 input, **3 outputs**, inventory 4 | `FragmentForgeBlockEntity.getSlotAssignments` → `InventorySlotAssignment(0, 1, 1, 3)` (`:130-151`) | container slots 0 in, 1–3 out |
+| **seven cores** at (0,1,0),(0,0,1),(0,1,1),(1,0,1),(1,1,1),(1,0,0),(1,1,0) | `getCorePositions` (`:168-179`) | `GRINDER_CORE_OFFSETS` |
+| five addon slots; yield addon doubles results after index 0 | `getAddonSlots`, `getCraftingResults` (`:109-127,182-191`) | not ported (no yield addon) |
+| `combineSmallDusts` on completion | `craftItem` (`:102-106`) | not ported (no small-dust family) |
+| 40 ticks, `#minecraft:iron_ores` → 2 raw iron + 1 raw nickel | `data/oritech/recipe/grinder/ore/iron.json` | carried; **40 × 256 = 10,240 FE** |
+| nickel smelting `cookingtime: 200` → 100 ticks, 3,200 FE | `nickel_ingot_from_smelting_raw_nickel.json` (`minecraft:smelting`) | carried; powered furnace at 0.5 speed |
+
+### The recipe sweep — 17 of 114 carried, one reason per family
+
+Slice 7's closure rule (result and every ingredient resolve) applied to every `grinder/**` file:
+
+| Recipe group | Files | Verdict | Why |
+|---|---:|---|---|
+| `blaze`, `bone`, `coal`, `coalore`, `diamondore`, `dripstone`, `glowstoneore`, `lapisore`, `netheritescrap`, `prismarine`, `quartzore`, `redstoneore`, `sand`, `string` | 14 | **carried** | vanilla in/vanilla out, or `oritech:coal_dust` (the pulverizer's own output) |
+| `ore/{copper,gold,iron}` | 3 | **carried** | vanilla ore tags; the two byproducts are vanilla raw metals, iron's is `oritech:raw_nickel` (carried) |
+| `ore/nickel` | 1 | `blocked(no-block-tag-lookup)` | needs `#c:ores/nickel` and this package ships no ore block; the ore is worldgen the pin cannot register |
+| `ore/platinum`, `raw/*` (5), `smalldust/*` (5), `dust/*` (5), `recycle/*` (3), `adamant`, `biobasic`, `biosteel`, `duratium`, `electrum`, `energite`, `hay_block`, `packagedwheatbio`, `pearl_enderic`, `quartz`, `steel`, `stone_enderic`, `uranium*` (3) | 30 | not ported | their result or ingredient is an Oritech dust/clump/gem/item this package does not declare, or a `c:` tag with no values here |
+| `dyes/*` (11), `gravel`, `red_sand`, `sand_from_sandstone` | 14 | not ported | conventional `c:` tags with no values here (`c:raw_materials/dyes/*`, `c:cobblestones`, `c:sandstone/*`) |
+| `compat/*` | 53 | not ported | another mod's items (`ae2:`, `create:`, `mekanism:`, …) |
+
+### What was added
+
+- `src/runtime.rs`: `GRINDER_*` (50,000 / 2,048 / 256, 1 in, 3 out, seven cores),
+  `grinder_energy_usage`, `grinder_ticks`, `grinder_output_fits`, `grinder_install` (the whole
+  completion decided before anything is taken — the rule 0.2.13 made structural),
+  `GrinderRecipe`/`GrinderError` (one ingredient, 1–3 results, fluid files refused) and `Grinder` on
+  the shared `advance` step. Five new tests.
+- `src/support.rs`: `GRINDER`/`GRINDER_TYPE`/`GRINDER_RECIPE`, the container (4/1/3), buffer
+  (50,000 / 2,048 / 0) and core table arms, `GrinderSaved`/`grinder_state`/`store_grinder`/`GrinderView`,
+  the parsed+resolved recipe cache, `find_grinder`/`grinder_accepts`, `finish_grinder`, `tick_grinder`
+  (assembly gate, redstone gate, addon tick, chamber loop), the click/readout/energy arms, the
+  `grinder_line` readout and the three-output blocking differential. Five new tests.
+- `src/lib.rs`: `GrinderPart`, the ninth block-entity type, the `oritech:grinder` recipe type and
+  raw serializer. `tools/parse_info.py` learned the `Fragment Forge` line and `OUT2`; `tools/e2e.sh`
+  gained phases GA–GG; `PLAN-slice11.md`, `tools/slice11-glue-counterfactual.py`.
+- Content: the Fragment Forge block (carried GeckoLib base texture, authored cube model/blockstate,
+  item definition, block declaration copying `IRON_BLOCK` with `occludes: false`, loot, lang
+  "Fragment Forge", tab, tool tags), the `oritech:raw_nickel` item (carried model/texture, authored
+  definition/declaration/lang), 17 rewritten grinder recipes and the raw-nickel smelting recipe.
+  `assets/` + `data/` are now **317 files** (`carry_content.py --check` → 317 files, 0 differ).
+
+### Deviations (slice 11)
+
+1. **The yield addon and its doubled byproducts are not ported.** Upstream's `MACHINE_YIELD_ADDON`
+   doubles every result after index 0 (`getCraftingResults`); this package has no yield addon, so
+   `ore/iron.json` makes 1 raw nickel, not 2. The byproduct count is the recipe file's own.
+2. **Five addon slots are reduced to none.** Upstream's `getAddonSlots` lists five positions; this
+   port's addon scan tops out at three (`MAX_ADDON_SLOTS`) and the grinder is not in that table, so
+   no addon can be clicked into it. The base 256 FE/t figures are upstream's.
+3. **`combineSmallDusts` is not ported** — there is no small-dust item family here.
+4. **The block has no crafting recipe** — `crafting/crusher.json` needs `#c:plates/plastic` and
+   `oritech:flux_gate`, neither of which exists here; obtained with `/give`, as with the other
+   machines the chain cannot yet pay for.
+5. **No GUI, no `lit` state, no GeckoLib render** — the same recorded gaps as slices 1–10.
+6. **`ore/nickel` is `blocked(no-block-tag-lookup)`**; platinum still has no survival source.
+
+### Verification (0.2.15)
+
+Every Rust, package and in-game step ran in a `build-slot.sh` lease (`G10-oritech`, relative
+`--port ports/oritech`; compile steps printed `build-slot: forwarding … to the remote runner` and
+ran on `AdLf-PC`), `CARGO_INCREMENTAL=0`, no `BUILD_LOCAL=1`, no `--target-dir`.
+
+| Step | Command | Result |
+|---|---|---|
+| runtime red | `cargo test --offline grinder` with the new bodies `todo!()` | **0 passed, 4 failed** — `panicked at src/runtime.rs:2222:9: not yet implemented: slice 11: parse an oritech:grinder recipe` (`slice11-test-red.log`) |
+| glue fail-capability | four mutations of the declarations/buffer/core table/saved state, `cargo test --offline grinder`, file restored byte-identically (`sha256 450f9418…`) | **7 passed, 2 failed** (`slice11-glue-red-counterfactual.log`) |
+| tests (green) | `rm -f Cargo.lock && cargo test --offline` | **158 passed**, 0 failed (`sdk-test.log`, regenerated at 0.2.15) |
+| lints + format | `cargo fmt --check` + `cargo clippy --all-targets --offline -- -D warnings` | exit 0, **0 warnings** (`slice11-fmt-clippy.log`) |
+| package | two `rm -f Cargo.lock && cargo horizon-mod build` runs, the artifact deleted between | **268,993 B**, sha256 `9357dc1224c55f646d4fd075fdc993eb84632f5cc5aa19c21ad8f1beb7c2091c`, `cmp` identical, **327 entries, no `Cargo.lock`** (`slice11-build.log`, `slice11-build-second.log`) |
+| registry check | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.15 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` / `268993 bytes … unsigned`, exit 0 (`slice11-check-fits.log`) |
+| fits the pin | `… fits --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits **another** build | `… fits --build 0b14f8a` | `0b14f8a  fits`, exit 0 (the previous pin, so the check is not a tautology) |
+| package gate | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, `no packed Cargo.lock`, 158 tests, 0 warnings (`slice11-verify-package.log`) |
+| recipe types | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` (`slice11-recipe-types.log`) |
+| content carry | `python3 tools/carry_content.py --check` | `317 files, 0 differ` |
+| launcher build | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.15 ⇒ a real recompile; no `native-*` tag carried this mod) | **`Compiling oritech (1 of 1)`**, `native-0a875da-803964e0898b`; `strings liboritech.so` shows `Fragment Forge at ` and `oritech:grinder`; export reads `version = "0.2.15"` (`slice11-launcher-build.log`) |
+| e2e | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e.sh` | **PASS** + `EXIT:0` (`e2e-slice11.log`) — `--offscreen`, so this leg stayed local |
+| e2e differential | `CONTROL=1` (package-less build first) | **PASS** + `EXIT:0`; without this package there is no generator item, motor, adamant ingot, coal dust, carbon fibre, steel ingot or **raw nickel**, and every block id including the **Fragment Forge** stays `minecraft:air` (`e2e-slice11-differential.log`) |
+| e2e whole scenario on the package-less build | `GAME=$CONTROL_GAME …` | **EXIT:1** — `the generator did not place` (`e2e-slice11-control.log`) |
+| fail-capability, grinder | `SELFTEST_GRINDER=1` (byproduct count flipped to 2) | **EXIT:1** — `FAIL: OUT1 is 'oritech:raw_nickel x1', expected 'oritech:raw_nickel x2'` (`e2e-slice11-selftest-grinder.log`) |
+| log checker | `check-e2e-logs.py oritech-e2e --strict` | **60 logs, 60 ok, 0 bad** (the 55 earlier legs untouched) |
+| coverage | `check-coverage.py oritech` | exit 0, `missing_families=0 missing=0` |
+| skills | `check-skills.py --notes ports/oritech` | PASS |
+
+The first e2e run failed on GG's exact-FE assertion (`ENERGY is '2560', expected '0'`) because the
+5,000 FE left from the blocked leg let the freed craft tick during the two chat round-trips; the
+scenario now drains before emptying the slot (`e2e-slice11-first.log` keeps the red run).
+
+### In-game transcript (quoted from `e2e-slice11.log`)
+
+```
+  unassembled, with iron ore and 5,000 FE: progress 0, recipe none, 5000 FE kept, no raw iron or nickel
+  assembled with all seven cores (oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3+oritech:machine_core_4+oritech:machine_core_5+oritech:machine_core_6+oritech:machine_core_7), average quality 4
+  info(20,100,18): Fragment Forge at [20, 100, 18]: 0/50000 FE, assembled yes core oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3+oritech:machine_core_4+oritech:machine_core_5+oritech:machine_core_6+oritech:machine_core_7 quality 4, progress 0 recipe none, input empty, out0 minecraft:raw_iron x2, out1 oritech:raw_nickel x1, out2 empty, addons none, t=18720
+  one ore: 2 raw iron + 1 raw nickel in exactly 40 ticks for exactly 10240 FE, buffer 0
+  cobblestone (no carried recipe): nothing made, no FE spent, buffer still 5000
+  info(24,100,18): Powered Furnace at [24, 100, 18]: 0/10000 FE, assembled yes core oritech:machine_core_2 quality 2, progress 0 recipe none, input empty, out oritech:nickel_ingot x1, addons none, t=19392
+  raw nickel -> one nickel ingot in exactly 100 ticks for exactly 3200 FE
+  a full out1: after 60 ticks the ore, the full slot and all 5,000 FE are untouched
+  with room again the same ore made 2 raw iron + 1 nickel for exactly 10240 FE
+EXIT:0
+```
+
+The arithmetic: `grinder/ore/iron.json` is `time: 40` at 256 FE a tick = **10,240 FE**, all spent;
+the nickel smelt is a 200-tick vanilla recipe at the powered furnace's 0.5 speed = 100 ticks × 32
+FE = **3,200 FE**. The flywheel is fail-capable five ways: the no-core gate, the exact 10,240 with a
+0 buffer, the cobblestone differential, the full-byproduct differential and `SELFTEST_GRINDER=1`.
+
+### Coverage added by slice 11
+
+| Family | Status | Evidence |
+|---|---|---|
+| `oritech:fragment_forge_block` | tested | GA (no core), GB (seven cores), GC (iron ore), GD (cobblestone), GF (16 recipes), GG (full out1) |
+| `oritech:blocks/fragment_forge_block` | tested | W: the carried loot table rolls the block into the inventory |
+| `oritech:raw_nickel` | tested | GC's byproduct, GE's furnace input, control leg's absent item |
+| `oritech:nickel_ingot_from_smelting_raw_nickel` | tested | GE: 100 ticks, 3,200 FE, one ingot |
+| `oritech:grinder/ore/iron` | tested | GC (2 raw iron + 1 raw nickel, 40 ticks, 10,240 FE), GG (blocked then free) |
+| `oritech:grinder/blaze` | tested | GF: four blaze powder, 40 ticks, 1,024 FE |
+| `oritech:grinder/bone` | tested | GF: eight bone meal, 40 ticks |
+| `oritech:grinder/coal` | tested | GF: one coal dust, 40 ticks |
+| `oritech:grinder/coalore` | tested | GF: three coal, 40 ticks |
+| `oritech:grinder/diamondore` | tested | GF: two diamonds, 40 ticks |
+| `oritech:grinder/dripstone` | tested | GF: four pointed dripstone, 120 ticks, 3,072 FE |
+| `oritech:grinder/glowstoneore` | tested | GF: four glowstone dust, 40 ticks |
+| `oritech:grinder/lapisore` | tested | GF: eight lapis lazuli, 40 ticks |
+| `oritech:grinder/netheritescrap` | tested | GF: two netherite scrap, 40 ticks |
+| `oritech:grinder/prismarine` | tested | GF: two prismarine crystals, 120 ticks |
+| `oritech:grinder/quartzore` | tested | GF: three quartz, 40 ticks |
+| `oritech:grinder/redstoneore` | tested | GF: twelve redstone, 40 ticks |
+| `oritech:grinder/sand` | tested | GF: one sand, 120 ticks |
+| `oritech:grinder/string` | tested | GF: four string, 40 ticks |
+| `oritech:grinder/ore/copper` | tested | GF: 2 raw copper + 1 raw gold, 40 ticks, 10,240 FE |
+| `oritech:grinder/ore/gold` | tested | GF: 2 raw gold + 1 raw copper, 40 ticks, 10,240 FE |
+| `recipe:oritech:grinder` | not ported | the other 97 of 114; one reason per group in *The recipe sweep* above |
+| `block_entity` | tested | the seven-core `Assembly` round-trip (unit) and GB's readout; every grinder case re-assembles from the same cores |
+| `multiblock` | tested | GB: a core in the hand fills each of the seven positions, the empty-hand click assembles with quality 4 |
+
+`## Upstream defects fixed` (slice 11): none found. The yield addon, `combineSmallDusts` and the
+missing block recipe are recorded deviations (families this package does not carry), not defects.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
 ## Next slice
 
-**The grinder** (`oritech:grinder_block`, upstream's `FragmentForgeBlockEntity`) — the last
-item-only processing machine that also **closes a gap this port has carried since slice 7**: the
-nickel ingot's only survival source was `/give` because the ore is worldgen the pin cannot register
-(`blocked(configured-feature-not-registered)`).
+**The atomic forge** (`oritech:atomic_forge_block`) is the next machines-shaped entry: 19 files,
+item-only, with a new mechanic the grinder did not exercise — `AtomicForgeBlockEntity` requires its
+buffer to be **full** (`rate × time`) before a craft runs, so the machine has a charge gate rather
+than the per-tick `advance` every ported machine shares. Its resolvable file is `wafer.json`
+(`#c:carbon_fibre` + 2 × `#c:silicon` → `oritech:silicon_wafer`, 5 ticks), but the wafer's only
+consumer, `advanced_computing_engine`, needs `processing_unit`, which needs `#c:plates/plastic` — the
+refinery/oil chain. **Read all 19 files first** and carry the family only if at least one result has a
+consumer in this package (the closure rule used for the foundry); if none does, record the atomic
+forge as `not ported(inert family)` and take the next resolvable one. The in-game assertion would be:
+place the forge, assemble its cores, prime exactly `rate × time` FE, assert the wafer output and a
+zero buffer, and prove the charge gate by priming one FE less and watching nothing craft; the
+differential is a recipe whose result this package cannot consume.
 
-- **The family**: `oritech:grinder` (114 files, 39 outside `compat/`) — one input, **three** output
-  slots (`InventorySlotAssignment(0, 1, 1, 3)`), `fragmentForgeData` = 50,000 FE / 2,048 insert /
-  256 FE a tick, and (with the yield addon, not carried yet) doubled byproducts.
-- **Why it fits the tier**: `content`/`deep`, machines shape — a block entity, a declared container,
-  a buffer, one custom recipe type, a tick, a multiblock. No renderer, no GUI.
-- **Why it is worth the slice, measured**: `grinder/ore/iron.json` is `#minecraft:iron_ores` → **2
-  `minecraft:raw_iron` + 1 `oritech:raw_nickel`** in 40 ticks, and the jar's own
-  `nickel_ingot_from_smelting_raw_nickel.json` (vanilla `minecraft:smelting`, `cookingtime: 200`) is
-  already read by this port's powered furnace. So: ore block → grinder → raw nickel → our furnace →
-  nickel ingot, with **no worldgen and no new fluid**. The same file doubles the ore's own yield
-  (2 raw iron). `ore/{copper,gold}`, `coal`, `coalore`, `diamondore`, `lapisore`, `glowstoneore`,
-  `bone`, `blaze`, `dripstone`, `gravel`, `netheritescrap` and `dyes/*` are vanilla-in/vanilla-out and
-  look resolvable; `dust/{copper,gold,iron,nickel}` need mod dusts this port could declare.
-- **Read first, then decide**: all 39 non-`compat` files, exactly as this slice read the refinery's
-  22 — the closure rule decides the carried set, and `ore/nickel` (`#c:ores/nickel`) is expected to be
-  `blocked(no-block-tag-lookup)` because this package ships no ore block.
-- **The in-game assertion**: place the grinder, assemble its cores, feed one `minecraft:iron_ore`,
-  prime exactly `40 × 256` FE, tick to completion, and assert **both** output slots at once
-  (`2 × minecraft:raw_iron` and `1 × oritech:raw_nickel`), the input emptied and the buffer at
-  exactly 0; then feed the raw nickel to a powered furnace and assert one `oritech:nickel_ingot` in
-  exactly 100 ticks for exactly 3,200 FE (the chain, end to end); the differential is an input no
-  multi-output recipe names (no result, no FE) and `SELFTEST_GRINDER=1` flips the byproduct count.
-
-**Also still open, in order**: the **atomic forge** (19 files; `wafer.json` = `#c:carbon_fibre` +
-2 × `#c:silicon` → `oritech:silicon_wafer`, 5 ticks, and the machine's buffer is `rate × time` and
-must be **full** to run — a new mechanic; but its only consumer, `advanced_computing_engine`, needs
-`processing_unit` and that needs `#c:plates/plastic`, so the wafer is inert until plastic exists);
-the **plastic chain** behind `#c:plates/plastic` (`polymer_resin` from `still_naphtha` or
-`#c:biodiesel` — the same fluid gap as the refinery, so it needs a fluid decision first); the
-**refinery** (`blocked(fluid-whitelist: #c:naphtha)` — re-check at every new pin for a fluid-tag
-query, which would also unblock `snow` and `sheolfire`); the **deep drill/resource nodes**, the
-**augment stations and the jetpack**, the **special addons** (the control unit's four comparator
+**Also still open, in order**: the **plastic chain** behind `#c:plates/plastic` (`polymer_resin` from
+`still_naphtha` or `#c:biodiesel` — the same fluid gap as the refinery, so it needs a fluid decision
+first); the **refinery** (`blocked(fluid-whitelist: #c:naphtha)` — re-check at every new pin for a
+fluid-tag query, which would also unblock `snow` and `sheolfire`); the **deep drill/resource nodes**,
+the **augment stations and the jetpack**, the **special addons** (the control unit's four comparator
 modes, proxy, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), and the
 **ores** themselves — `blocked(configured-feature-not-registered)` at this pin, to be re-checked at
 every new pin before any ore-fed family is scheduled.

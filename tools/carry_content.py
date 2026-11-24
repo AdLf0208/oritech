@@ -49,6 +49,13 @@ CARRIED = [
     # Slice 10's foundry: the same placeholder blockstate (`blockstates/foundry_block.json`
     # names the `machine_speed_addon` model) and the same kind of `.geo` model.
     "assets/oritech/textures/block/models/foundry_block.png",
+    # Slice 11: the Fragment Forge's own GeckoLib base texture (`fragmentForgeData`:
+    # 50,000 FE / 2,048 insert / 256 FE a tick, one input and three outputs).
+    "assets/oritech/textures/block/models/fragment_forge_block.png",
+    # The raw nickel its `grinder/ore/iron.json` produces, and the smelting file
+    # that turns it into the ingot the component chain needs.
+    "assets/oritech/models/item/raw_nickel.json",
+    "assets/oritech/textures/item/raw_nickel.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -97,6 +104,31 @@ REWRITTEN_RECIPES = [
     "data/oritech/recipe/foundry/alloy/adamant.json",
     "data/oritech/recipe/foundry/alloy/netherite.json",
     "data/oritech/recipe/crafting/foundry.json",
+    # Slice 11: the Fragment Forge. The seventeen `oritech:grinder` files whose
+    # result and every ingredient resolve here (the jar's other 97 name mod
+    # dusts/clumps/gems/plastics, another mod, or `c:` tags this pack has no block
+    # for — notes.md has one reason per family). `ore/iron.json` is the nickel
+    # chain: `#minecraft:iron_ores` -> 2 raw iron + 1 `oritech:raw_nickel`, 40 ticks
+    # at 256 FE a tick. `nickel_ingot_from_smelting_raw_nickel.json` closes it in
+    # the powered furnace: `cookingtime: 200` -> 100 ticks for 3,200 FE.
+    "data/oritech/recipe/grinder/blaze.json",
+    "data/oritech/recipe/grinder/bone.json",
+    "data/oritech/recipe/grinder/coal.json",
+    "data/oritech/recipe/grinder/coalore.json",
+    "data/oritech/recipe/grinder/diamondore.json",
+    "data/oritech/recipe/grinder/dripstone.json",
+    "data/oritech/recipe/grinder/glowstoneore.json",
+    "data/oritech/recipe/grinder/lapisore.json",
+    "data/oritech/recipe/grinder/netheritescrap.json",
+    "data/oritech/recipe/grinder/prismarine.json",
+    "data/oritech/recipe/grinder/quartzore.json",
+    "data/oritech/recipe/grinder/redstoneore.json",
+    "data/oritech/recipe/grinder/sand.json",
+    "data/oritech/recipe/grinder/string.json",
+    "data/oritech/recipe/grinder/ore/copper.json",
+    "data/oritech/recipe/grinder/ore/gold.json",
+    "data/oritech/recipe/grinder/ore/iron.json",
+    "data/oritech/recipe/nickel_ingot_from_smelting_raw_nickel.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -170,6 +202,9 @@ ITEMS = {
     # strands are the `c:carbon_fibre` its `core3` recipe takes.
     "coal_dust": ("Coal Dust", "minecraft:iron_ingot"),
     "carbon_fibre_strands": ("Carbon Fibre Strands", "minecraft:iron_ingot"),
+    # Slice 11: the grinder's nickel byproduct; smelts into `nickel_ingot` in the
+    # powered furnace (100 ticks, 3,200 FE) and is the chain's bridge from ore.
+    "raw_nickel": ("Raw Nickel", "minecraft:iron_ingot"),
 }
 PLATING = {
     # The jar's lang names them "… Reinforced Plating"; upstream copies
@@ -342,6 +377,14 @@ BLOCKS = {
     "foundry_block": {
         "name": "Foundry",
         "texture": "oritech:block/models/foundry_block",
+    },
+    # Slice 11: the Fragment Forge (`block.oritech.fragment_forge_block` is
+    # "Fragment Forge" in the jar's lang). Its jar blockstate is the same GeckoLib
+    # placeholder as the other machines, so the cube model and item model are
+    # authored here; the base texture is carried.
+    "fragment_forge_block": {
+        "name": "Fragment Forge",
+        "texture": "oritech:block/models/fragment_forge_block",
     },
 }
 CORE_NAMES = [

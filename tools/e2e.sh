@@ -261,6 +261,20 @@ COOLER_ADDON_SPENT=$((COOLER_ADDON_TICKS * ADDON_RATE))
 LAVA_ADDON_TICKS=66
 LAVA_ADDON_RATE=115
 LAVA_ADDON_SPENT=$((LAVA_ADDON_TICKS * LAVA_ADDON_RATE))
+# Slice 11: `OritechConfig.processingMachines.fragmentForgeData` (50,000 FE,
+# 2,048 insert, 256 FE a tick) and the jar's `grinder/ore/iron.json`:
+# `#minecraft:iron_ores` -> 2 raw iron + 1 raw nickel in 40 ticks, 10,240 FE.
+# The raw nickel smelts in the powered furnace: `cookingtime: 200` at 0.5 speed
+# = 100 ticks x 32 FE = exactly 3,200 FE for one `oritech:nickel_ingot`.
+GRINDER=oritech:fragment_forge_block
+GRINDER_CAPACITY=50000
+GRINDER_RATE=256
+GRINDER_TICKS=40
+GRINDER_SPENT=$((GRINDER_TICKS * GRINDER_RATE))
+GRINDER_CORES="1 2 3 4 5 6 7"
+GRINDER_CORE_LIST="oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3+oritech:machine_core_4+oritech:machine_core_5+oritech:machine_core_6+oritech:machine_core_7"
+NICKEL_TICKS=100
+NICKEL_SPENT=$((NICKEL_TICKS * FURNACE_RATE))
 
 command -v jq >/dev/null || { echo "missing jq (every assertion parses a ctl reply)" >&2; exit 1; }
 command -v "$CTL" >/dev/null || { echo "missing horizon-ctl: $CTL" >&2; exit 1; }
@@ -327,7 +341,7 @@ machine_holds() { # machine_holds X Y Z ITEM
     local line field
     line=$(info "$1" "$2" "$3")
     read_info "$line"
-    for field in FUEL INPUT OUT0 OUT1; do
+    for field in FUEL INPUT OUT0 OUT1 OUT2; do
         case "${!field}" in
             "$4 x"*|"$4") return 0 ;;
         esac
@@ -547,9 +561,12 @@ control_leg() {
     # Slice 10: the foundry block and the steel it makes.
     ctl command "setblock 4 100 14 $FOUNDRY" >/dev/null 2>&1 || true
     ctl command "item replace entity @s hotbar.7 with oritech:steel_ingot 1" >/dev/null 2>&1 || true
+    # Slice 11: the Fragment Forge block and the raw nickel it produces.
+    ctl command "setblock 20 100 18 $GRINDER" >/dev/null 2>&1 || true
+    ctl command "item replace entity @s hotbar.8 with oritech:raw_nickel 1" >/dev/null 2>&1 || true
     ctl wait 4
     local furnace core chiller lava addon capacitor control plating motor assembler adamant
-    local centrifuge fluidaddon coaldust carbonfibre foundry steel
+    local centrifuge fluidaddon coaldust carbonfibre foundry steel rawnickel grinder
     furnace=$(block_name 8 100 0)
     core=$(block_name 8 101 0)
     chiller=$(block_name 12 100 0)
@@ -567,6 +584,8 @@ control_leg() {
     carbonfibre=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:carbon_fibre_strands")] | length')
     foundry=$(block_name 4 100 14)
     steel=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:steel_ingot")] | length')
+    rawnickel=$(ctl inventory | jq -r '[.hotbar[], .main[] | select(.item == "oritech:raw_nickel")] | length')
+    grinder=$(block_name 20 100 18)
     [ "$furnace" = "minecraft:air" ] || fail "the control game holds $furnace, so the furnace id was known"
     [ "$core" = "minecraft:air" ] || fail "the control game holds $core, so the core id was known"
     [ "$chiller" = "minecraft:air" ] || fail "the control game holds $chiller, so the chiller id was known"
@@ -584,7 +603,9 @@ control_leg() {
     [ "$carbonfibre" = 0 ] || fail "the control game holds $carbonfibre oritech:carbon_fibre_strands, so that item id was known"
     [ "$foundry" = "minecraft:air" ] || fail "the control game holds $foundry, so the foundry id was known"
     [ "$steel" = 0 ] || fail "the control game holds $steel oritech:steel_ingot, so that item id was known"
-    echo "  without this package: no generator item, no motor, no adamant ingot, no coal dust, no carbon fibre and no steel ingot, and the generator, furnace, core, chiller, lava generator, addon, control unit, plating, assembler, centrifuge, fluid addon and foundry blocks all stayed $name"
+    [ "$rawnickel" = 0 ] || fail "the control game holds $rawnickel oritech:raw_nickel, so that item id was known"
+    [ "$grinder" = "minecraft:air" ] || fail "the control game holds $grinder, so the fragment forge id was known"
+    echo "  without this package: no generator item, no motor, no adamant ingot, no coal dust, no carbon fibre, no steel ingot and no raw nickel, and the generator, furnace, core, chiller, lava generator, addon, control unit, plating, assembler, centrifuge, fluid addon, foundry and fragment forge blocks all stayed $name"
     ctl quit >/dev/null 2>&1 || true
 }
 
@@ -2693,6 +2714,279 @@ ctl command "setblock 4 101 14 minecraft:air" >/dev/null
 ctl command "setblock 4 101 15 minecraft:air" >/dev/null
 ctl wait 4
 
+# ---------------------------------------------------------------------------
+# Slice 11: the Fragment Forge (`oritech:fragment_forge_block`, oritech:grinder)
+# ---------------------------------------------------------------------------
+
+# The controller stays at (20,100,18); its seven core positions are
+# (20,101,18), (20,100,19), (20,101,19), (21,100,19), (21,101,19),
+# (21,100,18) and (21,101,18). A fresh controller keeps the cores in the world,
+# so re-assembling after `setblock` is one empty-hand click.
+grinder_assemble() {
+    ctl command "clear @s" >/dev/null
+    ctl wait 4
+    ctl command "execute in minecraft:overworld run tp @s 20.5 100 16.5" >/dev/null
+    ctl wait 4
+    ctl look-at-block 20 100 18 north >/dev/null
+    ctl wait 2
+    ctl interact 20 100 18 >/dev/null 2>&1 || true
+    ctl wait 8
+}
+
+grinder_fresh() {
+    ctl command "setblock 20 100 18 minecraft:air" >/dev/null
+    ctl wait 4
+    ctl command "setblock 20 100 18 $GRINDER" >/dev/null
+    ctl wait 8
+    [ "$(block_name 20 100 18)" = "$GRINDER" ] || fail "the fragment forge did not place"
+    grinder_assemble
+}
+
+echo "== GA: an unassembled Fragment Forge with ore and 5,000 FE makes nothing =="
+for spec in "20 100 18" "20 101 18" "20 100 19" "20 101 19" \
+    "21 100 19" "21 101 19" "21 100 18" "21 101 18"; do
+    ctl command "setblock $spec minecraft:air" >/dev/null
+done
+ctl wait 4
+ctl command "setblock 20 100 18 $GRINDER" >/dev/null
+ctl wait 8
+[ "$(block_name 20 100 18)" = "$GRINDER" ] || fail "the fragment forge did not place"
+line=$(info 20 100 18)
+read_info "$line"
+expect KIND grinder
+expect ENERGY 0
+expect CAPACITY "$GRINDER_CAPACITY"
+expect ASSEMBLED no
+expect CORE empty
+expect INPUT empty
+expect OUT0 empty
+expect OUT1 empty
+expect OUT2 empty
+drain 20 100 18
+feed 20 100 18 minecraft:iron_ore
+line=$(info 20 100 18)
+read_info "$line"
+expect INPUT "minecraft:iron_ore x1"
+say "oritech energy 20 100 18 5000"
+ctl wait 60
+line=$(info 20 100 18)
+read_info "$line"
+expect ASSEMBLED no
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 5000
+expect INPUT "minecraft:iron_ore x1"
+expect OUT0 empty
+expect OUT1 empty
+expect OUT2 empty
+echo "  unassembled, with iron ore and 5,000 FE: progress $PROGRESS, recipe $RECIPE, $ENERGY FE kept, no raw iron or nickel"
+
+echo "== GB: seven cores in their own positions assemble it; quality is their average =="
+ctl command "clear @s" >/dev/null
+ctl wait 4
+for tier in $GRINDER_CORES; do
+    ctl give "oritech:machine_core_$tier" 1 >/dev/null
+    ctl wait 3
+    ctl select "oritech:machine_core_$tier" >/dev/null
+    ctl wait 2
+    ctl command "execute in minecraft:overworld run tp @s 20.5 100 16.5" >/dev/null
+    ctl wait 4
+    ctl look-at-block 20 100 18 north >/dev/null
+    ctl wait 2
+    ctl interact 20 100 18 >/dev/null 2>&1 || true
+    ctl wait 8
+done
+for spec in "20 101 18 oritech:machine_core_1" "20 100 19 oritech:machine_core_2" \
+    "20 101 19 oritech:machine_core_3" "21 100 19 oritech:machine_core_4" \
+    "21 101 19 oritech:machine_core_5" "21 100 18 oritech:machine_core_6" \
+    "21 101 18 oritech:machine_core_7"; do
+    read -r x y z id <<<"$spec"
+    [ "$(block_name "$x" "$y" "$z")" = "$id" ] || fail "core $id did not land at $x,$y,$z"
+done
+grinder_assemble
+line=$(info 20 100 18)
+read_info "$line"
+expect ASSEMBLED yes
+expect CORE "$GRINDER_CORE_LIST"
+expect QUALITY 4
+echo "  assembled with all seven cores ($CORE), average quality $QUALITY"
+
+echo "== GC: iron ore -> 2 raw iron + 1 raw nickel in 40 ticks for 10,240 FE =="
+grinder_fresh
+drain 20 100 18
+feed 20 100 18 minecraft:iron_ore
+line=$(info 20 100 18)
+read_info "$line"
+expect INPUT "minecraft:iron_ore x1"
+say "oritech energy 20 100 18 $GRINDER_SPENT"
+ctl wait 8
+line=$(info 20 100 18)
+read_info "$line"
+expect RECIPE oritech:grinder/ore/iron
+echo "  primed: recipe $RECIPE, progress $PROGRESS of $GRINDER_TICKS"
+ctl wait 80
+line=$(info 20 100 18)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 0
+expect INPUT empty
+expect OUT0 "minecraft:raw_iron x2"
+expect OUT1 "oritech:raw_nickel x1"
+expect OUT2 empty
+if [ "${SELFTEST_GRINDER:-0}" = 1 ]; then
+    echo "  SELFTEST_GRINDER: expecting two nickel where the jar gives one (this must fail)"
+    expect OUT1 "oritech:raw_nickel x2"
+fi
+echo "  one ore: 2 raw iron + 1 raw nickel in exactly $GRINDER_TICKS ticks for exactly $GRINDER_SPENT FE, buffer 0"
+
+echo "== GD: an input no grinder recipe names makes nothing and spends nothing =="
+grinder_fresh
+drain 20 100 18
+feed 20 100 18 minecraft:cobblestone
+line=$(info 20 100 18)
+read_info "$line"
+expect INPUT empty
+say "oritech energy 20 100 18 5000"
+ctl wait 60
+line=$(info 20 100 18)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 5000
+expect OUT0 empty
+expect OUT1 empty
+expect OUT2 empty
+echo "  cobblestone (no carried recipe): nothing made, no FE spent, buffer still $ENERGY"
+
+echo "== GE: the raw nickel smelts into one ingot in the powered furnace =="
+ctl command "setblock 24 100 18 minecraft:air" >/dev/null
+ctl command "setblock 24 101 18 minecraft:air" >/dev/null
+ctl wait 4
+ctl command "setblock 24 100 18 $FURNACE" >/dev/null
+ctl wait 8
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl give "oritech:machine_core_2" 1 >/dev/null
+ctl wait 3
+ctl select "oritech:machine_core_2" >/dev/null
+ctl wait 2
+ctl command "execute in minecraft:overworld run tp @s 24.5 100 16.5" >/dev/null
+ctl wait 4
+ctl look-at-block 24 100 18 north >/dev/null
+ctl wait 2
+ctl interact 24 100 18 >/dev/null 2>&1 || true
+ctl wait 8
+ctl command "clear @s" >/dev/null
+ctl wait 4
+ctl interact 24 100 18 >/dev/null 2>&1 || true
+ctl wait 8
+line=$(info 24 100 18)
+read_info "$line"
+expect ASSEMBLED yes
+drain 24 100 18
+feed 24 100 18 oritech:raw_nickel
+line=$(info 24 100 18)
+read_info "$line"
+expect INPUT "oritech:raw_nickel x1"
+say "oritech energy 24 100 18 $NICKEL_SPENT"
+ctl wait 8
+line=$(info 24 100 18)
+read_info "$line"
+expect RECIPE oritech:nickel_ingot_from_smelting_raw_nickel
+ctl wait 120
+line=$(info 24 100 18)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 0
+expect INPUT empty
+expect OUT0 "oritech:nickel_ingot x1"
+echo "  raw nickel -> one nickel ingot in exactly $NICKEL_TICKS ticks for exactly $NICKEL_SPENT FE"
+
+echo "== GF: the other carried grinder recipes each craft their declared output =="
+grinder_case() { # grinder_case TICKS RESULT COUNT RESULT2 COUNT2 RECIPE ITEM
+    local ticks=$1 result=$2 count=$3 result2=$4 count2=$5 recipe=$6 item=$7
+    grinder_fresh
+    drain 20 100 18
+    feed 20 100 18 "$item"
+    line=$(info 20 100 18)
+    read_info "$line"
+    expect INPUT "$item x1"
+    say "oritech energy 20 100 18 $((ticks * GRINDER_RATE))"
+    ctl wait 8
+    line=$(info 20 100 18)
+    read_info "$line"
+    expect RECIPE "$recipe"
+    ctl wait $((ticks + 40))
+    line=$(info 20 100 18)
+    read_info "$line"
+    expect PROGRESS 0
+    expect RECIPE none
+    expect ENERGY 0
+    expect INPUT empty
+    expect OUT0 "$result x$count"
+    if [ "$result2" != none ]; then expect OUT1 "$result2 x$count2"; fi
+    echo "  $item -> $result x$count ($result2 x$count2) in exactly $ticks ticks for $((ticks * GRINDER_RATE)) FE"
+}
+grinder_case 40 minecraft:blaze_powder 4 none 0 oritech:grinder/blaze minecraft:blaze_rod
+grinder_case 40 minecraft:bone_meal 8 none 0 oritech:grinder/bone minecraft:bone
+grinder_case 40 oritech:coal_dust 1 none 0 oritech:grinder/coal minecraft:coal
+grinder_case 40 minecraft:coal 3 none 0 oritech:grinder/coalore minecraft:coal_ore
+grinder_case 40 minecraft:diamond 2 none 0 oritech:grinder/diamondore minecraft:diamond_ore
+grinder_case 120 minecraft:pointed_dripstone 4 none 0 oritech:grinder/dripstone minecraft:dripstone_block
+grinder_case 40 minecraft:glowstone_dust 4 none 0 oritech:grinder/glowstoneore minecraft:glowstone
+grinder_case 40 minecraft:lapis_lazuli 8 none 0 oritech:grinder/lapisore minecraft:lapis_ore
+grinder_case 40 minecraft:netherite_scrap 2 none 0 oritech:grinder/netheritescrap minecraft:ancient_debris
+grinder_case 120 minecraft:prismarine_crystals 2 none 0 oritech:grinder/prismarine minecraft:prismarine_shard
+grinder_case 40 minecraft:quartz 3 none 0 oritech:grinder/quartzore minecraft:nether_quartz_ore
+grinder_case 40 minecraft:redstone 12 none 0 oritech:grinder/redstoneore minecraft:redstone_ore
+grinder_case 120 minecraft:sand 1 none 0 oritech:grinder/sand minecraft:gravel
+grinder_case 40 minecraft:string 4 none 0 oritech:grinder/string minecraft:white_wool
+grinder_case 40 minecraft:raw_copper 2 minecraft:raw_gold 1 oritech:grinder/ore/copper minecraft:copper_ore
+grinder_case 40 minecraft:raw_gold 2 minecraft:raw_copper 1 oritech:grinder/ore/gold minecraft:gold_ore
+
+echo "== GG: a full byproduct slot blocks the whole craft, then empties =="
+grinder_fresh
+drain 20 100 18
+slot_put 20 100 18 2 64 oritech:raw_nickel
+feed 20 100 18 minecraft:iron_ore
+line=$(info 20 100 18)
+read_info "$line"
+expect INPUT "minecraft:iron_ore x1"
+expect OUT1 "oritech:raw_nickel x64"
+say "oritech energy 20 100 18 5000"
+ctl wait 60
+line=$(info 20 100 18)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 5000
+expect INPUT "minecraft:iron_ore x1"
+expect OUT0 empty
+expect OUT1 "oritech:raw_nickel x64"
+echo "  a full out1: after 60 ticks the ore, the full slot and all 5,000 FE are untouched"
+# Drain *before* opening the slot: the 5,000 FE left from the blocked leg would
+# otherwise let the now-free craft tick during the two chat round-trips, so the
+# exact-FE assertion would see fewer than 40 ticks left of the new prime.
+drain 20 100 18
+slot_put 20 100 18 2 0 minecraft:air
+say "oritech energy 20 100 18 $GRINDER_SPENT"
+ctl wait 4
+ctl wait $((GRINDER_TICKS + 40))
+line=$(info 20 100 18)
+read_info "$line"
+expect PROGRESS 0
+expect RECIPE none
+expect ENERGY 0
+expect INPUT empty
+expect OUT0 "minecraft:raw_iron x2"
+expect OUT1 "oritech:raw_nickel x1"
+echo "  with room again the same ore made 2 raw iron + 1 nickel for exactly $((GRINDER_TICKS * GRINDER_RATE)) FE"
+ctl command "setblock 20 100 18 minecraft:air" >/dev/null
+ctl command "setblock 24 100 18 minecraft:air" >/dev/null
+ctl wait 4
+
 echo "== W: every carried loot table rolls its own block =="
 # The carried `data/oritech/loot_table/blocks/*.json` are the jar's self-drop,
 # rewritten into 26.3's singular `condition`. Rolling each table directly asserts
@@ -2701,7 +2995,7 @@ echo "== W: every carried loot table rolls its own block =="
 ctl command "clear @s" >/dev/null
 ctl wait 4
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" "$ASSEMBLER" \
-    "$CENTRIFUGE" "$FOUNDRY" \
+    "$CENTRIFUGE" "$FOUNDRY" "$GRINDER" \
     oritech:machine_core_1 oritech:machine_core_2 oritech:machine_core_3 \
     oritech:machine_core_4 oritech:machine_core_5 oritech:machine_core_6 \
     oritech:machine_core_7 \
@@ -2714,7 +3008,7 @@ done
 ctl wait 8
 INV=$(ctl inventory)
 for block in "$GENERATOR" "$PULVERIZER" "$FURNACE" "$COOLER" "$LAVA" "$ASSEMBLER" \
-    "$CENTRIFUGE" "$FOUNDRY" \
+    "$CENTRIFUGE" "$FOUNDRY" "$GRINDER" \
     oritech:machine_core_1 oritech:machine_core_7 \
     "$SPEED_ADDON" "$EFFICIENCY_ADDON" "$PROCESSING_ADDON" "$CAPACITOR_ADDON" \
     "$BURST_ADDON" "$ULTIMATE_ADDON" "$REDSTONE_ADDON" "$FLUID_ADDON" \
@@ -2734,4 +3028,4 @@ AFTER=$(ctl inventory | jq '[.hotbar[], .main[]] | length')
 [ "$BEFORE" = "$AFTER" ] || fail "an unknown loot table changed the inventory ($BEFORE -> $AFTER)"
 echo "  an unknown loot table gave nothing (inventory entries $BEFORE -> $AFTER)"
 
-echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block, an unassembled centrifuge with coal dust and 5,000 FE made no carbon fibre and spent nothing, its core above assembled it and 50 ticks turned one coal dust into exactly one carbon fibre strand for exactly 3,200 FE with the input emptied, a Fluid Addon and a tank of only 100 mB of water made no clay and spent no FE (the recipe needs 250), the same machine with 250 mB made exactly one clay in 100 ticks for exactly 6,400 FE and emptied its tank, and the same water and dirt without the Fluid Addon made nothing, a foundry with a valid pair and 5,000 FE but no core made nothing, its three cores assembled it with their average quality, two iron ingots made no alloy and spent no FE, one coal dust and one iron in the slots opposite the file's order became exactly one steel ingot in exactly 26 ticks for exactly 3,328 FE with both inputs emptied, and its adamant, electrum and netherite alloys each crafted their declared output for exactly 10,240 FE, a centrifuge whose output slot was already full of the result neither took its coal dust nor spent a single FE in 60 ticks and the same machine with the slot emptied again made one carbon fibre for exactly 3,200 FE, a full 8,000 mB tank and a full clay slot took neither the dirt nor a millibucket and the same machine with the slot emptied made one clay and drained exactly 250 mB, and every carried loot table rolled its own block"
+echo "PASS: an unfuelled generator made no FE, a pulverizer with no power kept its bone, one coal click started the burn at 32 FE a tick, bone became exactly 6 bone meal in exactly 100 ticks for exactly 3,200 FE, the adjacent pulverizer ran on the generator's FE, stone was refused by both machines, the machines survived a relaunch, a powered furnace with no core smelted nothing even with ore and 5,000 FE in it, its core arrived by a right click and assembly gated it, 320 FE advanced a smelt exactly ten ticks, iron ore became an iron ingot for exactly 3,200 FE, breaking the core disassembled the machine mid-smelt and kept its progress and reassembly resumed it, every new block placed and read back, every one of the seven carried pulverizer recipes crafted with its input consumed, an industrial chiller with no core froze nothing even with a bucket of water and 5,000 FE, its core assembled it one block to the north, a bucket of water entered the tank through the block's own declared fluid handler, 320 FE advanced the freeze exactly ten ticks, water became exactly 3 ice for exactly 6,400 FE with the tank emptied, lava became exactly 2 obsidian, a mod fluid was refused, only the chiller had a tank, a lava generator with an empty tank made no FE and one with no core burned the lava in its tank for nothing, its core assembled it one block above, 100 mB of lava entered its tank through the block's own declared fluid handler and left it when the burn loaded, a 120-tick burn made exactly 7,680 FE at exactly 64 a tick, its ten-target push handed that whole 7,680 FE to an adjacent pulverizer which spent it on a bone, an unassembled one pushed nothing until its core came back, a tank of water made no FE, a fluid this pack does not have was refused, all seven default addon blocks placed and read back and an undeclared one was refused, a speed addon made the pulverizer finish a bone in exactly 67 ticks for exactly 3,886 FE while the same machine without it took 100 ticks and 3,200, an efficiency addon made the same craft cost exactly 2,700 FE, a capacitor addon raised the buffer to 2,025,000 FE and held both a 25,000 and a 1,000,000 write before clamping back, a charged burst addon crafted in exactly 13 ticks for 416 FE, a processing addon turned two bones into twelve bone meal in one completion for 4,800 FE, the furnace, chiller and lava generator each ran their own addon slot for exactly 3,886, 7,772 and 7,590 FE, all seven addon blocks placed and read back, a Control Unit Addon beside a redstone block held a pulverizer's whole tick for 40 ticks and left its bone, its recipe and exactly 10,000 FE untouched, removing the signal let the same machine finish the bone for exactly 3,200 FE, all nineteen carried crafting recipes crafted in a real table with their ingredients consumed and the generator's grid one nickel short crafting nothing, raw silicon smelted into silicon in exactly 30 ticks for exactly 960 FE, an assembler with a full motor grid and 1,280 FE but no core crafted nothing, its three cores assembled it and exactly 6,144 FE made two motors in 48 ticks with every input slot emptied, a second craft spent exactly 6,144 and left the extra 1,280 in its buffer, one coil short it made and spent nothing, a slot holding two steel paid for one ingredient and kept the spare, and all five carried assembler recipes crafted their declared output for their own exact cost, and every carried loot table rolled its own block, an unassembled centrifuge with coal dust and 5,000 FE made no carbon fibre and spent nothing, its core above assembled it and 50 ticks turned one coal dust into exactly one carbon fibre strand for exactly 3,200 FE with the input emptied, a Fluid Addon and a tank of only 100 mB of water made no clay and spent no FE (the recipe needs 250), the same machine with 250 mB made exactly one clay in 100 ticks for exactly 6,400 FE and emptied its tank, and the same water and dirt without the Fluid Addon made nothing, a foundry with a valid pair and 5,000 FE but no core made nothing, its three cores assembled it with their average quality, two iron ingots made no alloy and spent no FE, one coal dust and one iron in the slots opposite the file's order became exactly one steel ingot in exactly 26 ticks for exactly 3,328 FE with both inputs emptied, and its adamant, electrum and netherite alloys each crafted their declared output for exactly 10,240 FE, a centrifuge whose output slot was already full of the result neither took its coal dust nor spent a single FE in 60 ticks and the same machine with the slot emptied again made one carbon fibre for exactly 3,200 FE, a full 8,000 mB tank and a full clay slot took neither the dirt nor a millibucket and the same machine with the slot emptied made one clay and drained exactly 250 mB, an unassembled Fragment Forge with iron ore and 5,000 FE made nothing, seven cores assembled it with their average quality, one iron ore became exactly two raw iron and one raw nickel in 40 ticks for exactly 10,240 FE with the buffer at 0, the raw nickel smelted into one ingot in the powered furnace in exactly 100 ticks for 3,200 FE, a cobblestone no grinder recipe names made nothing and spent nothing, a full byproduct slot took neither the ore nor a single FE until it was emptied, every other carried grinder recipe crafted its declared output for its own exact cost, and every carried loot table rolled its own block"
