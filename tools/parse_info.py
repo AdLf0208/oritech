@@ -161,6 +161,18 @@ GRINDER = re.compile(
 
 # Slice 10: the foundry's line carries the assembly, its two input slots and its
 # one output (the assembler's field names, so `machine_holds` works on it).
+# Slice 12: the Atomic Forge's line carries the eight-core assembly, its active
+# charge capacity (5,120 FE), three inputs and one output.
+ATOMIC = re.compile(
+    r"^Atomic Forge at \[(?P<POS>[^\]]+)\]: "
+    r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
+    r"assembled (?P<ASSEMBLED>yes|no) core (?P<CORE>.+?) quality (?P<QUALITY>-?\d+), "
+    r"progress (?P<PROGRESS>\d+) recipe (?P<RECIPE>.+?), "
+    r"in0 (?P<IN0>.+?), in1 (?P<IN1>.+?), in2 (?P<IN2>.+?), "
+    r"out (?P<OUT0>.+?), " + ADDON_FIELD
+)
+
+
 FOUNDRY = re.compile(
     r"^Foundry at \[(?P<POS>[^\]]+)\]: "
     r"(?P<ENERGY>\d+)/(?P<CAPACITY>\d+) FE, "
@@ -183,6 +195,7 @@ def main(argv: list[str]) -> int:
         ("centrifuge", CENTRIFUGE),
         ("foundry", FOUNDRY),
         ("grinder", GRINDER),
+        ("atomic", ATOMIC),
         ("fluid", FLUID),
         ("slot", SLOT),
     ):
@@ -195,7 +208,7 @@ def main(argv: list[str]) -> int:
         )
         if kind == "generator":
             out.setdefault("INPUT", out["FUEL"])
-        if kind in ("assembler", "foundry"):
+        if kind in ("assembler", "foundry", "atomic"):
             # The four input slots are one field each; `INPUT` is the first one,
             # so `machine_holds` can look at the machine like the others.
             out.setdefault("INPUT", out["IN0"])

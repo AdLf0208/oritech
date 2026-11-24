@@ -1061,14 +1061,14 @@ specific ones above the wildcard, so a carried-and-tested entry outranks the fam
 | `recipe:oritech:pulverizer` | not ported | the other 117 need Oritech dusts/clumps/gems this port does not carry (gap 6) |
 | `recipe:oritech:cooler` | not ported | `compat/pneumaticcraft/plastic` needs PneumaticCraft (gap 4) and `snow` is blocked above |
 | `recipe:oritech:lava_generator` | not ported | `sheolfire` is blocked above; `lava` is carried and tested |
-| `recipe:*` | not ported | atomic forge, grinder, bio/fuel generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting and every `compat/` family: each needs item, fluid or block chains this port does not carry |
+| `recipe:*` | not ported | grinder, atomic forge's other 18 files, bio/fuel generators, reactor, particle, laser, deep drill, `minecraft:` smelting/blasting and every `compat/` family: each needs item, fluid or block chains this port does not carry. `oritech:atomicforge/wafer` is `tested` in *Slice 12* |
 | `tag:block` | not ported | 14 block tags (`frame_support`, `laser_accelerated`, …) belong to families outside this slice |
 | `tag:item` | not ported | 21 item tags (`biomatter`, `feeder_blacklist`, …) — same |
 | `tag:entity_type` | not ported | `spawner_blacklist` — the spawner family is not ported |
 | `worldgen:*` | not ported | oil springs, the four ores and their placed features: worldgen is the campaign's last tier and the pin's mod worldgen is inert (HANDOVER §9d item 19) |
 | `data:*` | not ported | the NeoForge biome modifiers belong to the worldgen families above |
 | `command` | tested | `/oritech info` (every phase, the foundry's FA–FE included), `/oritech energy` (D, H, R, S, T, FA–FE), `/oritech fluid` (P, T, U) and `/oritech slot` (CF–CI; its `slot N = <item> x<count>` reply is parsed and asserted) |
-| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (atomic forge, refinery, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), and the Control Unit Addon's input gate is `tested` in slice 6 |
+| `*` | not ported | everything else in the jar — the GUI, the screens, GeckoLib models, the special addon kinds (the control unit's four comparator modes, fluid, inventory proxy, acceptor, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), the pipes and energy network, the remaining multiblocks (refinery, the accelerator ring, the reactor), the augment stations, the jetpack/equipment, the resource-node worldgen and the ores. Named one by one in the gap lists above. The six default addon blocks are `tested` below (slice 5), the Control Unit Addon's input gate in slice 6, and `oritech:atomic_forge_block` and `oritech:silicon_wafer` in *Slice 12* |
 
 `## Upstream defects fixed` (slice 3): none found. The `word`-argument limit is a pin property, not a
 mod defect, and the snow recipe is a coverable gap rather than a broken behaviour.
@@ -3062,26 +3062,173 @@ missing block recipe are recorded deviations (families this package does not car
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
+## Slice 12 — the Atomic Forge (`oritech:atomic_forge_block`), the charge-gated machine (0.2.16, 2026-11-24)
+
+**Why this family**, from `notes.md`'s own gap list — *Deviations and gaps (slice 1)*, gap **13**,
+verbatim: "Not carried: the powered furnace (a multiblock machine that needs its core assembled), the
+assembler, atomic forge, foundry, refinery, centrifuge, cooler, the accelerator ring, the reactor, the
+augment stations, the jetpack and equipment, the resource-node worldgen and the ores. All later
+slices." The 0.2.15 report's `## Next slice` named it: it is the last machines-shaped entry that
+exercises a mechanic none of the other machines use — a **buffer-full charge gate** rather than the
+shared per-tick `advance`. Class + tier unchanged: class `content`, tier `deep` (`ports/ledger.csv`),
+machines shape — a block entity, a declared 3-in/1-out container, a declared FE buffer, one custom
+recipe type, an eight-core assembly, a tick. No renderer, no GUI, no tank, no network.
+
+### The artefact decision — all 19 files read first
+
+The brief's closure rule: carry only a recipe family whose result has a consumer in this package;
+otherwise record `not ported(inert family)` and take the next resolvable one — never invent a use.
+All 19 `data/oritech/recipe/atomicforge/**` files were read from the jar (not guessed from names):
+
+| File(s) | Files | Verdict | Why |
+|---|---:|---|---|
+| `wafer.json` | 1 | **carried** | `c:carbon_fibre` + 2 × `c:silicon` → 1 `oritech:silicon_wafer`, `time: 5`; both tags have real values here and the wafer is a new declared item |
+| `advcomputer.json` | 1 | `not ported(inert family)` | needs `oritech:processing_unit` (from `c:plates/plastic`, the blocked refinery/oil chain) — the wafer's only downstream consumer |
+| `aicomputer.json`, `compensator.json`, `compensatoralt.json`, `duratium.json`, `prometheum.json` | 5 | `not ported(inert family)` | inputs are unported components: `duratium_ingot`, `advanced_computing_engine`, `super_ai_chip`, `unholy_intelligence`, `reinforced_carbon_sheet`, `overcharged_crystal`, `#c:ingots/platinum` |
+| `reinfdeepslate.json` | 1 | `not ported(inert family)` | needs two `oritech:duratium_ingot`; its `minecraft:reinforced_deepslate` result has no consumer here |
+| `urandust.json`, `urandustgem.json` | 2 | `not ported(inert family)` | `c:dusts/copper`, `c:raw_materials/uranium`, `c:dusts/uranium` have no values in this package |
+| `dust/{copper,gold,iron,nickel,platinum}.json` | 5 | `not ported(inert family)` | each needs `oritech:<metal>_gem` + two `oritech:fluxite` — unported ore-chain items |
+| `compat/mekanism/{advanced,basic,elite,ultimate}_control_circuit.json` | 4 | `not ported(inert family)` | another mod's results and `c:circuits/*` tags with no values here |
+
+**The wafer's downstream is `blocked(plastic chain)`**, not an invented use: `advcomputer.json`
+needs `processing_unit`, whose `assembler/processingunit.json` needs `c:plates/plastic`, behind the
+refinery's `blocked(fluid-whitelist: #c:naphtha)`. The wafer is carried as the machine's proof of
+behaviour and the end of this port's chain, exactly as the foundry's netherite ingot is an end item.
+The block's own `crafting/atomicforge.json` needs plastic, `enderic_compound`, `flux_gate` and
+`duratium_ingot`, none carried, so the block is obtained with `/give` like the other machines.
+
+### The jar's numbers (v1.2.13 — the two files the brief named as authority)
+
+The brief's earlier `UsageConfig`/`StorageConfig` names are **not** classes in v1.2.13 (the same
+naming trap slice 11 recorded). Every number is read from `OritechConfig.java` and
+`AtomicForgeBlockEntity.java` at tag `v1.2.13` / commit `4069b6dd`:
+
+| Value | Upstream file | This port |
+|---|---|---|
+| default capacity **1,024 FE**, insert **0**, extract **0**, rate **1,024** | `OritechConfig.java`, `atomicForgeData = new BasicMachineConfig(b, "atomicForgeData", 1024, 0, 0, 1024)` | `ATOMIC_DEFAULT_CAPACITY`, `ATOMIC_MAX_INSERT`, `ATOMIC_RATE` |
+| active capacity = `rate × time` = **5,120 FE** for the wafer | `AtomicForgeBlockEntity.getRecipe()`: `energyStorage.setCapacity(energyPerTick * recipe.getTime())` | `atomic_forge_charge(5)`, declared as the buffer's static capacity |
+| gate: `capacity > 10 && amount >= capacity` | `AtomicForgeBlockEntity.hasEnoughEnergy()` | `atomic_forge_charged` |
+| one tick at full charge spends **every** FE | `useEnergy()` (`amount = 0`), `checkCraftingFinished()` (`progress > 0`) | `AtomicForge::tick` → `Finished` |
+| 3 inputs, 1 output, inventory 4 | `getSlotAssignments()` → `InventorySlotAssignment(0, 3, 3, 1)` | container 3/1, 4 slots |
+| **8 cores** in a ring at y = 0 | `getCorePositions()` | `ATOMIC_CORE_OFFSETS` |
+| no addon slots | `getAddonSlots()` → empty | addon view is always `none` |
+| recipe type `oritech:atomic_forge` | `getOwnRecipeType()` | registered type + raw serializer |
+
+### What was added
+
+- `src/runtime.rs`: `ATOMIC_*` (1,024 default / 0 insert / 1,024 rate, 3 in / 1 out, eight offsets),
+  `atomic_forge_charge`, `atomic_forge_charged`, `AtomicForgeRecipe`/`AtomicError` (three ingredients,
+  one result, positive time, fluids refused) and `AtomicForge` with its **own** `tick` — the gate
+  cannot be expressed by the shared `advance`, so no other machine's behaviour was touched. Seven
+  new tests.
+- `src/support.rs`: `ATOMIC`/`ATOMIC_RECIPE`/`ATOMIC_TYPE`, the 3/1 container, the 5,120 buffer,
+  `AtomicSaved`/`atomic_state`/`store_atomic`/`AtomicView`, the cached three-ingredient table with
+  `atomic_plan`/`atomic_accepts`, `atomic_output_fits`/`finish_atomic`, `tick_atomic` (eight-core
+  assembly gate then the full-buffer gate), the click route, the `/oritech energy`/`info_line` arms,
+  cache reset and `atomic_line`. Four new tests plus `tools/slice12-glue-counterfactual.py`.
+- `src/lib.rs`: `AtomicPart`, the tenth block-entity type, the `oritech:atomic_forge` recipe type and
+  raw serializer.
+- Content: the Atomic Forge block (carried GeckoLib base texture, authored cube model/blockstate,
+  item definition, block declaration, loot, lang "Atomic Forge", tab, tool tags), the `silicon_wafer`
+  item (carried model/texture, authored definition/declaration/lang) and the bare-ingredient
+  `atomicforge/wafer.json`. `assets/` + `data/` are now **329 files** (`carry_content.py --check` →
+  329 files, 0 differ).
+- Harness: `tools/parse_info.py` parses the `Atomic Forge` line; `tools/e2e.sh` gained phases AA–AE
+  and the control/loot legs; `PLAN-slice12.md` is the plan.
+
+### Deviations (slice 12)
+
+1. **The active 5,120 FE capacity is static in the package.** Upstream resizes its storage for each
+   recipe (`getRecipe()`); the SDK's `block_energy` declaration is per block, so the package declares
+   the active value for its one carried recipe. The 1,024 config default is kept and tested, and the
+   5,119 prime is the fail-capable assertion — a machine that charged only one tick's worth cannot
+   fake the craft.
+2. **Eight positions, only seven core types.** `getCorePositions()` lists eight offsets but
+   `BlockContent` ships `machine_core_1..7`; the harness places a tier-2 core in the eighth slot, so
+   the readout's average quality is 3 (integer division), not 4.
+3. **The wafer has no downstream consumer here** — `blocked(plastic chain)`, recorded above. No
+   advanced computing engine, super AI chip or compensator is invented.
+4. **18 of 19 jar files are not ported** — the per-family table above is the closure record, not a
+   silent omission. The 97 unresolveable grinder files and the refinery's 22 remain their own gaps.
+5. **No GUI, no `lit` state, no GeckoLib render** — the same recorded gaps as slices 1–11. The
+   Atomic Forge's addon list is empty upstream, so there is no addon deviation to declare here.
+6. **The block has no crafting recipe** — `crafting/atomicforge.json` needs plastic, enderic
+   compound, a flux gate and duratium; obtained with `/give`, as with the other machines.
+
+`## Upstream defects fixed` (slice 12): none found. The gate is deliberate upstream behaviour.
+
+### Verification (0.2.16)
+
+Every Rust/package step ran in a `build-slot.sh` lease forwarded to `AdLf-PC`; the compile-forwarding
+lines and every exit are in `VALIDATION.md`. The complete ladder is green: 168 tests, 0 warnings,
+two `cmp`-identical 281,408 B builds, `check` + both `fits`, `verify-sdk-package` **1/1**,
+`check-recipe-types` `oritech: ok`, `carry_content.py --check` 329/0.
+
+### In-game transcript (quoted from `e2e-slice12-atomic.log`)
+
+```
+== AA: an unassembled Atomic Forge keeps a full charge and makes no wafer ==
+  info(28,100,20): Atomic Forge at [28, 100, 20]: 5120/5120 FE, assembled no core empty quality 0, progress 0 recipe none, in0 oritech:carbon_fibre_strands x1, in1 oritech:silicon x2, in2 empty, out empty, addons none, t=24569
+  unassembled with all three inputs and a full 5120 FE: no craft, buffer kept
+== AB: eight cores in their own ring assemble it; quality is their average ==
+  assembled with all eight core positions (oritech:machine_core_1+oritech:machine_core_2+oritech:machine_core_3+oritech:machine_core_4+oritech:machine_core_5+oritech:machine_core_6+oritech:machine_core_7+oritech:machine_core_2), average quality 3
+== AC: a full 5120 FE makes exactly one wafer and empties the buffer ==
+  full buffer: 1 carbon fibre + 2 silicon -> 1 wafer, all 5120 FE spent
+  (the completed line: 0/5120 FE, in0 empty, in1 empty, in2 empty, out oritech:silicon_wafer x1)
+== AD: one FE less never fires the gate and takes nothing ==
+  one FE short: after 60 ticks the inputs and all 5119 FE are untouched
+== AE: a jar recipe whose result has no consumer here makes nothing ==
+  deepslate (no carried recipe, its result has no consumer): no wafer, no input taken
+PASS: an unassembled Atomic Forge kept a full charge and made nothing, eight core positions assembled it, a full 5120 FE made exactly one silicon wafer and spent every FE, one FE less left the inputs and all 5119 FE untouched, and a recipe whose result has no consumer here made nothing
+EXIT:0
+```
+
+The leg is fail-capable four ways: the no-core gate (AA), the exact full charge (AC — a machine
+that spent one FE less would leave the wafer unmade), the one-FE-short gate (AD), and the
+no-consumer differential (AE). `SELFTEST=atomic` inverts AD and ends `EXIT:1` with
+`FAIL: OUT0 is 'empty', expected 'oritech:silicon_wafer x1'`; the package-less differential ends
+`PASS` + `EXIT:0` with every new id unknown. `check-e2e-logs.py oritech-e2e --strict` →
+**65 logs, 65 ok, 0 bad**. The 60 earlier logs (including the grinder family) are untouched.
+
+**One measured behaviour worth stating:** `checkCraftingFinished()` is `progress > 0`, so with a
+full buffer the craft completes on the **first** tick — `time: 5` only sizes the 5,120 FE storage,
+it is not a five-tick countdown. A harness that expected a mid-craft `recipe` field after the prime
+was wrong; the port correctly shows the completed wafer and a zero buffer.
+
+### Coverage added by slice 12
+
+| Family | Status | Evidence |
+|---|---|---|
+| `oritech:atomic_forge_block` | tested | AA (no core), AB (eight positions, quality 3), AC (exact charge), AD (one FE short), AE (differential); given/looted in the full leg |
+| `oritech:blocks/atomic_forge_block` | tested | W: the carried loot table rolls the block into the inventory |
+| `oritech:silicon_wafer` | tested | AC's output, the item give/read in AE, and the control leg's absent id |
+| `oritech:atomicforge/wafer` | tested | AC: 1 carbon fibre + 2 silicon → 1 wafer for exactly 5,120 FE, inputs emptied |
+| `recipe:oritech:atomic_forge` | not ported | the other 18 of 19 jar files; one reason per family in *The artefact decision* above |
+| `multiblock` | tested | AB: eight core positions in a ring, the empty-hand click assembles and the readout lists all eight |
+| `block_entity` | tested | the eight-core `Assembly` round-trip (unit) and the 5,119 prime surviving a reload (unit) |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
 ## Next slice
 
-**The atomic forge** (`oritech:atomic_forge_block`) is the next machines-shaped entry: 19 files,
-item-only, with a new mechanic the grinder did not exercise — `AtomicForgeBlockEntity` requires its
-buffer to be **full** (`rate × time`) before a craft runs, so the machine has a charge gate rather
-than the per-tick `advance` every ported machine shares. Its resolvable file is `wafer.json`
-(`#c:carbon_fibre` + 2 × `#c:silicon` → `oritech:silicon_wafer`, 5 ticks), but the wafer's only
-consumer, `advanced_computing_engine`, needs `processing_unit`, which needs `#c:plates/plastic` — the
-refinery/oil chain. **Read all 19 files first** and carry the family only if at least one result has a
-consumer in this package (the closure rule used for the foundry); if none does, record the atomic
-forge as `not ported(inert family)` and take the next resolvable one. The in-game assertion would be:
-place the forge, assemble its cores, prime exactly `rate × time` FE, assert the wafer output and a
-zero buffer, and prove the charge gate by priming one FE less and watching nothing craft; the
-differential is a recipe whose result this package cannot consume.
+**Re-check the fluid gap first, then the augment stations.** The atomic forge closes the last
+item-only processing machine whose tables resolve here, so the queue's blocking item is now the
+**plastic/oil chain**: `#c:plates/plastic` has no values (`assembler/processingunit.json`), and the
+refinery is `blocked(fluid-whitelist: #c:naphtha)` — two families (refinery, plastic) plus the
+chiller's `snow` and the lava generator's `sheolfire` all wait on the same missing fluid-tag query.
+At the next pin, first grep the SDK's `surface.json` for a **fluid-tag lookup** (`recipes_of_type`
+with a tag ingredient, or a `native_fluid_tag`-shaped helper). If one exists, that is a re-verification
+slice: replace the `tank_matches` `#tag` refusal, carry `refinery/carbonsheet.json` and the
+`polymer_resin` chain, then assert in game that a `#c:naphtha` fluid input resolves into a real
+carbon sheet (and that `snow`/`sheolfire` now run). If the gap persists, take the **augment stations**
+(`oritech:simple_augment_station` / `advanced_augment_station`) — gap 13's next item-only machines,
+`deep` tier and the **machines** shape, each a block entity with a container and an augment-insert
+rule — and assert in game that inserting one augments a neighbouring machine's readout by the jar's
+declared amount while the same machine unaugmented does not.
 
-**Also still open, in order**: the **plastic chain** behind `#c:plates/plastic` (`polymer_resin` from
-`still_naphtha` or `#c:biodiesel` — the same fluid gap as the refinery, so it needs a fluid decision
-first); the **refinery** (`blocked(fluid-whitelist: #c:naphtha)` — re-check at every new pin for a
-fluid-tag query, which would also unblock `snow` and `sheolfire`); the **deep drill/resource nodes**,
-the **augment stations and the jetpack**, the **special addons** (the control unit's four comparator
-modes, proxy, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop filter), and the
-**ores** themselves — `blocked(configured-feature-not-registered)` at this pin, to be re-checked at
-every new pin before any ore-fed family is scheduled.
+**Also still open, in order**: the **deep drill/resource nodes** and the **ores** themselves
+(`blocked(configured-feature-not-registered)` — re-check at every pin before scheduling any ore-fed
+family), the **jetpack and equipment**, and the **special addons** (the control unit's four
+comparator modes, proxy, extender, combi, quarry, hunter, yield, silk touch, steam boiler, crop
+filter). The Atomic Forge's 18 inert files and the wafer's plastic-gated downstream are recorded in
+*Slice 12* above; they need the same fluid decision before they become live data.

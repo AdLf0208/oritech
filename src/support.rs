@@ -19,25 +19,26 @@ use mod_api::{
 
 use crate::runtime::{
     ADDON_BLOCKS, ADDON_MODE, ASSEMBLER_CAPACITY, ASSEMBLER_CORE_OFFSETS,
-    ASSEMBLER_ENERGY_PER_TICK, ASSEMBLER_INPUTS, ASSEMBLER_MAX_INSERT, ASSEMBLER_SLOTS, Addons,
-    Assembler, AssemblerRecipe, Burst, CENTRIFUGE_CAPACITY, CENTRIFUGE_CORE_OFFSET,
-    CENTRIFUGE_ENERGY_PER_TICK, CENTRIFUGE_MAX_INSERT, CENTRIFUGE_SLOTS, CENTRIFUGE_TANK,
-    COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK, COOLER_MAX_INSERT, COOLER_TANK,
-    CORE_OFFSET, Centrifuge, CentrifugeInstall, CentrifugeRecipe, Cooler, CoolerRecipe,
-    EnergyTarget, FLUID_ADDON, FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS, FOUNDRY_ENERGY_PER_TICK,
-    FOUNDRY_INPUTS, FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY, FURNACE_ENERGY_PER_TICK,
-    FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput, Foundry, FoundryRecipe, Furnace,
-    GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, Generator, GRINDER_CAPACITY, GRINDER_CORE_OFFSETS,
-    GRINDER_ENERGY_PER_TICK, GRINDER_MAX_INSERT, GRINDER_OUTPUTS, GRINDER_SLOTS, Grinder,
-    GrinderInstall, GrinderRecipe, LAVA_CAPACITY, LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK,
+    ASSEMBLER_ENERGY_PER_TICK, ASSEMBLER_INPUTS, ASSEMBLER_MAX_INSERT, ASSEMBLER_SLOTS,
+    ATOMIC_ACTIVE_CHARGE, ATOMIC_CORE_OFFSETS, ATOMIC_INPUTS, ATOMIC_MAX_INSERT, ATOMIC_SLOTS,
+    Addons, Assembler, AssemblerRecipe, AtomicForge, AtomicForgeRecipe, Burst, CENTRIFUGE_CAPACITY,
+    CENTRIFUGE_CORE_OFFSET, CENTRIFUGE_ENERGY_PER_TICK, CENTRIFUGE_MAX_INSERT, CENTRIFUGE_SLOTS,
+    CENTRIFUGE_TANK, COOLER_CAPACITY, COOLER_CORE_OFFSET, COOLER_ENERGY_PER_TICK,
+    COOLER_MAX_INSERT, COOLER_TANK, CORE_OFFSET, Centrifuge, CentrifugeInstall, CentrifugeRecipe,
+    Cooler, CoolerRecipe, EnergyTarget, FLUID_ADDON, FOUNDRY_CAPACITY, FOUNDRY_CORE_OFFSETS,
+    FOUNDRY_ENERGY_PER_TICK, FOUNDRY_INPUTS, FOUNDRY_MAX_INSERT, FOUNDRY_SLOTS, FURNACE_CAPACITY,
+    FURNACE_ENERGY_PER_TICK, FURNACE_MAX_INSERT, FURNACE_SPEED, FluidInput, Foundry, FoundryRecipe,
+    Furnace, GENERATOR_CAPACITY, GENERATOR_MAX_EXTRACT, GRINDER_CAPACITY, GRINDER_CORE_OFFSETS,
+    GRINDER_ENERGY_PER_TICK, GRINDER_MAX_INSERT, GRINDER_OUTPUTS, GRINDER_SLOTS, Generator,
+    Grinder, GrinderInstall, GrinderRecipe, LAVA_CAPACITY, LAVA_CORE_OFFSET, LAVA_ENERGY_PER_TICK,
     LAVA_MAX_EXTRACT, LAVA_TANK, LavaGenRecipe, LavaGenerator, MACHINE_ENERGY_PER_TICK,
     PULVERIZER_CAPACITY, PULVERIZER_MAX_INSERT, Pulverizer, PulverizerRecipe, REDSTONE_ADDON,
     RecipeResult, SmeltingRecipe, Step, TankAfter, Work, addon_names, addon_settings, addon_slots,
-    after_consuming, after_draining, can_output, centrifuge_can_run, centrifuge_install,
-    centrifuge_output_fits, clamp_energy, cooler_output_fits, core_quality, craft_plan,
-    efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output, grinder_install,
-    grinder_output_fits, insert_slot, is_fuel, lava_output_targets, output_fits, processing_ticks,
-    redstone_disables, speed_multiplier, tank_matches,
+    after_consuming, after_draining, atomic_forge_charge, can_output, centrifuge_can_run,
+    centrifuge_install, centrifuge_output_fits, clamp_energy, cooler_output_fits, core_quality,
+    craft_plan, efficiency_multiplier, energy_usage, generator_burn_ticks, generator_output,
+    grinder_install, grinder_output_fits, insert_slot, is_fuel, lava_output_targets, output_fits,
+    processing_ticks, redstone_disables, speed_multiplier, tank_matches,
 };
 
 use crate::json::Value;
@@ -95,6 +96,13 @@ pub(crate) const CENTRIFUGE_TYPE: &str = "centrifuge";
 pub(crate) const FOUNDRY_TYPE: &str = "foundry";
 /// `BlockEntitiesContent.FRAGMENT_FORGE_ENTITY` (the block entity type, not the block).
 pub(crate) const GRINDER_TYPE: &str = "fragment_forge";
+/// The Atomic Forge (`BlockContent.ATOMIC_FORGE_BLOCK`) — slice 12. Its
+/// `hasEnoughEnergy()` needs a *full* recipe-sized buffer before a craft runs.
+pub(crate) const ATOMIC: &str = "oritech:atomic_forge_block";
+/// The recipe type the jar's `data/oritech/recipe/atomicforge/**` files name.
+pub(crate) const ATOMIC_RECIPE: &str = "oritech:atomic_forge";
+/// `BlockEntitiesContent.ATOMIC_FORGE_ENTITY` (the block entity type).
+pub(crate) const ATOMIC_TYPE: &str = "atomic_forge";
 
 /// Upstream slot order: the generator's fuel, the pulverizer's input and its
 /// two outputs, the furnace's input and its one output, the cooler's one output
@@ -116,6 +124,9 @@ const FOUNDRY_OUTPUT: usize = FOUNDRY_INPUTS;
 /// The Fragment Forge's `InventorySlotAssignment(0, 1, 1, 3)`: one input at 0,
 /// three outputs at 1, 2 and 3.
 const GRINDER_OUTPUT: usize = 1;
+/// The Atomic Forge's `InventorySlotAssignment(0, 3, 3, 1)`: slots 0–2 are inputs,
+/// slot 3 is the one output.
+const ATOMIC_OUTPUT: usize = ATOMIC_INPUTS;
 const GENERATOR_SLOTS: usize = 1;
 const PULVERIZER_SLOTS: usize = 3;
 const FURNACE_SLOTS: usize = 2;
@@ -269,6 +280,12 @@ pub(crate) fn container(block: &str) -> Option<ModContainer> {
             vec![INPUT_SLOT],
             vec![GRINDER_OUTPUT, GRINDER_OUTPUT + 1, GRINDER_OUTPUT + 2],
         ),
+        // `InventorySlotAssignment(0, 3, 3, 1)`: three inputs, one output.
+        ATOMIC => (
+            ATOMIC_SLOTS,
+            (0..ATOMIC_INPUTS).collect(),
+            vec![ATOMIC_OUTPUT],
+        ),
         _ => return None,
     };
     Some(ModContainer {
@@ -297,6 +314,12 @@ pub(crate) fn battery(block: &str) -> Option<ModEnergyBuffer> {
         FOUNDRY => (FOUNDRY_CAPACITY, FOUNDRY_MAX_INSERT, 0),
         // `fragmentForgeData`: 50,000 / 2,048 (`256 * 8`) / 0.
         GRINDER => (GRINDER_CAPACITY, GRINDER_MAX_INSERT, 0),
+        // `atomicForgeData`: 1,024 default / 0 insert / 0 extract. Upstream
+        // resizes the storage to `energyPerTick × time` while a recipe is loaded
+        // (the wafer's 1,024 × 5 = 5,120); the SDK declaration is static, so the
+        // package declares that active capacity. The 1,024 default is kept as a
+        // constant and tested — a 5,119 prime must not fire the wafer.
+        ATOMIC => (ATOMIC_ACTIVE_CHARGE, ATOMIC_MAX_INSERT, 0),
         _ => return None,
     };
     Some(ModEnergyBuffer {
@@ -943,6 +966,44 @@ pub(crate) struct GrinderView<'a> {
     pub(crate) core: Option<(&'a str, i32)>,
     pub(crate) input: Option<(&'a str, u32)>,
     pub(crate) outputs: [Option<(&'a str, u32)>; GRINDER_OUTPUTS],
+}
+
+/// The Atomic Forge saved in a block entity's compound: the charge-gated machine
+/// plus the eight-core multiblock facts.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct AtomicSaved {
+    pub(crate) machine: AtomicForge,
+    pub(crate) assembly: Assembly,
+}
+
+/// Read the Atomic Forge from its saved compound. The energy is clamped to the
+/// *active* capacity (5,120 for the wafer), not the 1,024 config default.
+pub(crate) fn atomic_state(nbt: &Compound, capacity: i32) -> AtomicSaved {
+    AtomicSaved {
+        machine: AtomicForge {
+            energy: clamp_energy(read_int(nbt, KEY_ENERGY), capacity),
+            progress: read_int(nbt, KEY_PROGRESS).max(0) as u32,
+            recipe: read_string(nbt, KEY_RECIPE),
+        },
+        assembly: multiblock_state(nbt),
+    }
+}
+
+/// Write the Atomic Forge's tick result back, with the same keys every machine uses.
+pub(crate) fn store_atomic(nbt: &mut Compound, saved: &AtomicSaved) {
+    write_int(nbt, KEY_ENERGY, saved.machine.energy);
+    write_int(nbt, KEY_PROGRESS, saved.machine.progress as i32);
+    write_string(nbt, KEY_RECIPE, &saved.machine.recipe);
+    store_multiblock(nbt, &saved.assembly);
+}
+
+/// What the readout prints about an Atomic Forge: its saved state, its eight
+/// cores, its three inputs and its one output.
+pub(crate) struct AtomicView<'a> {
+    pub(crate) saved: &'a AtomicSaved,
+    pub(crate) core: Option<(&'a str, i32)>,
+    pub(crate) inputs: [Option<(&'a str, u32)>; ATOMIC_INPUTS],
+    pub(crate) output: Option<(&'a str, u32)>,
 }
 
 /// The Centrifuge saved in a block entity's compound: the machine's three values,
@@ -1907,6 +1968,9 @@ static ASSEMBLER_RECIPES: Mutex<Option<Vec<MultiResolved<AssemblerRecipe>>>> = M
 static FOUNDRY_RECIPES: Mutex<Option<Vec<MultiResolved<FoundryRecipe>>>> = Mutex::new(None);
 /// The grinder's recipes have one resolved ingredient each, like the pulverizer's.
 static GRINDER_RECIPES: Mutex<Option<Vec<Resolved<GrinderRecipe>>>> = Mutex::new(None);
+/// The Atomic Forge's parsed table: three resolved ingredients per recipe, cached
+/// the same way the assembler's and foundry's are.
+static ATOMIC_RECIPES: Mutex<Option<Vec<MultiResolved<AtomicForgeRecipe>>>> = Mutex::new(None);
 /// The centrifuge's two tables: both have one resolved ingredient each, so both
 /// use the [`Resolved`] shape (the item table for the click's "is this an
 /// ingredient" test, not only the tick's first match).
@@ -2325,6 +2389,153 @@ fn grinder_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
         .is_some_and(|recipes| recipes.iter().any(|r| r.ingredient.test(host, stack)))
 }
 
+// ---------------------------------------------------------------------------
+// Slice 12: the Atomic Forge (`oritech:atomic_forge_block`)
+// ---------------------------------------------------------------------------
+
+/// The cached `oritech:atomic_forge` table. A file whose ingredient the engine
+/// cannot resolve is dropped, exactly as the assembler's multi-ingredient table does.
+fn with_atomic_recipes<R>(
+    host: &dyn Host,
+    look: impl FnOnce(&[MultiResolved<AtomicForgeRecipe>]) -> R,
+) -> R {
+    let due = RECIPE_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(RECIPE_CACHE_TICKS);
+    let mut cache = ATOMIC_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.is_none() || due {
+        *cache = Some(multi_table(host, ATOMIC_RECIPE, |id, json| {
+            AtomicForgeRecipe::parse(id, json).ok().map(|recipe| {
+                let ingredients = recipe.ingredients.clone();
+                (recipe, ingredients)
+            })
+        }));
+    }
+    look(cache.as_deref().unwrap_or(&[]))
+}
+
+/// The Atomic Forge recipe the three input slots can pay for, with the slots one
+/// craft drains (`OritechRecipe.complexMatch`, the assembler's multiset rule).
+fn atomic_plan(
+    host: &dyn Host,
+    items: &[Option<ItemStack>],
+) -> Option<(AtomicForgeRecipe, Vec<usize>)> {
+    let stacks: Vec<Option<ItemStack>> = (0..ATOMIC_INPUTS)
+        .map(|slot| items.get(slot).cloned().flatten())
+        .collect();
+    let counts: Vec<u32> = stacks
+        .iter()
+        .map(|stack| stack.as_ref().map_or(0, ItemStack::count))
+        .collect();
+    if counts.iter().all(|count| *count == 0) {
+        return None;
+    }
+    with_atomic_recipes(host, |recipes| {
+        recipes.iter().find_map(|resolved| {
+            let fits: Vec<Vec<bool>> = resolved
+                .ingredients
+                .iter()
+                .map(|ingredient| {
+                    stacks
+                        .iter()
+                        .map(|stack| {
+                            stack
+                                .as_ref()
+                                .is_some_and(|stack| ingredient.test(host, stack))
+                        })
+                        .collect()
+                })
+                .collect();
+            craft_plan(&counts, &fits).map(|plan| (resolved.recipe.clone(), plan))
+        })
+    })
+}
+
+/// Whether any loaded atomic-forge recipe names `stack`: the right click's refusal.
+fn atomic_accepts(host: &dyn Host, stack: &ItemStack) -> bool {
+    with_atomic_recipes(host, |recipes| {
+        recipes.iter().any(|resolved| {
+            resolved
+                .ingredients
+                .iter()
+                .any(|ingredient| ingredient.test(host, stack))
+        })
+    })
+}
+
+/// `MachineBlockEntity.canOutputRecipe` over the one output slot.
+fn atomic_output_fits(host: &dyn Host, items: &[Option<ItemStack>], result: &RecipeResult) -> bool {
+    let output = items
+        .get(ATOMIC_OUTPUT)
+        .and_then(Option::as_ref)
+        .map(|stack| (stack.item().id(host), count_of(stack)));
+    output_fits(
+        output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+        result,
+        max_stack(host, &result.item),
+    )
+}
+
+/// `MachineBlockEntity.craftItem` for the Atomic Forge: one item out of each
+/// planned input slot, then the result into the one output. Inputs leave before
+/// the output is granted, the order every machine in this port uses.
+fn finish_atomic(
+    host: &dyn Host,
+    items: &mut [Option<ItemStack>],
+    plan: &[usize],
+    recipe: &AtomicForgeRecipe,
+) {
+    for slot in plan {
+        if !consume_one(items, *slot) {
+            return;
+        }
+    }
+    grow_output(host, items, ATOMIC_OUTPUT, &recipe.result);
+}
+
+/// One server tick of the Atomic Forge. The eight-core assembly gate and the
+/// recipe-sized full-buffer gate both live ahead of any input consumption: a
+/// charge of `rate × time − 1` spends nothing and takes nothing.
+pub(crate) fn tick_atomic(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    nbt: &mut Compound,
+    items: &mut Vec<Option<ItemStack>>,
+) -> bool {
+    let resized = items.len() != ATOMIC_SLOTS;
+    if resized {
+        items.resize(ATOMIC_SLOTS, None);
+    }
+    let (disabled, flag_moved) = redstone_gate(&*host, level, ATOMIC, pos, nbt);
+    let before = atomic_state(nbt, ATOMIC_ACTIVE_CHARGE);
+    let mut saved = before.clone();
+    recheck_cores(&*host, level, pos, &mut saved.assembly);
+    let mut step = Step::Idle;
+    if saved.assembly.assembled && !disabled {
+        let plan = atomic_plan(&*host, items);
+        let charge = plan
+            .as_ref()
+            .map_or(0, |(recipe, _)| atomic_forge_charge(recipe.time));
+        let can_craft = plan
+            .as_ref()
+            .is_some_and(|(recipe, _)| atomic_output_fits(&*host, items, &recipe.result));
+        step = saved.machine.tick(charge, can_craft);
+        if let Some((recipe, _)) = plan.as_ref() {
+            saved.machine.recipe = recipe.id.clone();
+        }
+        if step == Step::Finished
+            && let Some((recipe, slots)) = plan.as_ref()
+        {
+            finish_atomic(&*host, items, slots, recipe);
+        }
+    }
+    store_atomic(nbt, &saved);
+    resized || flag_moved || step != Step::Idle || saved != before
+}
+
 fn foundry_plan(
     host: &dyn Host,
     items: &[Option<ItemStack>],
@@ -2500,9 +2711,7 @@ pub(crate) fn tick_grinder(
     let mut step = Step::Idle;
     if saved.assembly.assembled && !disabled {
         let input = items[INPUT_SLOT].clone();
-        let recipe = input
-            .as_ref()
-            .and_then(|stack| find_grinder(&*host, stack));
+        let recipe = input.as_ref().and_then(|stack| find_grinder(&*host, stack));
         let work = recipe.as_ref().and_then(|recipe| {
             let outputs = grinder_outputs(&*host, items);
             grinder_output_fits(&recipe.results, grinder_output_refs(&outputs), |item| {
@@ -2528,11 +2737,9 @@ pub(crate) fn tick_grinder(
                 };
                 let outputs = grinder_outputs(&*host, items);
                 if next.id != recipe.id
-                    || !grinder_output_fits(
-                        &next.results,
-                        grinder_output_refs(&outputs),
-                        |item| max_stack(&*host, item),
-                    )
+                    || !grinder_output_fits(&next.results, grinder_output_refs(&outputs), |item| {
+                        max_stack(&*host, item)
+                    })
                 {
                     break;
                 }
@@ -2583,12 +2790,9 @@ fn finish_grinder(host: &dyn Host, items: &mut [Option<ItemStack>], recipe: &Gri
         .map_or(0, count_of);
     let input = u32::try_from(input).unwrap_or(0);
     let outputs = grinder_outputs(host, items);
-    let Some(install) = grinder_install(
-        recipe,
-        input,
-        grinder_output_refs(&outputs),
-        |item| max_stack(host, item),
-    ) else {
+    let Some(install) = grinder_install(recipe, input, grinder_output_refs(&outputs), |item| {
+        max_stack(host, item)
+    }) else {
         return;
     };
     if !apply_grinder_install(items, install) {
@@ -2935,6 +3139,23 @@ pub(crate) fn right_click(host: HostSide<'_>, event: &mut RightClickBlockEvent<'
         );
         return Flow::Cancel;
     }
+    if name == ATOMIC {
+        // The Atomic Forge's three inputs take any item one of its loaded
+        // recipes names; `findLowestMatchingSlot` picks the first open one.
+        let held_id = held.item().id(&*server);
+        if !atomic_accepts(&*server, &held) {
+            let message = format!("{held_id} is not an ingredient of an atom-forging recipe");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        }
+        let Some(slot) = machine_input_slot(&*server, level, pos, ATOMIC_INPUTS, &held_id) else {
+            let message = format!("{held_id} has no room in the Atomic Forge's three input slots");
+            say(server, click.player, &message);
+            return Flow::Cancel;
+        };
+        insert_held(server, level, pos, click.player, click.hand, &held, slot);
+        return Flow::Cancel;
+    }
     if name == GENERATOR {
         if !is_fuel(burn_time(&*server, &held)) {
             let message = format!("{} is not a fuel", held.item().id(&*server));
@@ -2968,6 +3189,7 @@ fn core_offsets_for(block: &str) -> Option<&'static [[i32; 3]]> {
         CENTRIFUGE => Some(&[CENTRIFUGE_CORE_OFFSET]),
         FOUNDRY => Some(&FOUNDRY_CORE_OFFSETS),
         GRINDER => Some(&GRINDER_CORE_OFFSETS),
+        ATOMIC => Some(&ATOMIC_CORE_OFFSETS),
         _ => None,
     }
 }
@@ -3436,6 +3658,29 @@ pub(crate) fn info_line(host: &mut dyn ServerHost, pos: [i32; 3]) -> Option<Stri
                 time,
             ))
         }
+        ATOMIC => {
+            let saved = atomic_state(&nbt, ATOMIC_ACTIVE_CHARGE);
+            let core = core_view(&*host, level, pos, &saved.assembly);
+            let held: Vec<Option<(String, u32)>> = (0..ATOMIC_INPUTS).map(slot).collect();
+            let inputs: [Option<(&str, u32)>; ATOMIC_INPUTS] = std::array::from_fn(|index| {
+                held[index]
+                    .as_ref()
+                    .map(|(id, count)| (id.as_str(), *count))
+            });
+            let output = slot(ATOMIC_OUTPUT);
+            Some(atomic_line(
+                pos,
+                &AtomicView {
+                    saved: &saved,
+                    core: core.as_ref().map(|(id, quality)| (id.as_str(), *quality)),
+                    inputs,
+                    output: output.as_ref().map(|(id, count)| (id.as_str(), *count)),
+                },
+                ATOMIC_ACTIVE_CHARGE,
+                &AddonView::of(&[], Burst::default(), 0, false),
+                time,
+            ))
+        }
         other => Some(format!("{pos:?} is a {other}, not an Oritech machine.")),
     }
 }
@@ -3460,6 +3705,7 @@ pub(crate) fn set_energy(host: &mut dyn ServerHost, pos: [i32; 3], amount: i32) 
         CENTRIFUGE => addons.capacity(CENTRIFUGE_CAPACITY),
         FOUNDRY => addons.capacity(FOUNDRY_CAPACITY),
         GRINDER => addons.capacity(GRINDER_CAPACITY),
+        ATOMIC => ATOMIC_ACTIVE_CHARGE,
         _ => return None,
     };
     let entity = host.block_entity(level, pos)?;
@@ -3596,6 +3842,9 @@ pub(crate) fn reset_world_state() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *GRINDER_RECIPES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *ATOMIC_RECIPES
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *CENTRIFUGE_RECIPES
@@ -3801,12 +4050,55 @@ pub(crate) fn grinder_line(
          progress {} recipe {recipe}, input {}, out0 {}, out1 {}, out2 {}, {}, t={t}",
         saved.machine.energy,
         capacity,
-        if saved.assembly.assembled { "yes" } else { "no" },
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
         saved.machine.progress,
         slot_text(view.input),
         slot_text(out0),
         slot_text(out1),
         slot_text(out2),
+        addons.text(),
+    )
+}
+
+/// The Atomic Forge's line: the eight-core assembly first, then the charge, the
+/// three inputs and the one output. `charge` prints the active capacity so the
+/// one-FE-short prime is readable in the transcript.
+pub(crate) fn atomic_line(
+    pos: [i32; 3],
+    view: &AtomicView<'_>,
+    capacity: i32,
+    addons: &AddonView,
+    t: i64,
+) -> String {
+    let saved = view.saved;
+    let (core, quality) = view
+        .core
+        .map_or(("empty", 0), |(id, quality)| (id, quality));
+    let recipe = if saved.machine.recipe.is_empty() {
+        "none"
+    } else {
+        saved.machine.recipe.as_str()
+    };
+    let [in0, in1, in2] = view.inputs;
+    format!(
+        "Atomic Forge at {pos:?}: {}/{} FE, assembled {} core {core} quality {quality}, \
+         progress {} recipe {recipe}, in0 {}, in1 {}, in2 {}, out {}, {}, t={t}",
+        saved.machine.energy,
+        capacity,
+        if saved.assembly.assembled {
+            "yes"
+        } else {
+            "no"
+        },
+        saved.machine.progress,
+        slot_text(in0),
+        slot_text(in1),
+        slot_text(in2),
+        slot_text(view.output),
         addons.text(),
     )
 }
@@ -5580,7 +5872,9 @@ mod tests {
         // positions, so the two tables cannot drift: a multiblock added to one
         // and forgotten in the other would take no clicks at all (the foundry's
         // first cut was exactly that bug).
-        for block in [FURNACE, COOLER, LAVA, ASSEMBLER, CENTRIFUGE, FOUNDRY, GRINDER] {
+        for block in [
+            FURNACE, COOLER, LAVA, ASSEMBLER, CENTRIFUGE, FOUNDRY, GRINDER,
+        ] {
             assert!(
                 core_offsets_for(block).is_some(),
                 "{block} is a multiblock controller"
@@ -5824,6 +6118,7 @@ mod tests {
             CENTRIFUGE_FLUID_RECIPE,
             FOUNDRY_RECIPE,
             GRINDER_RECIPE,
+            ATOMIC_RECIPE,
         ];
         for (path, recipe) in carried_recipes() {
             let kind = recipe["type"].as_str().unwrap_or_default();
@@ -5851,6 +6146,7 @@ mod tests {
             "CENTRIFUGE_FLUID_RECIPE",
             "FOUNDRY_RECIPE",
             "GRINDER_RECIPE",
+            "ATOMIC_RECIPE",
         ];
         for constant in constants {
             let call = format!("register_recipe_type(support::{constant})");
@@ -5951,13 +6247,13 @@ mod tests {
         store_grinder(&mut nbt, &saved);
         assert_eq!(grinder_state(&nbt, GRINDER_CAPACITY), saved);
         assert_eq!(read_int(&nbt, KEY_PROGRESS), 23);
-        assert_eq!(
-            read_string(&nbt, KEY_RECIPE),
-            "oritech:grinder/ore/iron"
-        );
+        assert_eq!(read_string(&nbt, KEY_RECIPE), "oritech:grinder/ore/iron");
         let mut over = Compound::new();
         write_int(&mut over, KEY_ENERGY, 99_999);
-        assert_eq!(grinder_state(&over, GRINDER_CAPACITY).machine.energy, 50_000);
+        assert_eq!(
+            grinder_state(&over, GRINDER_CAPACITY).machine.energy,
+            50_000
+        );
     }
 
     #[test]
@@ -6025,7 +6321,10 @@ mod tests {
             let results = recipe["results"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{path}: no results"));
-            assert!(!results.is_empty() && results.len() <= GRINDER_OUTPUTS, "{path}: 1..=3 results");
+            assert!(
+                !results.is_empty() && results.len() <= GRINDER_OUTPUTS,
+                "{path}: 1..=3 results"
+            );
             for result in results {
                 let id = result["id"].as_str().unwrap_or_default();
                 ingredient_resolves(path, id);
@@ -6040,7 +6339,9 @@ mod tests {
         assert_eq!(iron["ingredients"], json(r##"["#minecraft:iron_ores"]"##));
         assert_eq!(
             iron["results"],
-            json(r#"[{"count":2,"id":"minecraft:raw_iron"},{"count":1,"id":"oritech:raw_nickel"}]"#)
+            json(
+                r#"[{"count":2,"id":"minecraft:raw_iron"},{"count":1,"id":"oritech:raw_nickel"}]"#
+            )
         );
     }
 
@@ -6053,7 +6354,97 @@ mod tests {
         assert_eq!(recipe["type"], json(r#""minecraft:smelting""#));
         assert_eq!(recipe["cookingtime"], json("200"));
         assert_eq!(recipe["ingredient"], json(r#""oritech:raw_nickel""#));
-        assert_eq!(recipe["result"], json(r#"{"count": 1, "id": "oritech:nickel_ingot"}"#));
+        assert_eq!(
+            recipe["result"],
+            json(r#"{"count": 1, "id": "oritech:nickel_ingot"}"#)
+        );
         assert_eq!(path, "nickel_ingot_from_smelting_raw_nickel.json");
+    }
+
+    #[test]
+    fn the_atomic_forge_declares_three_inputs_one_output_and_the_charged_buffer() {
+        let holder = container(ATOMIC).expect("the Atomic Forge has a container");
+        assert_eq!(holder.slots, ATOMIC_SLOTS, "four slots");
+        assert_eq!(holder.inputs, vec![0, 1, 2]);
+        assert_eq!(holder.outputs, vec![3]);
+        let battery = battery(ATOMIC).expect("the Atomic Forge has a buffer");
+        assert_eq!(battery.capacity, ATOMIC_ACTIVE_CHARGE);
+        assert_eq!(battery.capacity, 5_120, "energyPerTick x the wafer's time");
+        assert_eq!(
+            battery.max_insert, ATOMIC_MAX_INSERT,
+            "upstream takes no cable insert"
+        );
+        assert_eq!(core_offsets_for(ATOMIC), Some(&ATOMIC_CORE_OFFSETS[..]));
+        assert_eq!(ATOMIC_CORE_OFFSETS.len(), 8, "getCorePositions, not seven");
+        assert_eq!(crate::runtime::ATOMIC_DEFAULT_CAPACITY, 1_024);
+        assert!(fluids(ATOMIC).is_none(), "the Atomic Forge has no tank");
+    }
+
+    #[test]
+    fn the_atomic_forges_state_reads_back_the_one_fee_short_prime() {
+        let mut nbt = Compound::new();
+        assert_eq!(
+            atomic_state(&nbt, ATOMIC_ACTIVE_CHARGE),
+            AtomicSaved::default(),
+            "a fresh Atomic Forge is unassembled and empty"
+        );
+        let saved = AtomicSaved {
+            machine: AtomicForge {
+                energy: 5_119,
+                progress: 0,
+                recipe: "oritech:atomicforge/wafer".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: ATOMIC_CORE_OFFSETS.to_vec(),
+                quality: 4.0,
+            },
+        };
+        store_atomic(&mut nbt, &saved);
+        assert_eq!(atomic_state(&nbt, ATOMIC_ACTIVE_CHARGE), saved);
+        assert_eq!(
+            atomic_state(&nbt, ATOMIC_ACTIVE_CHARGE).machine.energy,
+            5_119,
+            "the one-FE-short prime survives a reload verbatim"
+        );
+    }
+
+    #[test]
+    fn the_atomic_forge_line_prints_eight_cores_three_inputs_and_the_charge() {
+        let saved = AtomicSaved {
+            machine: AtomicForge {
+                energy: 5_119,
+                progress: 0,
+                recipe: "oritech:atomicforge/wafer".to_owned(),
+            },
+            assembly: Assembly {
+                assembled: true,
+                cores: ATOMIC_CORE_OFFSETS.to_vec(),
+                quality: 4.0,
+            },
+        };
+        let line = atomic_line(
+            [32, 100, 20],
+            &AtomicView {
+                saved: &saved,
+                core: Some(("oritech:machine_core_1", 1)),
+                inputs: [
+                    Some(("oritech:carbon_fibre_strands", 1)),
+                    Some(("oritech:silicon", 2)),
+                    None,
+                ],
+                output: None,
+            },
+            ATOMIC_ACTIVE_CHARGE,
+            &AddonView::none(),
+            424,
+        );
+        assert_eq!(
+            line,
+            "Atomic Forge at [32, 100, 20]: 5119/5120 FE, assembled yes core \
+             oritech:machine_core_1 quality 1, progress 0 recipe oritech:atomicforge/wafer, \
+             in0 oritech:carbon_fibre_strands x1, in1 oritech:silicon x2, in2 empty, out empty, \
+             addons none, t=424"
+        );
     }
 }

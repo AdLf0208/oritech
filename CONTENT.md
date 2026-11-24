@@ -238,3 +238,29 @@ machines whose recipes the chain cannot yet pay for.
 `carry_content.py --check` writes **317 files**, 0 differ.
 
 
+
+## Slice 12: the Atomic Forge, the silicon wafer and the wafer recipe (12 new files)
+
+**Carried byte for byte** (`CARRIED`): the Atomic Forge's GeckoLib base texture
+(`assets/oritech/textures/block/models/atomic_forge_block.png`), the silicon wafer's item model
+(`assets/oritech/models/item/silicon_wafer.json`) and its texture
+(`assets/oritech/textures/item/silicon_wafer.png`).
+
+**Authored** from the jar's facts: the Atomic Forge's one-variant blockstate and `cube_all` block
+model (the jar's blockstate names the `machine_speed_addon` placeholder and its item model is
+`builtin/entity`), item model, 26.3 item definition, block declaration (the `minecraft:iron_block`
+copy with `occludes: false`), self-drop loot table, lang name (`block.oritech.atomic_forge_block` →
+"Atomic Forge"), place in the machines tab and the pickaxe / stone-tool tags; the silicon wafer's
+26.3 item definition, `horizon/item` declaration (`minecraft:iron_ingot` template) and lang name
+("Silicon Wafer") and its place in the components tab.
+
+**One recipe** is carried: `data/oritech/recipe/atomicforge/wafer.json` in 26.3's bare ingredient
+form — `#c:carbon_fibre` + 2 × `#c:silicon` → one `oritech:silicon_wafer` in 5 ticks. Both tags are
+shipped by this package. The other 18 `atomicforge/**` files are refused by the closure rule (result
+and every ingredient must resolve), one reason per family in `notes.md` → *Slice 12* → *The artefact
+decision*. The wafer's only consumer (`advcomputer.json`) needs `processing_unit` from
+`#c:plates/plastic`, the blocked refinery/oil chain, so no downstream use is invented. The block's
+own `crafting/atomicforge.json` needs plastic, `enderic_compound`, `flux_gate` and `duratium_ingot`,
+none carried.
+
+`carry_content.py --check` writes **329 files**, 0 differ.

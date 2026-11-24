@@ -2263,7 +2263,9 @@ impl GrinderRecipe {
         }
         // This machine declares no tank: a file that moves a fluid would consume
         // its item input and produce nothing. Refuse it rather than load it.
-        if value.get("fluidInput").is_some_and(|input| !input.is_null())
+        if value
+            .get("fluidInput")
+            .is_some_and(|input| !input.is_null())
             || value
                 .get("fluidOutputs")
                 .and_then(Value::as_array)
@@ -2313,6 +2315,212 @@ impl Grinder {
             work,
             cost,
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 12: the Atomic Forge (`oritech:atomic_forge_block`)
+// ---------------------------------------------------------------------------
+
+/// `OritechConfig.processingMachines.atomicForgeData.energyCapacity` — the
+/// default `getDefaultCapacity()`. While a recipe is loaded upstream resizes the
+/// storage to `energyPerTick × time`, which is why the package declares the
+/// wafer's active 5,120 FE instead of this 1,024 default.
+pub const ATOMIC_DEFAULT_CAPACITY: i32 = 1_024;
+/// `atomicForgeData.maxEnergyInsertion` — `getDefaultInsertRate()`: upstream's
+/// forge takes no cable insert; its recipe-sized buffer is the charge gate.
+pub const ATOMIC_MAX_INSERT: i32 = 0;
+/// `atomicForgeData.maxEnergyExtraction`.
+pub const ATOMIC_MAX_EXTRACT: i32 = 0;
+/// `atomicForgeData.energyPerTick`: the rate the active recipe sizes the buffer by.
+pub const ATOMIC_RATE: i32 = 1_024;
+/// `getSlotAssignments() = InventorySlotAssignment(0, 3, 3, 1)`: three inputs
+/// and one output, an inventory of four.
+pub const ATOMIC_INPUTS: usize = 3;
+pub const ATOMIC_OUTPUTS: usize = 1;
+pub const ATOMIC_SLOTS: usize = ATOMIC_INPUTS + ATOMIC_OUTPUTS;
+/// `AtomicForgeBlockEntity.getCorePositions`: **eight** cores in a ring at y = 0.
+pub const ATOMIC_CORE_OFFSETS: [[i32; 3]; 8] = [
+    [1, 0, 1],
+    [1, 0, 0],
+    [1, 0, -1],
+    [0, 0, 1],
+    [0, 0, -1],
+    [-1, 0, 1],
+    [-1, 0, 0],
+    [-1, 0, -1],
+];
+
+/// `AtomicForgeBlockEntity.getRecipe()`: the storage is resized to
+/// `energyPerTick × recipe.time` — 1,024 × 5 = **5,120 FE** for `wafer.json`.
+#[must_use]
+pub const fn atomic_forge_charge(time: u32) -> i32 {
+    let charge = ATOMIC_RATE as i64 * time as i64;
+    if charge > i32::MAX as i64 {
+        i32::MAX
+    } else {
+        charge as i32
+    }
+}
+
+/// The jar's `data/oritech/recipe/atomicforge/wafer.json` time: 5 ticks.
+pub const ATOMIC_WAFER_TIME: u32 = 5;
+/// The active recipe-sized capacity the package declares: 1,024 × 5 = **5,120 FE**.
+/// Upstream resizes its storage in `getRecipe()`; the SDK's declaration is static.
+pub const ATOMIC_ACTIVE_CHARGE: i32 = atomic_forge_charge(ATOMIC_WAFER_TIME);
+
+/// `AtomicForgeBlockEntity.hasEnoughEnergy()`:
+/// `capacity > 10 && amount >= capacity` — the buffer must be *full*, not merely
+/// hold one tick's worth like every other machine in this port.
+#[must_use]
+pub fn atomic_forge_charged(energy: i32, charge: i32) -> bool {
+    charge > 10 && energy >= charge
+}
+
+/// Why an `oritech:atomic_forge` recipe's JSON was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicError {
+    Unreadable,
+    WrongInputCount,
+    WrongResultCount,
+    BadResult,
+    FluidOutput,
+    BadTime,
+}
+
+impl std::fmt::Display for AtomicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unreadable => "unreadable JSON",
+            Self::WrongInputCount => "not exactly three ingredients",
+            Self::WrongResultCount => "not exactly one result",
+            Self::BadResult => "a result without an item id or with a bad count",
+            Self::FluidOutput => "a fluid recipe this package cannot run",
+            Self::BadTime => "no positive time",
+        })
+    }
+}
+
+impl std::error::Error for AtomicError {}
+
+/// An `oritech:atomic_forge` recipe: three ingredients, one item result, a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomicForgeRecipe {
+    pub id: String,
+    /// Its ingredients, as the pin's `native_recipe_ingredient` reads them.
+    pub ingredients: Vec<Value>,
+    /// The one result.
+    pub result: RecipeResult,
+    pub time: u32,
+}
+
+impl AtomicForgeRecipe {
+    /// Parse one recipe file. A fluid field is refused (no tank here), and a
+    /// missing time is refused: upstream's gate needs `rate × time`.
+    pub fn parse(id: &str, json: &str) -> Result<Self, AtomicError> {
+        let value = Value::parse(json).ok_or(AtomicError::Unreadable)?;
+        if value.get("type").and_then(Value::as_str).is_none() {
+            return Err(AtomicError::Unreadable);
+        }
+        let ingredients = value
+            .get("ingredients")
+            .and_then(Value::as_array)
+            .ok_or(AtomicError::WrongInputCount)?;
+        if ingredients.len() != ATOMIC_INPUTS {
+            return Err(AtomicError::WrongInputCount);
+        }
+        let results = value
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or(AtomicError::WrongResultCount)?;
+        if results.len() != ATOMIC_OUTPUTS {
+            return Err(AtomicError::WrongResultCount);
+        }
+        let result = &results[0];
+        let item = result
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|item| !item.is_empty())
+            .ok_or(AtomicError::BadResult)?;
+        let count = result.get("count").and_then(Value::as_i64).unwrap_or(1);
+        if !(1..=99).contains(&count) {
+            return Err(AtomicError::BadResult);
+        }
+        // No tank is declared, so a fluid file would take its items and make nothing.
+        if value
+            .get("fluidInput")
+            .is_some_and(|input| !input.is_null())
+            || value
+                .get("fluidOutputs")
+                .and_then(Value::as_array)
+                .is_some_and(|outputs| !outputs.is_empty())
+        {
+            return Err(AtomicError::FluidOutput);
+        }
+        let time = value
+            .get("time")
+            .and_then(Value::as_u64)
+            .filter(|time| *time > 0)
+            .ok_or(AtomicError::BadTime)?;
+        Ok(Self {
+            id: id.to_owned(),
+            ingredients: ingredients.iter().map(ingredient_json).collect(),
+            result: RecipeResult {
+                item: item.to_owned(),
+                count: count as i32,
+            },
+            time: u32::try_from(time).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// The Atomic Forge's state. `progress` is only ever 0 or 1: upstream's
+/// `checkCraftingFinished()` is `progress > 0`, and a full buffer spends every FE.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtomicForge {
+    pub energy: i32,
+    pub progress: u32,
+    pub recipe: String,
+}
+
+impl AtomicForge {
+    /// An empty forge.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "pure API: the glue builds the state from NBT, the tests use the empty one"
+    )]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One server tick. `charge` is the active recipe's `rate × time` (0 when no
+    /// recipe matches); `can_craft` folds in the recipe match and output room.
+    /// The whole full-buffer decision lives here so the glue cannot spend early.
+    pub fn tick(&mut self, charge: i32, can_craft: bool) -> Step {
+        if charge <= 0 {
+            // `AtomicForgeBlockEntity.getRecipe()` with no result sets the
+            // storage's capacity to 1 and its amount to 0: an idle forge is empty.
+            self.energy = 0;
+            self.progress = 0;
+            self.recipe.clear();
+            return Step::Idle;
+        }
+        if !can_craft {
+            // `canProceed()` is false for a blocked output: no `useEnergy`, no
+            // progress, and the charged buffer stays exactly where it was.
+            self.progress = 0;
+            return Step::Idle;
+        }
+        if !atomic_forge_charged(self.energy, charge) {
+            self.progress = 0;
+            return Step::Starved;
+        }
+        // `useEnergy()` zeroes the *whole* buffer; one tick is enough because
+        // `checkCraftingFinished()` is simply `progress > 0`.
+        self.energy = 0;
+        self.progress = 0;
+        Step::Finished
     }
 }
 
@@ -4621,11 +4829,33 @@ mod tests {
         );
         assert_eq!(recipe.time, 40);
         assert_eq!(recipe.results.len(), 2);
-        assert_eq!(recipe.results[0], RecipeResult { item: "minecraft:raw_iron".to_owned(), count: 2 });
-        assert_eq!(recipe.results[1], RecipeResult { item: "oritech:raw_nickel".to_owned(), count: 1 });
-        let mut machine = Grinder { energy: 40 * GRINDER_ENERGY_PER_TICK, progress: 0, recipe: String::new() };
+        assert_eq!(
+            recipe.results[0],
+            RecipeResult {
+                item: "minecraft:raw_iron".to_owned(),
+                count: 2
+            }
+        );
+        assert_eq!(
+            recipe.results[1],
+            RecipeResult {
+                item: "oritech:raw_nickel".to_owned(),
+                count: 1
+            }
+        );
+        let mut machine = Grinder {
+            energy: 40 * GRINDER_ENERGY_PER_TICK,
+            progress: 0,
+            recipe: String::new(),
+        };
         for tick in 1..=40 {
-            let step = machine.tick_with(Some(Work { id: &recipe.id, time: 40 }), GRINDER_ENERGY_PER_TICK);
+            let step = machine.tick_with(
+                Some(Work {
+                    id: &recipe.id,
+                    time: 40,
+                }),
+                GRINDER_ENERGY_PER_TICK,
+            );
             if tick < 40 {
                 assert_eq!(step, Step::Working, "tick {tick}");
             } else {
@@ -4658,7 +4888,9 @@ mod tests {
         assert!(grinder_output_fits(&recipe.results, room, |_| 64));
         assert_eq!(
             grinder_install(&recipe, 7, room, |_| 64),
-            Some(GrinderInstall { input_left: Some(6) })
+            Some(GrinderInstall {
+                input_left: Some(6)
+            })
         );
     }
 
@@ -4678,8 +4910,15 @@ mod tests {
 
     #[test]
     fn a_starved_grinder_keeps_its_progress_and_a_recipe_change_resets_it() {
-        let mut machine = Grinder { energy: 100, progress: 25, recipe: "a".to_owned() };
-        assert_eq!(machine.tick_with(Some(Work { id: "a", time: 40 }), 256), Step::Starved);
+        let mut machine = Grinder {
+            energy: 100,
+            progress: 25,
+            recipe: "a".to_owned(),
+        };
+        assert_eq!(
+            machine.tick_with(Some(Work { id: "a", time: 40 }), 256),
+            Step::Starved
+        );
         assert_eq!(machine.energy, 100, "a starved machine spends nothing");
         assert_eq!(machine.progress, 25, "a starved machine keeps its progress");
         assert_eq!(
@@ -4688,5 +4927,143 @@ mod tests {
         );
         assert_eq!(machine.progress, 0, "a different recipe restarts the count");
         assert_eq!(machine.recipe, "b");
+    }
+
+    #[test]
+    fn the_atomic_forge_charge_is_rate_times_time_and_must_be_full() {
+        assert_eq!(
+            ATOMIC_RATE, 1_024,
+            "OritechConfig.atomicForgeData.energyPerTick"
+        );
+        assert_eq!(ATOMIC_DEFAULT_CAPACITY, 1_024);
+        assert_eq!(atomic_forge_charge(5), 5_120, "wafer.json: 1024 x 5");
+        assert!(
+            !atomic_forge_charged(5_119, 5_120),
+            "one FE short is not full"
+        );
+        assert!(atomic_forge_charged(5_120, 5_120));
+        assert!(atomic_forge_charged(6_000, 5_120), "overfull still counts");
+        assert!(
+            !atomic_forge_charged(11, 10),
+            "capacity > 10 (getRecipe's idle 1)"
+        );
+        assert!(atomic_forge_charged(11, 11));
+    }
+
+    #[test]
+    fn the_wafer_recipe_parses_three_ingredients_and_one_result() {
+        let recipe = AtomicForgeRecipe::parse(
+            "oritech:atomicforge/wafer",
+            r##"{"type":"oritech:atomic_forge","ingredients":["#c:carbon_fibre","#c:silicon","#c:silicon"],"results":[{"count":1,"id":"oritech:silicon_wafer"}],"time":5}"##,
+        )
+        .expect("the jar's wafer.json in 26.3's bare form");
+        assert_eq!(recipe.id, "oritech:atomicforge/wafer");
+        assert_eq!(recipe.ingredients.len(), ATOMIC_INPUTS);
+        assert_eq!(
+            recipe.ingredients[0],
+            Value::String("#c:carbon_fibre".to_owned())
+        );
+        assert_eq!(
+            recipe.ingredients[2],
+            Value::String("#c:silicon".to_owned())
+        );
+        assert_eq!(
+            recipe.result,
+            RecipeResult {
+                item: "oritech:silicon_wafer".to_owned(),
+                count: 1
+            }
+        );
+        assert_eq!(recipe.time, 5);
+    }
+
+    #[test]
+    fn a_full_buffer_fires_one_craft_and_spends_every_fe() {
+        let charge = atomic_forge_charge(5);
+        let mut machine = AtomicForge {
+            energy: charge,
+            progress: 0,
+            recipe: String::new(),
+        };
+        assert_eq!(machine.tick(charge, true), Step::Finished);
+        assert_eq!(machine.energy, 0, "useEnergy() zeroes the whole buffer");
+        assert_eq!(
+            machine.progress, 0,
+            "checkCraftingFinished() is progress > 0"
+        );
+    }
+
+    #[test]
+    fn one_fe_short_never_fires_and_keeps_the_buffer() {
+        let charge = atomic_forge_charge(5);
+        let mut machine = AtomicForge {
+            energy: charge - 1,
+            progress: 0,
+            recipe: String::new(),
+        };
+        assert_eq!(machine.tick(charge, true), Step::Starved);
+        assert_eq!(machine.energy, charge - 1, "a short charge spends nothing");
+        assert_eq!(machine.progress, 0, "a short charge never starts a craft");
+    }
+
+    #[test]
+    fn no_recipe_or_no_output_room_holds_the_craft() {
+        let charge = atomic_forge_charge(5);
+        let mut blocked = AtomicForge {
+            energy: charge,
+            progress: 0,
+            recipe: String::new(),
+        };
+        assert_eq!(
+            blocked.tick(charge, false),
+            Step::Idle,
+            "a full output slot gates"
+        );
+        assert_eq!(
+            blocked.energy, charge,
+            "no FE spent while output is blocked"
+        );
+        let mut idle = AtomicForge {
+            energy: charge,
+            progress: 0,
+            recipe: String::new(),
+        };
+        assert_eq!(
+            idle.tick(0, false),
+            Step::Idle,
+            "getRecipe() with no result"
+        );
+        assert_eq!(
+            idle.energy, 0,
+            "upstream resizes the storage to 1 and zeroes it"
+        );
+    }
+
+    #[test]
+    fn the_atomic_forge_has_eight_cores_and_three_inputs() {
+        assert_eq!(ATOMIC_SLOTS, 4);
+        assert_eq!(ATOMIC_INPUTS, 3);
+        assert_eq!(ATOMIC_OUTPUTS, 1);
+        assert_eq!(
+            ATOMIC_CORE_OFFSETS.len(),
+            8,
+            "getCorePositions, not the grinder's seven"
+        );
+        assert_eq!(ATOMIC_CORE_OFFSETS[0], [1, 0, 1]);
+        assert_eq!(ATOMIC_CORE_OFFSETS[7], [-1, 0, -1]);
+    }
+
+    #[test]
+    fn an_atomic_recipe_with_a_fluid_or_no_time_is_refused() {
+        let fluid = r#"{"type":"oritech:atomic_forge","ingredients":["a","b","c"],"results":[{"count":1,"id":"x:y"}],"time":5,"fluidInput":{"fluid":"minecraft:water","amount":100}}"#;
+        assert_eq!(
+            AtomicForgeRecipe::parse("bad", fluid).unwrap_err(),
+            AtomicError::FluidOutput
+        );
+        let no_time = r#"{"type":"oritech:atomic_forge","ingredients":["a","b","c"],"results":[{"count":1,"id":"x:y"}]}"#;
+        assert_eq!(
+            AtomicForgeRecipe::parse("bad", no_time).unwrap_err(),
+            AtomicError::BadTime
+        );
     }
 }

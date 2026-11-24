@@ -85,8 +85,12 @@ impl Hooks for Mod {
         // and its raw serializer the game refuses them at load (the foundry's
         // startup crash, recorded in the notes).
         registrar.register_recipe_type(support::GRINDER_RECIPE);
-        registrar
-            .register_raw_recipe_serializer(support::GRINDER_RECIPE, support::GRINDER_RECIPE);
+        registrar.register_raw_recipe_serializer(support::GRINDER_RECIPE, support::GRINDER_RECIPE);
+        // The Atomic Forge's carried wafer file names `oritech:atomic_forge`;
+        // without its type and raw serializer the game refuses the data pack at
+        // load (the foundry's startup crash, recorded in the notes).
+        registrar.register_recipe_type(support::ATOMIC_RECIPE);
+        registrar.register_raw_recipe_serializer(support::ATOMIC_RECIPE, support::ATOMIC_RECIPE);
         for block in [
             support::GENERATOR,
             support::PULVERIZER,
@@ -97,6 +101,7 @@ impl Hooks for Mod {
             support::CENTRIFUGE,
             support::FOUNDRY,
             support::GRINDER,
+            support::ATOMIC,
         ] {
             let key = registrar.block_key(block);
             if let Some(container) = support::container(block) {
@@ -145,6 +150,10 @@ impl Hooks for Mod {
             .block_entity_type(support::GRINDER_TYPE)
             .blocks(&[support::GRINDER])
             .build();
+        let atomic = registrar
+            .block_entity_type(support::ATOMIC_TYPE)
+            .blocks(&[support::ATOMIC])
+            .build();
         if let Err(error) = registrar.block_entity_part(&generator, GeneratorPart) {
             context.refuse(&error.to_string());
         }
@@ -170,6 +179,9 @@ impl Hooks for Mod {
             context.refuse(&error.to_string());
         }
         if let Err(error) = registrar.block_entity_part(&grinder, GrinderPart) {
+            context.refuse(&error.to_string());
+        }
+        if let Err(error) = registrar.block_entity_part(&atomic, AtomicPart) {
             context.refuse(&error.to_string());
         }
     }
@@ -317,6 +329,9 @@ struct CentrifugePart;
 struct FoundryPart;
 /// The Fragment Forge's block entity.
 struct GrinderPart;
+
+/// The Atomic Forge's block entity: the charge-gated processing machine.
+struct AtomicPart;
 
 #[mod_api::horizon_part]
 impl BlockPart for GeneratorPart {}
@@ -615,6 +630,39 @@ impl BlockEntityPart for GrinderPart {
         let pos = event.pos;
         let mut nbt = std::mem::take(&mut event.entity.nbt);
         let changed = support::tick_grinder(host, level, pos, &mut nbt, &mut event.entity.items);
+        event.entity.nbt = nbt;
+        if !changed {
+            *event.reply = BlockEntityTickReply::Unchanged;
+        }
+    }
+}
+
+#[mod_api::horizon_part]
+impl BlockPart for AtomicPart {}
+
+#[mod_api::horizon_part]
+impl BlockEntityPart for AtomicPart {
+    fn block_entity(
+        &self,
+        _level: LevelSide,
+        _event: &mut BlockEntityEvent<'_>,
+    ) -> Option<Compound> {
+        Some(Compound::new())
+    }
+
+    fn block_entity_ticks(&self, _host: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
+        event.ticks = true;
+    }
+
+    /// One server tick: the eight-core assembly gate, then the recipe-sized
+    /// full-buffer charge gate. Nothing is consumed until the buffer is complete.
+    fn block_entity_tick(&self, host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>) {
+        let Some(level) = support::in_place_level(host) else {
+            return;
+        };
+        let pos = event.pos;
+        let mut nbt = std::mem::take(&mut event.entity.nbt);
+        let changed = support::tick_atomic(host, level, pos, &mut nbt, &mut event.entity.items);
         event.entity.nbt = nbt;
         if !changed {
             *event.reply = BlockEntityTickReply::Unchanged;

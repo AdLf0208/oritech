@@ -56,6 +56,13 @@ CARRIED = [
     # that turns it into the ingot the component chain needs.
     "assets/oritech/models/item/raw_nickel.json",
     "assets/oritech/textures/item/raw_nickel.png",
+    # Slice 12: the Atomic Forge's GeckoLib base texture and the silicon wafer
+    # its one carried recipe makes. The block's jar state names the
+    # `machine_speed_addon` placeholder and its item model is `builtin/entity`,
+    # so both are authored here, as for the other machines.
+    "assets/oritech/textures/block/models/atomic_forge_block.png",
+    "assets/oritech/models/item/silicon_wafer.json",
+    "assets/oritech/textures/item/silicon_wafer.png",
 ]
 
 # The pulverizer recipes whose input and output both exist in this slice are the
@@ -129,6 +136,13 @@ REWRITTEN_RECIPES = [
     "data/oritech/recipe/grinder/ore/gold.json",
     "data/oritech/recipe/grinder/ore/iron.json",
     "data/oritech/recipe/nickel_ingot_from_smelting_raw_nickel.json",
+    # Slice 12: the only one of the jar's 19 `atomicforge/**` files whose result
+    # and every ingredient resolve here — `c:carbon_fibre` + 2 x `c:silicon`
+    # -> one `oritech:silicon_wafer` in 5 ticks. Its only downstream consumer
+    # (`advcomputer.json`) needs `processing_unit` from `#c:plates/plastic`, the
+    # blocked refinery/oil chain; the wafer is carried as the machine's proof
+    # and no use is invented (notes.md → *Slice 12*).
+    "data/oritech/recipe/atomicforge/wafer.json",
 ]
 
 # The seven machine cores are plain vanilla models in the jar (a `cube_all` of
@@ -205,6 +219,10 @@ ITEMS = {
     # Slice 11: the grinder's nickel byproduct; smelts into `nickel_ingot` in the
     # powered furnace (100 ticks, 3,200 FE) and is the chain's bridge from ore.
     "raw_nickel": ("Raw Nickel", "minecraft:iron_ingot"),
+    # Slice 12: the Atomic Forge's one result. Its downstream
+    # (advanced_computing_engine) is blocked on the plastic chain, so the wafer
+    # is the end of this port's chain, not an invented intermediate.
+    "silicon_wafer": ("Silicon Wafer", "minecraft:iron_ingot"),
 }
 PLATING = {
     # The jar's lang names them "… Reinforced Plating"; upstream copies
@@ -385,6 +403,14 @@ BLOCKS = {
     "fragment_forge_block": {
         "name": "Fragment Forge",
         "texture": "oritech:block/models/fragment_forge_block",
+    },
+    # Slice 12: the Atomic Forge (`block.oritech.atomic_forge_block` is
+    # "Atomic Forge" in the jar's lang). Its jar blockstate is the same GeckoLib
+    # placeholder, so the cube model and item model are authored here; the base
+    # texture is carried. Eight cores assemble it, and its buffer must be full.
+    "atomic_forge_block": {
+        "name": "Atomic Forge",
+        "texture": "oritech:block/models/atomic_forge_block",
     },
 }
 CORE_NAMES = [

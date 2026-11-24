@@ -1,5 +1,6 @@
 {
   "block.oritech.assembler_block": "Assembler",
+  "block.oritech.atomic_forge_block": "Atomic Forge",
   "block.oritech.basic_generator_block": "Basic Generator",
   "block.oritech.centrifuge_block": "Centrifuge",
   "block.oritech.cooler_block": "Industrial Chiller",
@@ -36,6 +37,7 @@
   "item.oritech.raw_nickel": "Raw Nickel",
   "item.oritech.raw_silicon": "Raw Silicon",
   "item.oritech.silicon": "Silicon",
+  "item.oritech.silicon_wafer": "Silicon Wafer",
   "item.oritech.steel_ingot": "Steel Ingot",
   "itemgroup.oritech.components": "Oritech Components",
   "itemgroup.oritech.machines": "Oritech Machines"

@@ -442,3 +442,34 @@ byproducts, the five addon slots (the port's addon scan tops out at three), `com
 machine's screen/GeckoLib model, and the 97 recipes that need items, fluids or `c:` tags this
 package does not have. `notes.md` → *Slice 11* has the per-family closure table.
 
+
+## Slice 12: the Atomic Forge (`oritech:atomic_forge_block`)
+
+Read for behaviour only at the same tag **`v1.2.13`** / commit
+`4069b6dd14b05dfe0c80126618739b64054630ea`. The two files the brief named as authority:
+
+- `common/src/main/java/rearth/oritech/init/OritechConfig.java` — `ProcessingMachines`:
+  `atomicForgeData = new BasicMachineConfig(b, "atomicForgeData", 1024, 0, 0, 1024)`, i.e. capacity
+  **1,024 FE**, max insert **0**, max extract **0**, `energyPerTick` **1,024**. (The brief's
+  `UsageConfig` / `StorageConfig` names are not classes in this version; `BasicMachineConfig` is.)
+- `common/src/main/java/rearth/oritech/block/entity/processing/AtomicForgeBlockEntity.java` —
+  the charge gate and the shape:
+  - `getRecipe()`: when a recipe matches, `energyStorage.setCapacity(energyPerTick × recipe.time)`;
+    without one, capacity 1 and amount 0. For `wafer.json` (`time: 5`) the active capacity is
+    **5,120 FE**.
+  - `hasEnoughEnergy()`: `capacity > 10 && amount >= capacity` — the buffer must be **full**, not
+    merely hold a tick's cost. `canProceed()` adds `super.canProceed()` (output room).
+  - `useEnergy()`: `amount = 0` — a craft spends the whole buffer.
+  - `checkCraftingFinished()`: `progress > 0` — one working tick completes the operation.
+  - `getSlotAssignments()`: `InventorySlotAssignment(0, 3, 3, 1)` — 3 inputs, 1 output, 4 slots.
+  - `getCorePositions()`: eight offsets in a ring at y = 0 — (1,0,1), (1,0,0), (1,0,-1), (0,0,1),
+    (0,0,-1), (-1,0,1), (-1,0,0), (-1,0,-1). Eight positions but only seven `machine_core_N` types.
+  - `getAddonSlots()`: empty — this machine has no addon positions upstream.
+  - `getOwnRecipeType()`: `RecipeContent.ATOMIC_FORGE` (`oritech:atomic_forge`).
+- the jar's `data/oritech/recipe/atomicforge/**` (all 19 files) and
+  `data/oritech/recipe/crafting/atomicforge.json` (the block's own recipe: plastic, enderic compound,
+  flux gate, duratium — none carried).
+
+Only `wafer.json` is resolvable here; the other 18 are `not ported(inert family)`, one reason per
+family in `notes.md` → *Slice 12*. The wafer's only downstream consumer is `advcomputer.json`, whose
+`processing_unit` needs `#c:plates/plastic` — the blocked refinery/oil chain. No use is invented.

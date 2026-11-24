@@ -2,7 +2,7 @@
 # Cargo's package name and version are not the mod's.
 id = "oritech"
 name = "Oritech"
-version = "0.2.15"
+version = "0.2.16"
 description = """A port of Oritech 1.2.13 for Horizon, slices 1 to 10: the Basic Generator, the Pulverizer, the Powered
 Furnace multiblock, the Industrial Chiller, the Lava Generator, the machine addon system, the Control
 Unit Addon, the material and component chain, the Assembler, the Centrifuge and the Foundry. The generator burns any fuel the game's fuel table knows for 32 FE a tick into a 50,000 FE
@@ -37,6 +37,12 @@ and three outputs, a 50,000 FE buffer taking 2,048 an insert and spending 256 FE
 `oritech:grinder` recipe for iron ore yields two raw iron and one raw nickel in 40 ticks for exactly
 10,240 FE; the raw nickel smelts in the powered furnace into one nickel ingot in 100 ticks for 3,200
 FE — the ore-to-ingot chain, without worldgen.
+The Atomic Forge is the recipe-sized, charge-gated machine: a controller plus eight cores in a ring
+at its own level, three inputs and one output. Upstream resizes its storage to `energyPerTick x time`
+(1,024 x 5 = 5,120 FE for the jar's `wafer.json`) and will not run until that buffer is completely
+full; a full charge makes one silicon wafer from carbon fibre and two silicon and spends every FE,
+while 5,119 FE makes and spends nothing. Its 18 other jar files are inert here (gems, fluxite,
+duratium, Mekanism compat, and the plastic-gated computing chain), so they are recorded, not carried.
 Every buffer is a real block energy capability another mod's cable can read, every tank a real block
 fluid handler another mod's pipe can fill, and a fuelled generator pushes its FE to the machines beside
 it. Not yet ported: the GUI, GeckoLib models, the energy network, the ore-processing chain, the refinery

@@ -1,4 +1,4 @@
-# Oritech for Horizon — slices 1 to 11
+# Oritech for Horizon — slices 1 to 12
 
 The **Basic Generator**, the **Pulverizer**, the **Powered Furnace** multiblock, the **Industrial
 Chiller**, the **Lava Generator**, the **machine addon system**, the **Control Unit Addon**, the
@@ -6,7 +6,7 @@ Chiller**, the **Lava Generator**, the **machine addon system**, the **Control U
 [Oritech 1.2.13](https://github.com/Rearth/Oritech) (CC0-1.0), rewritten in Rust for Horizon at the
 campaign pin `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` (mod API 0.2, 26.3).
 
-One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the seven block-entity
+One flat `.hmod` carries both halves — `src/lib.rs` (the one `impl Hooks`), the ten block-entity
 Parts and the rules in `src/runtime.rs`, beside the carried `assets/` and `data/` (blocks, items,
 models, textures, recipes, loot, lang, tags).
 
@@ -103,6 +103,14 @@ models, textures, recipes, loot, lang, tags).
   in the powered furnace into **one nickel ingot in 100 ticks for 3,200 FE** — a survival route to
   nickel with no worldgen. A result without a free slot takes nothing and spends nothing, as on every
   machine here.
+- **Atomic Forge** (`oritech:atomic_forge_block`) — the charge-gated machine: a controller plus
+  **eight cores** in a ring at its own level, **three inputs and one output**. Upstream sizes its
+  storage to `energyPerTick × time` (**1,024 × 5 = 5,120 FE** for the jar's `wafer.json`) and runs a
+  craft only when that buffer is **completely full**. Carbon fibre and two silicon therefore become
+  one silicon wafer when 5,120 FE are primed, spending every FE; at **5,119 FE** nothing is made and
+  every input stays in its slot. The other 18 `atomicforge` files are inert in this package (gems,
+  fluxite, duratium, Mekanism compat and the plastic-gated computing chain), so they are recorded as
+  not ported rather than shipped as dead data.
 - **Using it** — right-click a generator with fuel, or a pulverizer or furnace
   with a matching item, to insert it; right-click a multiblock with a machine
   core in the hand to place the core, and with an empty hand to assemble it and

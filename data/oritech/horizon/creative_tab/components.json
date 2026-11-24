@@ -11,7 +11,8 @@
     "oritech:adamant_ingot",
     "oritech:coal_dust",
     "oritech:carbon_fibre_strands",
-    "oritech:raw_nickel"
+    "oritech:raw_nickel",
+    "oritech:silicon_wafer"
   ],
   "title": "itemgroup.oritech.components"
 }

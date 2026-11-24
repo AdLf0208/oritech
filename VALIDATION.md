@@ -5,6 +5,51 @@ in-game step ran inside a `ports/tools/build-slot.sh` lease (`BUILD_LOCAL=1`, `C
 no `--target-dir`); the launcher build runs outside a slot because it has its own global build lock
 and its own cache. Logs: `../_shared/evidence/oritech/` and `../_shared/evidence/oritech-e2e/`.
 
+## 0.2.16 — slice 12, the Atomic Forge and the charge gate (pin `0a875da`, 2026-11-24)
+
+Compile steps ran through `build-slot.sh run --job W1-oritech --port ports/oritech` and printed
+`build-slot: forwarding … to the remote runner` (`AdLf-PC`); no `BUILD_LOCAL=1`, no `--target-dir`.
+The `--offscreen` e2e leg stays local. Logs: `../_shared/evidence/oritech/` and
+`../_shared/evidence/oritech-e2e/`.
+
+| # | Command (from the campaign root) | Verdict | Log |
+|---|---|---|---|
+| 1 | `build-slot.sh run --step test -- bash -c 'rm -f Cargo.lock && cargo test --offline'`, the two new bodies `todo!()` | **160 passed, 5 failed** — `panicked at src/runtime.rs:2441:9: not yet implemented: slice 12: the buffer-full charge gate` and `…:2413:9: not yet implemented: slice 12: parse an oritech:atomic_forge recipe` | `slice12-test-red-full.log` |
+| 2 | four glue mutations (`tools/slice12-glue-counterfactual.py`), `cargo test --offline atomic`, file restored byte-identically (`sha256 cee75bf4…`) | **4 passed, 2 failed** — the declaration and saved-state tests; the first assertion in each stops the rest | `slice12-glue-red-counterfactual.log` |
+| 3 | `build-slot.sh run --step test -- bash -c 'rm -f Cargo.lock && cargo test --offline'` | **168 passed, 0 failed**, `sdk-test.log` regenerated at 0.2.16 | `sdk-test.log` |
+| 4 | `build-slot.sh run --step lint -- bash -c 'cargo fmt --check && cargo clippy --all-targets --offline -- -D warnings'` | exit 0, **0 warnings** | `slice12-fmt-clippy.log` |
+| 5 | `build-slot.sh run --step build -- bash -c 'rm -f Cargo.lock && cargo horizon-mod build && cp target/horizon-mod/oritech.hmod ./oritech.hmod'`, twice, artifact deleted between | **281,408 B**, sha256 `b9ff66e06ed671667cfe71b15c9ae8756527da74f13040ae034926e5f47c4b86`, `cmp` identical, **339 entries, no `Cargo.lock`** | `slice12-build.log`, `slice12-build-second.log` |
+| 6 | `cargo horizon-mod check oritech.hmod` | `oritech 0.2.16 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, `281408 bytes … unsigned`, exit 0 | `slice12-check-fits.log` |
+| 7 | `cargo horizon-mod fits oritech.hmod --build 0a875da` | `0a875da  made for`, exit 0 | `slice12-check-fits.log` |
+| 8 | `cargo horizon-mod fits oritech.hmod --build 0b14f8a` | `0b14f8a  fits`, exit 0 (a different build — the pin run alone is a tautology) | `slice12-check-fits.log` |
+| 9 | `python3 ports/tools/verify-sdk-package.py oritech` | **1/1** — `package matches the tree`, `no packed Cargo.lock`, 168 tests, 0 warnings | `slice12-verify-package.log` |
+| 10 | `python3 ports/tools/check-recipe-types.py oritech` | `oritech: ok` | `slice12-recipe-types.log` |
+| 11 | `python3 tools/carry_content.py --check` | `329 files, 0 differ` | — |
+| 12 | `ports/tools/launcher-game.sh build oritech` (manifest 0.2.16; the stale 0.2.15 `native-*` tag was removed first) | **`Compiling oritech (1 of 1)`**, `native-0a875da-b8ffa4c88280`; `strings liboritech.so` shows `Atomic Forge at ` and `oritech:atomic_forge`; the export reads `version = "0.2.16"` | `slice12-launcher-build.log` |
+| 13 | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e-atomic.sh` | **PASS + `EXIT:0`**, phases AA–AE (no-core gate, eight-core assembly, exact 5,120 charge, one-FE-short gate, no-consumer differential) | `e2e-slice12-atomic.log` |
+| 14 | the same with `SELFTEST=atomic` | **`EXIT:1`** — `FAIL: OUT0 is 'empty', expected 'oritech:silicon_wafer x1'` (the gate inverted) | `e2e-slice12-selftest-atomic.log` |
+| 15 | `build-slot.sh run --step e2e -- bash ports/oritech/tools/e2e-atomic-control.sh` (package-less build) | **PASS + `EXIT:0`** — the Atomic Forge id and the wafer item are unknown without this package | `e2e-slice12-differential.log` |
+| 16 | `python3 ports/tools/check-e2e-logs.py oritech-e2e --strict` | **65 logs, 65 ok, 0 bad** (the 60 earlier logs untouched) | stdout |
+| 17 | `python3 ports/tools/check-coverage.py oritech` / `check-skills.py --notes ports/oritech` | exit 0, `missing_families=0 missing=0` / PASS | stdout |
+
+The full legacy leg was attempted four times after the harness fixes; each attempt was killed by a
+game-process failure in an **unchanged** earlier phase (ctl `exit 3`, socket gone) while other
+agents' game processes were competing for the box. Those runs are recorded as `e2e-slice12.log` and
+`e2e-slice12-full.log` (both `FAIL + EXIT:1`, accepted by the strict checker as control-style logs)
+and are **not** the slice-12 evidence; the focused `e2e-atomic.sh` legs above are. All harness
+quirks found along the way were fixed in `tools/e2e.sh` (no `machine_core_8`; the eighth position
+places a tier-2 core by `setblock`; `setblock`/`look-at-block`/`block` calls retry or tolerate a
+transient harness error; `atomic_fresh` keeps the core ring in the world; the craft is read as a
+one-tick completion because `checkCraftingFinished()` is `progress > 0`).
+
+The first e2e run failed in phase AB because the harness asked for `oritech:machine_core_8`, which
+does not exist — the forge has eight **positions** but the mod ships seven core **types**. The
+second failed when the eighth position reused a core type already in the player's hand (`ctl give`
+refused it); the ring is now placed with `setblock` of the mod's own core ids, and the empty-hand
+click still assembles it (the right-click core path is proven by the furnace, assembler and grinder
+legs). Both failures were scenario errors, not port defects, and are described here rather than kept
+as separate logs.
+
 ## 0.2.15 — slice 11, the Fragment Forge and the nickel chain (pin `0a875da`, 2026-11-24)
 
 Compile steps ran through `build-slot.sh run --job G10-oritech --port ports/oritech` and printed
